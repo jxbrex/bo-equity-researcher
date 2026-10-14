@@ -2888,3 +2888,59 @@ def test_missing_thesis_warns():
     缺项由 compute_scores 硬拒，不再 soft 告警重复，文案矛盾已除）。"""
     out = validate_stderr(minimal_fill(thesis_html=""))
     assert "thesis_html 缺失" in out, f"thesis 缺失应告警，实际 stderr: {out}"
+
+
+def test_gap_history_gate():
+    """v5.6.0：gap_history 照抄对账（首版软告警）——落盘一致静默 / 偏差>1% 告警 /
+    机构落盘无告警 / 落盘无 gap_history 键告警 / quote.source_file 缺失告警 /
+    预测年度混杂告警 / 空 rows 告警 / 非 dict 行拒渲染。"""
+    import tempfile
+    row = {"org": "中金公司", "yr": "2026", "d_from": "2026-06-30", "d_to": "2026-09-28",
+           "np_from": 930.0, "np_to": 952.0, "tp_from": 118.0, "tp_to": 135.0}
+    with tempfile.TemporaryDirectory() as d:
+        ref = write_fill({"price": 10.0, "pe_ttm": 11.0,
+                          "gap_history": {"rows": [row]}}, d, name="em_gh.json")
+        q = {"source_file": ref, "date": "2026-10-14"}
+        out = validate_stderr(minimal_fill(quote=q, gap_history={"rows": [dict(row)]}))
+        assert "gap_history" not in out, f"照抄一致不应告警，实际: {out}"
+        out = validate_stderr(minimal_fill(
+            quote=q, gap_history={"rows": [dict(row, np_to=990.0)]}))
+        assert "np_to" in out and "不一致" in out, f"偏差>1% 应告警: {out}"
+        out = validate_stderr(minimal_fill(
+            quote=q, gap_history={"rows": [dict(row, org="中信证券")]}))
+        assert "无对应机构" in out, f"落盘无该机构应告警: {out}"
+        out = validate_stderr(minimal_fill(quote=q, gap_history={"rows": [
+            dict(row), dict(row, org="国泰海通", yr="2027", np_from=940.0, np_to=965.0)]}))
+        assert "预测年度不一致" in out and "无对应机构" in out, f"混年+缺机构应告警: {out}"
+        ref2 = write_fill({"price": 10.0, "pe_ttm": 11.0}, d, name="em_gh2.json")
+        out = validate_stderr(minimal_fill(
+            quote={"source_file": ref2, "date": "2026-10-14"},
+            gap_history={"rows": [dict(row)]}))
+        assert "落盘 JSON 无 gap_history.rows" in out, f"落盘无键应告警: {out}"
+    out = validate_stderr(minimal_fill(gap_history={"rows": [dict(row)]}))
+    assert "无落盘源可核对" in out, f"缺 source_file 应告警: {out}"
+    out = validate_stderr(minimal_fill(gap_history={"rows": []}))
+    assert "rows 为空" in out, f"空 rows 应提示: {out}"
+    expect_valueerror(minimal_fill(gap_history={"rows": ["junk"]}), "非 dict 行应拒渲染")
+    expect_valueerror(minimal_fill(gap_history=["junk"]), "gap_history 非对象应拒渲染")
+    print("OK gap_history 照抄对账（一致静默/偏差/缺机构/缺落盘/缺源/混年/空行/非法拒）")
+
+
+def test_gap_history_handwritten_dupe():
+    """v5.6.0：gap_history 图会生成时，gap_html 手写同内容变化表 → 告警；
+    无 gap_history 或表不含变化关键词 → 不告警。"""
+    rows = [{"org": "中金公司", "yr": "2026", "d_from": "2026-06-30", "d_to": "2026-09-28",
+             "np_from": 930.0, "np_to": 952.0}]
+    tbl = ('<table><tr><th>券商</th><th>净利首末变化</th></tr>'
+           '<tr><td>中金</td><td>上调 930→952</td></tr></table><span class="source">数据来源：E5</span>')
+    out = validate_stderr(minimal_fill(
+        gap_history={"rows": rows}, gap_html="<!--GAP--><p>档位 A：已检索到具体券商研报假设（妙想+tushare，查询日 2026-10-14），分歧集中在 2026E 净利的出货量假设上，本文基础情景处于一致预期区间内部偏上，证伪时向下修正至一致均值。</p>" + tbl))
+    assert "手写券商态度变化表" in out, f"图+手写表并存应告警: {out}"
+    out = validate_stderr(minimal_fill(gap_html="<!--GAP--><p>档位 A：已检索到具体券商研报假设（妙想+tushare，查询日 2026-10-14），分歧集中在 2026E 净利的出货量假设上，本文基础情景处于一致预期区间内部偏上，证伪时向下修正至一致均值。</p>" + tbl))
+    assert "手写券商态度变化表" not in out, f"无 gap_history 不应告警: {out}"
+    plain = ('<table><tr><th>维度</th><th>分歧</th></tr><tr><td>量</td><td>未披露</td></tr></table>'
+             '<span class="source">数据来源：E5</span>')
+    out = validate_stderr(minimal_fill(
+        gap_history={"rows": rows}, gap_html="<!--GAP--><p>档位 A：已检索到具体券商研报假设（妙想+tushare，查询日 2026-10-14），分歧集中在 2026E 净利的出货量假设上，本文基础情景处于一致预期区间内部偏上，证伪时向下修正至一致均值。</p>" + plain))
+    assert "手写券商态度变化表" not in out, f"无关表不应误伤: {out}"
+    print("OK gap_history 手写变化表并存检测（告警/无字段静默/无关表不误伤）")

@@ -391,6 +391,75 @@ def _check_gap_plot_street_source(fill: dict, warns: list) -> None:
                              f"street 须照抄落盘源、禁手填（容差：相对 1%，下限 0.005）")
 
 
+def _check_gap_history(fill: dict, warns: list) -> None:
+    """v5.6.0 gap_history（券商态度变化图）校验（首版软告警，不拒——升拒登记 handoff）。
+    ① 结构：rows 元素须为 dict、org 非空、np 对/tp 对至少居其一（无效行渲染端静默剔除，
+    此处提示等于白填）；② 照抄对账：fill 行须与 quote.source_file 落盘的 gap_history.rows
+    同机构同值（容差：相对 1%，下限 0.005，同 street 款）——fill 有行而落盘无 gap_history
+    → 手填嫌疑告警（提示重跑 em_fetch --out）；③ 行内 yr 不一致（混预测年度）→ 提示。
+    数值解析用 scoring._num（全仓对账同一尺子，v5.6.0 审核 #3）。"""
+    gh = fill.get("gap_history")
+    if gh is None:
+        return
+    if not isinstance(gh, dict):
+        raise ValueError(f'gap_history 字段需为对象（{{"rows": [...]}}），实际: {type(gh).__name__}')
+    rows = gh.get("rows") or []
+    if not rows:
+        warns.append("gap_history.rows 为空：态度变化图不会生成——无数据请整字段删除（同 holders 惯例）")
+        return
+    yrs = set()
+    for i, r in enumerate(rows):
+        if not isinstance(r, dict):
+            raise ValueError(f"gap_history.rows[{i}] 不是对象：每行需 "
+                             f'{{org, np_from, np_to / tp_from, tp_to, ...}}')
+        org = str(r.get("org") or "").strip()
+        np_ok = _num(r.get("np_from")) is not None and _num(r.get("np_to")) is not None
+        tp_ok = _num(r.get("tp_from")) is not None and _num(r.get("tp_to")) is not None
+        if not org or not (np_ok or tp_ok):
+            warns.append(f"gap_history.rows[{i}]（{org or '未具名'}）org 缺失或 np/tp 对均不可解析："
+                         f"该行图内剔除")
+            continue
+        if str(r.get("yr") or "").strip():
+            yrs.add(str(r["yr"]).strip())
+    if len(yrs) > 1:
+        warns.append(f"gap_history.rows 预测年度不一致（{sorted(yrs)}）：图题将退化为"
+                     f"「各行同预测年度首末对比」——建议只保留同年度行")
+
+    ref = _quote_ref(fill)
+    if ref is None:
+        warns.append("gap_history 已填但 quote.source_file 缺失或读不到：态度变化数值无落盘源"
+                     "可核对——应照抄 em_fetch E5「券商态度变化」行（--out 落盘 gap_history）")
+        return
+    ref_rows = {str(h.get("org") or "").strip(): h
+                for h in ((ref.get("gap_history") or {}).get("rows") or [])
+                if isinstance(h, dict)}
+    if not ref_rows:
+        warns.append("gap_history 已填但落盘 JSON 无 gap_history.rows：E5 未产出可比行"
+                     "（近 180 天无同券商 ≥2 份研报）或 fill 手填——请重跑 em_fetch --out 核对")
+        return
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        org = str(r.get("org") or "").strip()
+        if not org:
+            continue
+        h = ref_rows.get(org)
+        if h is None:
+            warns.append(f"gap_history「{org}」在落盘 gap_history.rows 中无对应机构——"
+                         f"须照抄 E5「券商态度变化」行、禁手填")
+            continue
+        for k in ("np_from", "np_to", "tp_from", "tp_to"):
+            fv, rv = _num(r.get(k)), _num(h.get(k))
+            if fv is None:
+                if rv is not None:
+                    warns.append(f"gap_history「{org}」{k} 漏抄（落盘 {rv:g}）")
+                continue
+            if rv is None or abs(fv - rv) > max(abs(rv) * 0.01, 0.005):
+                warns.append(f"gap_history「{org}」{k}={fv:g} 与落盘值不一致"
+                             f"（落盘 {rv if rv is None else round(rv, 4)}）——照抄禁手改"
+                             f"（容差：相对 1%，下限 0.005）")
+
+
 def _check_chart_fields(fill: dict) -> None:
     """v4.9 必填图字段硬校验：fin_trend（4.4 小图墙，替手写年表）/ growth_plot（5.1 增长图）。
     两字段数据均来自标准采集（E3 年表 / E5 一致预期），缺失=空心趋势章节 → 拒渲染。
@@ -1872,6 +1941,7 @@ def _validate_content_impl(fill: dict, calc: dict, warns: list) -> None:
     _check_quote_present(fill, warns)   # v4.11.1（审核 D5）：date ≥ 2026-09-02 缺 quote 拒渲染
     _check_gap_plot(fill, calc, warns)  # v4.11.1：gap_plot 分布图字段校验（可选字段，缺失不查）
     _check_gap_plot_street_source(fill, warns)  # v5.5.1 F2：street 落盘第二照抄源（软告警）
+    _check_gap_history(fill, warns)     # v5.6.0：gap_history 态度变化照抄对账（软告警）
 
     _check_red_flag_breaker(fill)
     _check_red_flag_conclusion(fill)  # v5.1.2：红旗 ≥2 项 → 首卡首句存疑句硬门禁
@@ -1986,6 +2056,11 @@ def _check_handwritten_dupes(fill: dict, warns: list) -> None:
     if len(gp_dims) >= 2 and "<table" in gh and re.search(r"机构|卖方", gh):
         warns.append("gap_html 含逐机构对照表：v4.11.1 起由 gap_plot 图承载（文字信息进 note "
                      "附注），请删除手写对照表")
+    # v5.6.0：gap_history 图会生成时，gap_html 禁手写同内容变化表（同一券商首末对比）
+    if (fill.get("gap_history") or {}).get("rows") and "<table" in gh \
+            and re.search(r"首末|态度变化|上调.{0,4}下调", gh):
+        warns.append("gap_html 含手写券商态度变化表：v5.6.0 起由 gap_history 图承载"
+                     "（图+判词横条自动生成），请删除手写表")
 
 
 def _check_slot_widths(fill: dict, warns: list) -> None:

@@ -86,6 +86,51 @@ def _em_consensus(code: str) -> dict:
     return data[0] if data else {}
 
 
+def _org_history(hist_rows: dict) -> list:
+    """v5.6.0 gap_history 数据源：同一券商 180 天内 ≥2 份研报的首末对比行。
+    hist_rows: org → [(rd, yr, np亿|None, tp中值|None, rating)]（同循环顺带收集）。
+    行口径：np 对比取「首末两个日期都有该年度 np」的年度（当年优先，否则最大年）——同预测年度
+    才可比；tp 对比取含目标价研报的首末两份；评级仅记录首末变化。行日期 = np 对比日期
+    （np 缺失退 tp 日期）。按 np 变化幅度降序（无 np 按 tp），输出 ISO 日期。"""
+    cur_yr = str(date.today().year)
+
+    def _iso(rd):
+        return f"{rd[:4]}-{rd[4:6]}-{rd[6:8]}" if len(rd) == 8 else rd
+
+    out = []
+    for org, rows in hist_rows.items():
+        dates = sorted({rd for rd, *_ in rows if rd})
+        if len(dates) < 2:
+            continue
+        d0, d1 = dates[0], dates[-1]
+        entry = {"org": org}
+        yrs = [y for y in {yr for _, yr, np_, *_ in rows if yr and np_ is not None}
+               if any(rd == d0 and yr == y and np_ is not None for rd, yr, np_, *_ in rows)
+               and any(rd == d1 and yr == y and np_ is not None for rd, yr, np_, *_ in rows)]
+        if yrs:
+            y = cur_yr if cur_yr in yrs else max(yrs)
+            v0 = next(np_ for rd, yr, np_, *_ in rows if rd == d0 and yr == y)
+            v1 = next(np_ for rd, yr, np_, *_ in rows if rd == d1 and yr == y)
+            entry.update(yr=y, d_from=_iso(d0), d_to=_iso(d1), np_from=v0, np_to=v1)
+        tps = sorted({rd: tp for rd, _, _, tp, _ in rows if rd and tp is not None}.items())
+        if len(tps) >= 2:
+            entry.update(tp_from=tps[0][1], tp_to=tps[-1][1])
+            entry.setdefault("d_from", _iso(tps[0][0]))
+            entry.setdefault("d_to", _iso(tps[-1][0]))
+        rts = sorted({rd: rt for rd, *_, rt in rows if rd and rt}.items())
+        if len(rts) >= 2 and rts[0][1] != rts[-1][1]:
+            entry.update(rating_from=rts[0][1], rating_to=rts[-1][1])
+        if "np_from" in entry or "tp_from" in entry:
+            out.append(entry)
+
+    def _delta(e, k1, k2):
+        return (e[k2] / e[k1] - 1) if k1 in e and k2 in e and e[k1] else -9
+
+    out.sort(key=lambda e: (-_delta(e, "np_from", "np_to"), -_delta(e, "tp_from", "tp_to"),
+                            e["org"]))
+    return out
+
+
 def fetch_consensus(code: str) -> dict:
     """E5 一致预期。tushare report_rc（券商盈利预测明细）优先；东财 RPT_WEB_RESPREDICT 兜底。
     返回带 _src 标记的 dict。tushare 返回近180天研报聚合：家数/分年度净利与EPS均值/目标价区间。"""
@@ -109,11 +154,18 @@ def fetch_consensus(code: str) -> dict:
         years, prices, ratings = {}, [], {}
         latest_by_org = {}   # v4.11.1（gap_plot 落地）：(yr, org) → 最新研报行，供 E5 逐机构明细
         aim_by_org = {}      # org → 最新含目标价研报行
+        hist_rows = {}       # v5.6.0（gap_history 落地）：org → [(rd, yr, np亿, tp中值, rating)] 全量保留
         for r in recent:
             q = str(r.get("quarter") or "")
             yr = q[:4] if len(q) >= 4 else ""
             org = (r.get("org_name") or "").strip()
             rd = str(r.get("report_date") or "")
+            if org:
+                _tp = (round((float(r["min_price"]) + float(r["max_price"])) / 2, 2)
+                       if r.get("min_price") and r.get("max_price") else None)
+                _np = round(float(r["np"]) / 1e4, 1) if r.get("np") is not None else None
+                hist_rows.setdefault(org, []).append(
+                    (rd, yr, _np, _tp, (r.get("rating") or "").strip()))
             if yr.isdigit():
                 slot = years.setdefault(yr, {"np": [], "eps": []})
                 if r.get("np") is not None:
@@ -145,6 +197,7 @@ def fetch_consensus(code: str) -> dict:
                                                             + float(kv[1]["max_price"])))]
         return {"_src": "tushare", "orgs": len(orgs), "n_reports": len(recent),
                 "years": years, "detail": detail, "aim_detail": aim_detail,
+                "history": _org_history(hist_rows),
                 "aim": (min(p[0] for p in prices), max(p[1] for p in prices)) if prices else None,
                 "ratings": ratings}
     except Exception:

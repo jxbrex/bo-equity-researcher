@@ -551,6 +551,26 @@ def _sec_e5(pure: str, is_hk: bool) -> list:
             if c.get("ratings"):
                 lines.append("评级分布: " + " ".join(f"{k}{v}" for k, v in
                                                       sorted(c["ratings"].items(), key=lambda x: -x[1])))
+            # v5.6.0（gap_history 落地）：同一券商首末两份研报对比行——fill 的 gap_history.rows
+            # 照抄本行（np 仅同预测年度首末对比、tp 为研报区间中值首末、评级仅记变化）；
+            # 并落盘 _CAPTURE["gap_history"] 供 render 对账（防伪链同 consensus_np 款）
+            hist = c.get("history") or []
+            if hist:
+                segs = []
+                for h in hist[:12]:
+                    seg = h["org"]
+                    if "np_from" in h:
+                        seg += (f" {h['yr']}E净利{h['np_from']:g}({h['d_from'][5:]})"
+                                f"→{h['np_to']:g}({h['d_to'][5:]})")
+                    if "tp_from" in h:
+                        seg += f"·目标价{h['tp_from']:g}→{h['tp_to']:g}"
+                    if "rating_from" in h:
+                        seg += f"·评级{h['rating_from']}→{h['rating_to']}"
+                    segs.append(seg)
+                cnt_note = f"前 12 家/共 {len(hist)} 家" if len(hist) > 12 else f"{len(hist)} 家"
+                lines.append(f"券商态度变化（gap_history 照抄行，{cnt_note}，"
+                             f"同一券商近180天首末两份）: " + "；".join(segs))
+                _CAPTURE["gap_history"] = {"rows": hist[:12]}
             out.append("\n".join(lines) + "\n")
         elif c:
             # v5.1.0：东财降级源无净利字段但有当年 EPS 均值——捕获存根，main 落盘前按

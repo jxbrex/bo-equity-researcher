@@ -960,6 +960,53 @@ def test_25_daily_basic_latest():
     print("25. _daily_basic_latest 最新行 通过")
 
 
+def test_26_consensus_history():
+    """26. E5 券商态度变化（v5.6.0，gap_history 数据源，无网络 mock ts_call）：
+    同机构 ≥2 份才出行；np 仅同预测年度首末对比（跨年不出 np，退 tp 日期）；tp 取含
+    目标价研报首末两份（区间中值）；评级仅记变化；日期 ISO 化；按 np 变化幅度降序。"""
+    import em_owner
+    rows = [
+        # 中金：两份同年 np 930→952、目标价 118→135、评级不变（不记）
+        {"org_name": "中金", "report_date": "20260630", "quarter": "2026Q4",
+         "np": 9300000, "min_price": 115, "max_price": 121, "rating": "买入"},
+        {"org_name": "中金", "report_date": "20260928", "quarter": "2026Q4",
+         "np": 9520000, "min_price": 130, "max_price": 140, "rating": "买入"},
+        # 大摩：两份 np 下调、评级变化
+        {"org_name": "摩根士丹利", "report_date": "20260712", "quarter": "2026Q4",
+         "np": 9050000, "rating": "增持"},
+        {"org_name": "摩根士丹利", "report_date": "20260915", "quarter": "2026Q4",
+         "np": 8780000, "rating": "中性"},
+        # 华泰：跨年（首 2025Q4 / 末 2026Q4）→ 无同年可比不出 np，仅 tp 105→115
+        {"org_name": "华泰", "report_date": "20260608", "quarter": "2025Q4",
+         "np": 8000000, "min_price": 100, "max_price": 110},
+        {"org_name": "华泰", "report_date": "20261009", "quarter": "2026Q4",
+         "np": 9080000, "min_price": 112, "max_price": 118},
+        # 野村：单份 → 不出行
+        {"org_name": "野村", "report_date": "20260830", "quarter": "2026Q4", "np": 9520000},
+    ]
+    _orig = em_core.ts_call
+    try:
+        em_core.ts_call = lambda name, params, **k: rows
+        c = em_owner.fetch_consensus("600938")
+    finally:
+        em_core.ts_call = _orig
+    hist = {h["org"]: h for h in c["history"]}
+    assert "野村" not in hist, f"单份机构不应出行：{hist}"
+    zj = hist["中金"]
+    assert (zj["yr"], zj["np_from"], zj["np_to"]) == ("2026", 930.0, 952.0), f"实际 {zj}"
+    assert (zj["tp_from"], zj["tp_to"]) == (118.0, 135.0), f"tp 应取区间中值首末：{zj}"
+    assert (zj["d_from"], zj["d_to"]) == ("2026-06-30", "2026-09-28"), f"日期应 ISO 化：{zj}"
+    assert "rating_from" not in zj, f"评级不变不应记录：{zj}"
+    ms = hist["摩根士丹利"]
+    assert (ms["rating_from"], ms["rating_to"]) == ("增持", "中性"), f"实际 {ms}"
+    ht = hist["华泰"]
+    assert "np_from" not in ht, f"跨年预测不应比 np：{ht}"
+    assert (ht["tp_from"], ht["tp_to"]) == (105.0, 115.0), f"实际 {ht}"
+    assert (ht["d_from"], ht["d_to"]) == ("2026-06-08", "2026-10-09"), f"应退 tp 日期：{ht}"
+    assert c["history"][0]["org"] == "中金", f"应按 np 变化幅度降序：{[h['org'] for h in c['history']]}"
+    print("26. E5 券商态度变化 通过")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

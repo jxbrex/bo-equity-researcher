@@ -313,6 +313,195 @@ def _gap_plot_b(dims: list) -> str:
     return "".join(parts)
 
 
+# ════════════════════ 9 章 · 券商态度变化（同一券商首末两份研报对比，v5.6.0）════════════════════
+
+
+def _gh_delta(r: dict, kf: str, kt: str):
+    """首末变化率（小数）；缺值或基期为 0 → None。"""
+    v0, v1 = r.get(kf), r.get(kt)
+    if v0 is None or v1 is None or not v0:
+        return None
+    return v1 / v0 - 1
+
+
+def _gh_sort_key(r: dict):
+    """排序键：np 幅度降序优先、无 np 行按 tp 幅度降序靠后。None（缺值）≠ 0（持平）——
+    不能用 `or -9`：0.0 会被吞成 -9，持平行错排到下调行之后（v5.6.0 审核 #1）。"""
+    d = _gh_delta(r, "npf", "npt")
+    if d is not None:
+        return (0, -d)
+    d = _gh_delta(r, "tpf", "tpt")
+    return (1, -(d if d is not None else -9))
+
+
+def build_gap_history(fill: dict) -> str:
+    """9 章券商态度变化图（fill["gap_history"] 可选字段，缺失/无有效行 → 空串不告警）。
+
+    形态（demo v2 变体 A 定稿）：哑铃两面板并排——左=净利预测首末对比（同预测年度）、
+    右=目标价（研报区间中值）首末对比，两行共享机构行；沙点=较早研报、最新一份钢蓝=上调 /
+    中灰=下调 / 沙色环=持平，箭头指向最新值；右列=两维度首末幅度与评级变化。
+    rows: [{"org","yr"?,"d_from"?,"d_to"?,"np_from"?,"np_to"?,"tp_from"?,"tp_to"?,
+            "rating_from"?,"rating_to"?}]——np 对 / tp 对至少居其一为有效行；行数取前 8
+    （按净利变化幅度降序，无净利按目标价）；行日期 = 净利对比首末日期（无净利退目标价日期）。
+    判词横条脚本复算（上调/下调/持平按变化率符号严格判，持平=完全相等），模型禁手写。"""
+    gh = fill.get("gap_history") or {}
+    rows = []
+    for r in gh.get("rows") or []:
+        if not isinstance(r, dict):
+            continue
+        org = str(r.get("org") or "").strip()
+        npf, npt = _num(r.get("np_from")), _num(r.get("np_to"))
+        tpf, tpt = _num(r.get("tp_from")), _num(r.get("tp_to"))
+        if not org or ((npf is None or npt is None) and (tpf is None or tpt is None)):
+            continue
+        rows.append({"org": org, "yr": str(r.get("yr") or "").strip(),
+                     "d_from": str(r.get("d_from") or "")[5:], "d_to": str(r.get("d_to") or "")[5:],
+                     "npf": npf, "npt": npt, "tpf": tpf, "tpt": tpt,
+                     "rf": str(r.get("rating_from") or "").strip(),
+                     "rt": str(r.get("rating_to") or "").strip()})
+    if not rows:
+        return ""
+    rows.sort(key=_gh_sort_key)
+    rows = rows[:8]
+
+    has_np = any(r["npf"] is not None for r in rows)
+    has_tp = any(r["tpf"] is not None for r in rows)
+    yrs = {r["yr"] for r in rows if r["yr"]}
+    np_title = (f"① {next(iter(yrs))}E 归母净利预测（亿元）· 同预测年度对比" if len(yrs) == 1
+                else "① 归母净利预测（亿元）· 各行同预测年度首末对比")
+    n = len(rows)
+    cy0, step = 74, 32
+    cy_last = cy0 + step * (n - 1)
+    H = cy_last + 40
+    parts = ['<span class="section-tag">券商态度变化 · 同一券商首末两份研报对比（近 180 天）</span>',
+             _svg_open(1000, H, "券商态度变化图")]
+    # 图例
+    parts.append(f'<circle cx="30" cy="10" r="4" fill="{_C_SAND}"/>'
+                 f'<text x="40" y="14" font-size="10.5" fill="{_C_LABEL}">较早研报</text>')
+    parts.append(f'<circle cx="112" cy="10" r="5" fill="{_C_BLUE}"/>'
+                 f'<text x="123" y="14" font-size="10.5" fill="{_C_LABEL}">最新 · 上调</text>')
+    parts.append(f'<circle cx="200" cy="10" r="5" fill="{_C_STONE}"/>'
+                 f'<text x="211" y="14" font-size="10.5" fill="{_C_LABEL}">最新 · 下调</text>')
+    parts.append(f'<circle cx="288" cy="10" r="4" fill="{_C_SAND}"/>'
+                 f'<circle cx="288" cy="10" r="6.5" fill="none" stroke="{_C_BLUE}" stroke-width="1.5"/>'
+                 f'<text x="300" y="14" font-size="10.5" fill="{_C_LABEL}">持平</text>')
+    parts.append(f'<text x="345" y="14" font-size="10.5" fill="{_C_LABEL}">'
+                 f'箭头指向最新值 · 右列=首末幅度与评级变化</text>')
+    parts.append(f'<text x="210" y="44" font-size="12" font-weight="700" fill="{_C_BLACK}">'
+                 f'{_esc(np_title) if has_np else "① 归母净利预测：无同机构同年度可比研报"}</text>')
+    parts.append(f'<text x="600" y="44" font-size="12" font-weight="700" fill="{_C_BLACK}">'
+                 f'{"② 目标价（元）· 区间中值" if has_tp else "② 目标价：近 180 天无两份可比研报"}</text>')
+    parts.append(f'<text x="895" y="44" font-size="10.5" fill="{_C_LABEL}">首末变化</text>')
+
+    panels = []   # (面板左 x0, 面板右 x1, 旧值键, 新值键, 值域 min, 值域 max)
+    if has_np:
+        vals = [v for r in rows if r["npf"] is not None for v in (r["npf"], r["npt"])]
+        panels.append((210, 470, "npf", "npt", min(vals), max(vals)))
+    if has_tp:
+        vals = [v for r in rows if r["tpf"] is not None for v in (r["tpf"], r["tpt"])]
+        panels.append((600, 860, "tpf", "tpt", min(vals), max(vals)))
+    mappers = []
+    for x0, x1, kf, kt, vlo, vhi in panels:
+        lo, hi, st = _gap_axis(vlo, vhi)
+        X = _lin_map(lo, hi, x0, x1)
+        mappers.append((x0, kf, kt, X))
+        for t in _gap_ticks(lo, hi, st):
+            parts.append(f'<line x1="{_px(X(t))}" y1="56" x2="{_px(X(t))}" y2="{cy_last + 12}" '
+                         f'stroke="{_C_GRID}" stroke-width="1"/>'
+                         f'<text x="{_px(X(t))}" y="{cy_last + 26}" text-anchor="middle" '
+                         f'font-size="9.5" fill="{_C_LABEL}">{_gap_fmt(t)}</text>')
+
+    def _dumbbell(x0, kf, kt, X, r, cy):
+        v0, v1 = r[kf], r[kt]
+        if v0 is None:
+            return (f'<text x="{x0}" y="{cy + 3.5}" font-size="9.5" fill="{_C_SAND}">'
+                    f'{"未给目标价" if kf == "tpf" else "无同年度对比"}</text>')
+        a, b = X(v0), X(v1)
+        if v0 == v1:
+            return (f'<circle cx="{_px(a)}" cy="{cy}" r="4" fill="{_C_SAND}"/>'
+                    f'<circle cx="{_px(a)}" cy="{cy}" r="6.5" fill="none" stroke="{_C_BLUE}" '
+                    f'stroke-width="1.5"/>'
+                    f'<text x="{_px(a)}" y="{cy - 13}" text-anchor="middle" font-size="9.5" '
+                    f'fill="{_C_LABEL}">{_gap_fmt(v0)} 持平</text>')
+        up = v1 > v0
+        col = _C_BLUE if up else _C_STONE
+        # 箭头：尖抵新点前（上调朝右 / 下调朝左）
+        tip, back = (b - 4, b - 12) if up else (b + 4, b + 12)
+        s = (f'<line x1="{_px(a)}" y1="{cy}" x2="{_px(b)}" y2="{cy}" stroke="{col}" stroke-width="2"/>'
+             f'<polygon points="{_px(back)},{cy - 3.5} {_px(back)},{cy + 3.5} {_px(tip)},{cy}" '
+             f'fill="{col}"/>'
+             f'<circle cx="{_px(a)}" cy="{cy}" r="4" fill="{_C_SAND}"/>'
+             f'<circle cx="{_px(b)}" cy="{cy}" r="5.5" fill="{col}" stroke="{_C_PAPER}" '
+             f'stroke-width="1.5"/>')
+        if up:   # 旧值标左、新值标右（外侧）
+            s += (f'<text x="{_px(a - 8)}" y="{cy + 3.5}" text-anchor="end" font-size="9.5" '
+                  f'fill="{_C_LABEL}">{_gap_fmt(v0)}</text>'
+                  f'<text x="{_px(b + 9)}" y="{cy + 3.5}" font-size="10" font-weight="700" '
+                  f'fill="{_C_INK}">{_gap_fmt(v1)}</text>')
+        else:    # 下调：新值标左、旧值标右
+            s += (f'<text x="{_px(b - 9)}" y="{cy + 3.5}" text-anchor="end" font-size="10" '
+                  f'font-weight="700" fill="{_C_INK}">{_gap_fmt(v1)}</text>'
+                  f'<text x="{_px(a + 8)}" y="{cy + 3.5}" font-size="9.5" '
+                  f'fill="{_C_LABEL}">{_gap_fmt(v0)}</text>')
+        return s
+
+    for i, r in enumerate(rows):
+        cy = cy0 + step * i
+        parts.append(f'<text x="180" y="{cy - 2}" text-anchor="end" font-size="11.5" '
+                     f'font-weight="600" fill="{_C_INK}">{_esc(r["org"])}</text>')
+        if r["d_from"] or r["d_to"]:
+            parts.append(f'<text x="180" y="{cy + 9}" text-anchor="end" font-size="9" '
+                         f'fill="{_C_LABEL}">{_esc(r["d_from"])} → {_esc(r["d_to"])}</text>')
+        for x0, kf, kt, X in mappers:
+            parts.append(_dumbbell(x0, kf, kt, X, r, cy))
+        # 右列：净利幅度 / 目标价幅度 + 评级变化
+        dnp, dtp = _gh_delta(r, "npf", "npt"), _gh_delta(r, "tpf", "tpt")
+        pct = " / ".join([f"{d * 100:+.1f}%" if d is not None else "—"
+                          for d, has in ((dnp, has_np), (dtp, has_tp)) if has])
+        ry = cy + (0 if (r["rf"] and r["rt"]) else 3.5)
+        parts.append(f'<text x="895" y="{_px(ry)}" font-size="11.5" font-weight="700" '
+                     f'fill="{_C_INK}">{pct}</text>')
+        if r["rf"] and r["rt"]:
+            parts.append(f'<text x="895" y="{cy + 10}" font-size="9" fill="{_C_STONE}">'
+                         f'评级 {_esc(r["rf"])}→{_esc(r["rt"])}</text>')
+    parts.append(_svg_close())
+
+    # 判词横条（脚本复算，持平=首末完全相等）
+    def _counts(kf, kt):
+        u = d = f = 0
+        for r in rows:
+            dl = _gh_delta(r, kf, kt)
+            if dl is None:
+                continue
+            u, d, f = u + (dl > 0), d + (dl < 0), f + (dl == 0)
+        return u, d, f
+
+    s_parts = [f"近 180 天 {n} 家券商有可比前后研报"]
+    if has_np:
+        u, d, f = _counts("npf", "npt")
+        s_parts.append(f"净利预测 <b>上调 {u} 家 / 下调 {d} 家 / 持平 {f} 家</b>")
+    if has_tp:
+        u, d, f = _counts("tpf", "tpt")
+        m = sum(1 for r in rows if r["tpf"] is not None)
+        s_parts.append(f"目标价 <b>上调 {u} 家 / 下调 {d} 家 / 持平 {f} 家</b>（{m} 家给出）")
+    chg = [r for r in rows if r["rf"] and r["rt"]]
+    if chg:
+        seg = "；".join(f'{r["org"]} {r["rf"]}→{r["rt"]}' for r in chg[:4])
+        s_parts.append(f"评级变化 {len(chg)} 家（{_esc(seg)}）")
+    summary = ('<div class="layer-summary">' + s_parts[0]
+               + ("：" + "；".join(s_parts[1:]) if len(s_parts) > 1 else "") + "。</div>")
+
+    parts.append('<span class="source">券商态度变化图（脚本按 gap_history 字段生成）：每行=一家券商'
+                 '近 180 天首末两份研报（按净利变化幅度降序，取前 8 家），沙点=较早一份、最新一份'
+                 '钢蓝=上调 / 中灰=下调 / 沙色环=持平（首末完全相等），箭头指向最新值；'
+                 '① 净利预测仅同预测年度首末对比，跨年预测不直接可比；② 目标价取研报区间中值；'
+                 '右列=两维度首末幅度与评级变化；仅覆盖 180 天内 ≥2 份研报的券商，'
+                 '东财兜底路径与港股无逐份明细、不适用本图；'
+                 '评级变化=同一券商首末对比口径，与 12 章时机信号「近 90 天评级上/下调家数」'
+                 '（E5 评级分布）口径不同，两处数字不要求互洽</span>')
+    return "".join(parts) + summary
+
+
 def _renumber_note(note: str, circled: str) -> str:
     """把附注文首（可隔 <b> 开标签）的圈号前缀改写为指定行号；无圈号前缀原样返回。
     v5.1.2：note 圈号本是填写方手写，行被剔除后手写编号失效——脚本按过滤后行序统一改写。"""
@@ -350,10 +539,12 @@ def _gap_notes_html(gp: dict) -> str:
 
 def _inject_gap_chart(gap_html: str, fill: dict) -> str:
     """9 预期差图锚点注入（与 _inject_l3_charts 同一注入机）：gap_html 里的 <!--GAP--> 注释
-    原位替换为「图 + <ol class="gap-notes"> 附注」整体；锚点缺失但字段已填 → 垫第 9 章章首 +
-    告警（prepend——图是本章主体）；字段未填 → 锚点静默清除；有效维度 <2 → 图与附注同不生成
-    （v5.1.2 起附注与图行同源，text_dims 一并丢弃）。"""
-    block = build_gap_plot(fill) + _gap_notes_html(fill.get("gap_plot") or {})
+    原位替换为「图 + <ol class="gap-notes"> 附注 + 券商态度变化图（v5.6.0，gap_history
+    已填时）」整体；锚点缺失但字段已填 → 垫第 9 章章首 + 告警（prepend——图是本章主体）；
+    字段未填 → 锚点静默清除；有效维度 <2 → 图与附注同不生成（v5.1.2 起附注与图行同源，
+    text_dims 一并丢弃；态度变化图独立于分布图，gap_history 有有效行即生成）。"""
+    block = (build_gap_plot(fill) + _gap_notes_html(fill.get("gap_plot") or {})
+             + build_gap_history(fill))
     return _inject_chart_anchors(
         gap_html,
         (("<!--GAP-->", block, "gap_plot"),),

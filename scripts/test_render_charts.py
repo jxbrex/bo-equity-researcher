@@ -1020,3 +1020,54 @@ def test_fin_trend_unit_escaped():
     assert "<b>" not in m_seg, "头行单位不得原样注入（应转义）"
     assert "&lt;b&gt;" in m_seg, "头行单位应转义出现"
     print("OK fin_trend 头行单位转义")
+
+
+def test_gap_history_chart():
+    """v5.6.0：券商态度变化图（charts_gap.build_gap_history，哑铃两面板并排）——
+    图+判词横条生成、np/tp 上调下调持平计数、机构按 np 幅度降序、缺目标价行注、
+    评级变化入右列与横条、无效/空字段返空串、render_fill 端到端进 9 章。"""
+    import charts_gap
+    rows = [
+        {"org": "中金公司", "yr": "2026", "d_from": "2026-06-30", "d_to": "2026-09-28",
+         "np_from": 930, "np_to": 952, "tp_from": 118, "tp_to": 135},
+        {"org": "招商证券", "yr": "2026", "d_from": "2026-04-25", "d_to": "2026-09-02",
+         "np_from": 880, "np_to": 925, "tp_from": 110, "tp_to": 126,
+         "rating_from": "增持", "rating_to": "买入"},
+        {"org": "国泰海通", "yr": "2026", "d_from": "2026-05-20", "d_to": "2026-08-30",
+         "np_from": 940, "np_to": 965, "tp_from": 122, "tp_to": 122},
+        {"org": "华泰证券", "yr": "2026", "d_from": "2026-06-08", "d_to": "2026-10-09",
+         "np_from": 912, "np_to": 908},
+        {"org": "摩根士丹利", "yr": "2026", "d_from": "2026-07-12", "d_to": "2026-09-15",
+         "np_from": 905, "np_to": 878, "tp_from": 105, "tp_to": 98,
+         "rating_from": "增持", "rating_to": "中性"},
+    ]
+    html = charts_gap.build_gap_history({"gap_history": {"rows": rows}})
+    assert "券商态度变化" in html and "<svg" in html and "layer-summary" in html
+    assert "① 2026E 归母净利预测" in html, "统一预测年度应入左面板标题"
+    assert "上调 3 家 / 下调 2 家 / 持平 0 家" in html, "np 计数（招商/国泰/中金升，华泰/大摩降）"
+    assert "上调 2 家 / 下调 1 家 / 持平 1 家" in html, "tp 计数（国泰海通 122→122 持平）"
+    assert "未给目标价" in html, "华泰无 tp 应注记"
+    assert "评级 增持→买入" in html and "评级变化 2 家" in html
+    assert html.index("招商证券") < html.index("中金公司"), "应按 np 幅度降序（招商 +5.1% 居首）"
+    assert ">122 持平<" in html, "国泰海通 tp 持平应有沙色环注（122 持平）"
+    # 无效行 / 空字段 → 空串（缺失不告警，同 holders 惯例）
+    assert charts_gap.build_gap_history({}) == ""
+    assert charts_gap.build_gap_history({"gap_history": {"rows": []}}) == ""
+    assert charts_gap.build_gap_history({"gap_history": {"rows": [{"org": "x"}]}}) == ""
+    assert charts_gap.build_gap_history({"gap_history": {"rows": ["junk"]}}) == ""
+    # 混杂预测年度 → 标题退化
+    mixed = charts_gap.build_gap_history({"gap_history": {"rows": [
+        dict(rows[0]), dict(rows[1], org="野村", yr="2027")]}})
+    assert "各行同预测年度首末对比" in mixed
+    # 端到端：经 9 章锚点注入进渲染产物
+    out = render_fill(minimal_fill(gap_history={"rows": rows}))
+    assert "券商态度变化图" in out and "同一券商首末两份研报对比" in out
+    print("OK gap_history 券商态度变化图（生成/计数/排序/降级/端到端）")
+    # 排序回归（v5.6.0 审核 #1）：持平（0.0%）须排在下调之前——`or -9` 曾把 0.0 吞成 -9
+    flat = charts_gap.build_gap_history({"gap_history": {"rows": [
+        {"org": "平平", "np_from": 100, "np_to": 100},
+        {"org": "降降", "np_from": 100, "np_to": 99},
+        {"org": "升升", "np_from": 100, "np_to": 101},
+    ]}})
+    assert flat.index("升升") < flat.index("平平") < flat.index("降降"),         "顺序应为 升→持平→降"
+

@@ -2856,6 +2856,37 @@ def test_prev_fields_warns():
         "full_fill 锚点齐备、review 有假设表，不应告警"
 
 
+def test_prev_cross_version_unmarked_warns_by_field():
+    """v5.7.2：回测模式下非 review 章节含明确跨版表述但未挂 .rev → 分字段告警；
+    已标 rev（含 rev num 多类）与普通「新增产能」业务文字不得误报。"""
+    prev = {"date": "2026-08-08", "quality": 7.0, "valuation": 6.0, "timing": 5.0,
+            "target_range": "10-12",
+            "scenarios": [{"scenario": "基础情景", "归母净利": "95 亿", "PE": "10-12x",
+                           "目标价": "9.5-11.4 元"}]}
+    review = ('<table><tr><td>假设变更对比</td></tr></table><span class="source">数据来源：测试</span>'
+              '<span class="rev">甲</span><span class="rev">乙</span>')
+    f = minimal_fill(prev=prev, review_html=review)
+    f["thesis_html"] += "Q3单季低于旧报告30亿警戒线。"
+    f["cycle_html"] = "较上版规律修正：单期户数暴增不是顶部充分条件。" * 4
+    f["peers_meta"] = "同业剔除依据沿用旧报告对比结论。"
+    f["dash_html"] += '<span data-class="rev">旧报告对照口径</span>'
+    f["p0_html"] += "α-烯烃一期新增125万吨产能。"
+    f["gap_html"] += "适用于 3.10 及以上版本。"
+    f["valuation_html"] += "新旧版本口径一致。"
+    f["position_html"] += '<span class="rev num">较上版时机分下调</span>'
+
+    out = validate_stderr(f)
+    lines = [ln for ln in out.splitlines() if "跨版表述未挂 .rev" in ln]
+    assert len(lines) == 1, f"应只有一条分字段告警，实际 stderr: {out}"
+    line = lines[0]
+    for kw in ("thesis_html（旧报告）", "cycle_html（较上版）", "peers_meta（旧报告）",
+               "dash_html（旧报告）"):
+        assert kw in line, f"告警应点名 {kw}，实际: {line}"
+    for absent in ("p0_html", "gap_html", "valuation_html", "position_html", "review_html"):
+        assert absent not in line, f"{absent} 不应误报，实际: {line}"
+    assert "高亮过少" not in out, "class='rev num' 也应计入全文高亮数"
+
+
 def test_object_fields_reject_arrays():
     """#14: 对象型字段（scores/layer_share/timing_weights）传数组 → 友好 ValueError，
     不得 AttributeError 裸崩。"""

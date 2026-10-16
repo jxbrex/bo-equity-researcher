@@ -27,6 +27,16 @@ _HTML_FIELDS = ("thesis_html", "conclusion_html", "p0_html", "l1_html", "l3_html
 # 可含数据表的章节字段（source 来源标注检查用；thesis 不含表，剔除）
 _HTML_TABLE_FIELDS = _HTML_FIELDS[1:]
 
+# 回测高亮扫描：cycle_html 同属可挂 .rev 的正文；peers_meta 是纯文本（渲染时转义）单列改写提示。
+_REV_HTML_FIELDS = _HTML_FIELDS + ("cycle_html",)
+_CROSS_VERSION_RE = re.compile(
+    r"较上版|上一版|(?<!以)上版|旧报告|旧警戒线|(?<!新)旧版|旧锚|原假设|被证伪|被验证|"
+    r"新增重大变量|新增重大风险|清单外新增风险|本版复盘修正")
+_REV_ELEMENT_RE = re.compile(
+    r"<([A-Za-z][\w:]*)\b[^>]*?\sclass\s*=\s*[\"'][^\"']*\brev\b[^\"']*[\"'][^>]*>.*?</\1>",
+    re.I | re.S)
+_REV_CLASS_RE = re.compile(r"\sclass\s*=\s*[\"'][^\"']*\brev\b[^\"']*[\"']", re.I)
+
 # v4.11.1（审核 D8）：dim-block 切块正则容忍附加类（class="dim-block extra"），
 # 三处消费方（内容地板/维度块校验/治理条）收敛同一 helper，口径唯一
 _DIM_BLOCK_RE = r'<div class="dim-block(?:\s[^"]*)?">'
@@ -1461,11 +1471,27 @@ def _check_prev_fields(fill: dict, warns: list) -> None:
             if not pv.get(k):
                 warns.append(f"prev.{k} 缺失：回测对比条该行将显示缺省值，请补全上版锚点")
         # 复盘高亮校验：评分变化/被证伪假设/新增变量应挂 .rev（全文 <3 处说明漏标）
-        rev_n = sum((fill.get(name) or "").count('class="rev"')
-                    for name in _HTML_FIELDS)
+        rev_n = sum(len(_REV_CLASS_RE.findall(fill.get(name) or ""))
+                    for name in _REV_HTML_FIELDS)
         if rev_n < 3:
             warns.append(f"回测模式下 .rev 高亮过少（全文仅 {rev_n} 处 < 3）："
                          f"评分变化/被证伪假设/新增变量应标注（fill-schema 的 .rev 规则）")
+        # 明确跨版信号漏标（review_html 专属对比不扫；普通「新增产能」不触发）
+        unmarked = []
+        for name in _REV_HTML_FIELDS:
+            if name == "review_html":
+                continue
+            text = _REV_ELEMENT_RE.sub("", fill.get(name) or "")
+            hits = list(dict.fromkeys(_CROSS_VERSION_RE.findall(text)))
+            if hits:
+                unmarked.append(f"{name}（{'、'.join(hits)}）")
+        meta_hits = list(dict.fromkeys(_CROSS_VERSION_RE.findall(fill.get("peers_meta") or "")))
+        if meta_hits:
+            unmarked.append(f"peers_meta（{'、'.join(meta_hits)}）")
+        if unmarked:
+            warns.append(f"回测模式跨版表述未挂 .rev：{'；'.join(unmarked)}"
+                         "——HTML 字段请在对应表述外包 <span class=\"rev\">…</span>；"
+                         "peers_meta 为纯文本，请改写掉跨版措辞")
         # 关键假设变更表（防评分漂移，backtest.md 6.6 硬性要求）
         rv = fill.get("review_html") or ""
         if rv and ("<table" not in rv or "假设" not in rv):

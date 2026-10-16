@@ -28,12 +28,14 @@ HTTP 旧版曾因 ZCode 不携带自定义 headers 而 403 禁用，stdio 版绕
 存在漂移（实测"股东户数"查询被误解析为日度序列）——**不进 em_fetch.py 脚本**，只做模型直调；
 脚本通道保持 tushare 固定字段的确定性。工具在 MCP 加载的会话生效（`mcp__mx-ds-mcp-stdio__mx_*`）。
 
-**MCP 缺席时的 skill 替补（2026-09-06 起）**：`mcp__mx-ds-mcp-stdio__mx_*` 不在工具列表时，
-改经 Skill 工具调用 mx 系列 skill（同一东财妙想 API，密钥已配在 skill 内）——定量查数
+**MCP 缺席或额度耗尽时的 skill 接力（2026-09-06 起，2026-10-16 扩充）**：`mcp__mx-ds-mcp-stdio__mx_*`
+不在工具列表，或调用返回明确的积分/额度耗尽提示时，改经 Skill 工具调用 mx 系列 skill
+（同一东财妙想 API，密钥已配在 skill 内，与 MCP 通道额度独立）——定量查数
 （行情/财务/港股财务，对应 `mx_*_finance_data` 各品种）用 `mx-data`；定性检索
 （新闻/公告/研报，对应 `mx_finance_search_news`/`mx_finance_search_notice`）用 `mx-search`；
 选股筛选（对应 `mx_stocks_screener`）用 `mx-xuangu`。定位与口径纪律同上
-（半结构化、模型直调层、不进 em_fetch.py 脚本）。
+（半结构化、模型直调层、不进 em_fetch.py 脚本）。**普通网络失败、查询无结果或未指明额度耗尽的
+限流不触发 skill 接力**，避免误消耗另一 Key。
 
 **tushare 新增接口（2026-08-07 接入 em_fetch.py，实测有权限）**：`daily_basic` 历史序列（PE/PB 分位）、
 `forecast`（业绩预告）、`express`（业绩快报）、`pledge_stat`/`stk_holdertrade`/`repurchase`（治理包）、
@@ -256,9 +258,9 @@ https://datacenter.eastmoney.com/securities/api/data/v1/get?reportName=RPT_F10_F
 ```
 scripts/em_fetch.py（首选：内部 tushare 优先、东财自动兜底，均结构化）
   → 均失败/缺字段 → 妙想 MCP 直查（mx_*_finance_data；港股财务首选通道；
-    MCP 缺席时经 Skill 工具调 mx-data/mx-search/mx-xuangu 替补，同一妙想 API）
+    MCP 缺席或返回明确积分/额度耗尽提示时，经 Skill 工具调 mx-data/mx-search/mx-xuangu 接力，同一妙想 API、独立额度）
     → 仍无 → 本手册东财手工 curl（特定字段补充，如港股财务 HKF10）
-      → 仍无 → 定性查询：有WebSearch用WebSearch；有妙想用 mx_finance_search_news/notice；都无则E7+10jqka已知URL
+      → 仍无 → 定性查询：有WebSearch用WebSearch；有妙想（MCP 或 skill 接力）用 mx_finance_search_news/notice；都无则E7+10jqka已知URL
         → 仍无 → 委派仅限边界清晰机械任务（定性调研禁委派，见SKILL.md Step 1.3）
           → 仍无 → 按 SKILL.md「数据降级与反幻觉」降级规则处理，禁止编造
 ```
@@ -406,8 +408,11 @@ curl -s --max-time 15 -H "User-Agent: Mozilla/5.0" "https://datacenter.eastmoney
 - 手工 curl 纪律：6 个核心端点**同一条消息并行发出**；单接口超时重试 1 次仍失败即降级
   （见上方「调用方式」）。
 
-### 妙想 MCP（`mx_*`，模型直调层；MCP 缺席时经 mx-data/mx-search/mx-xuangu skill 调用，同一 API）
+### 妙想 MCP（`mx_*`，模型直调层；MCP 缺席或明确额度耗尽时经 mx-data/mx-search/mx-xuangu skill 接力，同一 API、独立额度）
 
+- MCP 与 skill 使用相互独立的 Key/额度；MCP 返回明确积分/额度耗尽提示时切对应 skill，
+  skill 也失败或耗尽才继续下一级。普通网络失败、查询无结果或未指明额度耗尽的限流
+  不触发 skill 接力。
 - 未见明确频控数字（**待实测**）；已记录的约束是返回口径漂移（半结构化指标名）而非限流。
   免费额度实感约束：同一报告内妙想检索类调用控制在必要次数内，避免反复同义查询。
 
@@ -417,6 +422,8 @@ curl -s --max-time 15 -H "User-Agent: Mozilla/5.0" "https://datacenter.eastmoney
 
 任一接口返回 429 或明确的额度耗尽提示：
 1. **立即停止当前路径整条降级链**，切到下一级工具/数据源
+   - **妙想 MCP 的下一级判定**：仅当报文明确积分/额度耗尽时，下一级才是对应 mx skill；
+     普通 429、网络失败、查询无结果不切 skill，按原降级链继续。
 2. **禁止继续在同一路径堆调用**——第一次 429 后继续在同一路径硬跑十几分钟到第二次
    429 才停，是严格禁止的"硬挺"
 3. 若所有路径均 429：停止取数，用已有数据出"快速评估"版报告，明示"取数被限流中断"

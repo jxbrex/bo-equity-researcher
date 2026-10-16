@@ -155,7 +155,7 @@ sensitivity 的 name）或写**带数字的排除理由**（`excluded`，如「A
 环境工具探测、定性搜索纪律、审计意见必查、卖方深挖、委派模板、Research Checklist 全部在那里。
 端点/字段/港股矩阵/429 规则在 `references/data-sources.md`（需要手工 curl 时再读）。
 
-取数优先级：**em_fetch.py（首选，一条命令）→ 妙想 MCP 直调（缺席时经 mx-data/mx-search skill 替补）→ 手工 curl → 定性搜索**。
+取数优先级：**em_fetch.py（首选，一条命令）→ 妙想 MCP 直调（缺席或返回明确积分/额度耗尽提示时，经 mx-data/mx-search/mx-xuangu skill 接力）→ 手工 curl → 定性搜索**。
 **v5.0 新增输出**：em_fetch 摘要新增「报告期进度」照抄行（最新报告期四累计值+同比/单季拆分/近三年同期占比带/完成度分母说明），落盘 JSON 新增 `period_track`/`consensus_np` 键——fill 的 `period_track` 照抄键与 `valuation_inputs.consensus_np` 一律照抄该行/落盘回填，禁手估（v4.11.0 holders/price_history 同款照抄纪律；契约见 fill-schema.md）。**v5.0.1 扩充**：单季拆分照抄键新增扣非与经营现金流（`sq_dedt`/`sq_ocf` 及 prev/yoy 四键，累计差分口径）。**v5.1.0 补源**：E5 走东财降级源（tushare report_rc 空/失败）时，当年 EPS 均值按 ×总股本（总市值/现价）换算落盘 `consensus_np`（落盘 `src` 键标记换算口径）——此前该分支不落盘，恒瑞 2026-09 实证致第 3 章进度条与预期差拆解口径分裂。**v5.5.1 港股补源**：E5 对港股无逐机构明细（tushare `report_rc` 不覆盖港股），第 9 章 `gap_plot` 的 `street` 无照抄行——填报方把调研（卖方研报/电话调研）得到的逐机构预测**先落盘**为 `_street_{code}_{date}.json`（含机构名/数值/日期/来源四要素）再照抄填 `gap_plot.street`，并在 `gap_plot` 加 `source_file` 指向该文件（契约见 fill-schema.md「gap_plot」节；无 `source_file` 的港股 street 会被软校验判为手填嫌疑）。
 **委派边界（一条自洽规则，模板与工具限制逐字见 data-collection.md Step 1.3）**：
 - **强制委派（MANDATORY）**：同业 peer **≥3 只**的 `--peers` 批量取数、公告 PDF 下载提表
@@ -165,17 +165,18 @@ sensitivity 的 name）或写**带数字的排除理由**（`excluded`，如「A
 - **禁委派**：目标公司本体取数（E1 加 `--out` 落盘供渲染器防伪）与定性调研一律主会话完成
   （细则见 data-collection.md Step 1.0「委派边界」+ Step 1.3）；em_fetch 一条命令会连带输出
   目标公司本体——委派出去的命令**只准回传 peers 部分**，禁止让子代理做定性。
-- **可委派（推荐）**：妙想 MCP 检索类取数（研报观点/公告/商品宏观，只回传引文+出处+日期）、
+- **可委派（推荐）**：妙想 MCP/skill 检索类取数（研报观点/公告/商品宏观，只回传引文+出处+日期）、
   `--check` 修复循环的契约层修复。
-**并行发起（三者无依赖）**：目标公司本体取数、妙想 MCP 检索、目标公司定性调研与子代理的
+**并行发起（三者无依赖）**：目标公司本体取数、妙想 MCP/skill 检索、目标公司定性调研与子代理的
 peers 批量取数互不依赖——委派发出后主会话立即并行推进自己的那几路，不空等子代理。
 
 **工具检查硬门禁（开始取数前执行）**：检查工具列表是否含 `mcp__mx-ds-mcp-stdio__mx_*`（妙想 MCP）；
-缺席再查 skill 列表是否含 `mx-data`/`mx-search`（妙想 skill 替补，同一东财妙想 API，经 Skill 工具调用——
-定量查数用 `mx-data`、定性检索用 `mx-search`、选股筛选用 `mx-xuangu`）。两级均缺席 → 定性检索/筹码分布/
-行业估值水位走降级链（见 data-collection.md），且**必须在报告显式标注「妙想 MCP 缺席，已走降级路径」**；
-经 skill 替补的标注「妙想经 mx-data/mx-search skill 通道」——禁止静默跳过
-（缺席未标注 = 违反降级纪律，见文末「数据降级与反幻觉」）。
+MCP 可用且未明确额度耗尽时直调。MCP 缺席，或调用返回明确的积分/额度耗尽提示时，再查 skill 列表是否含
+`mx-data`/`mx-search`/`mx-xuangu`（妙想 skill 接力，同一东财妙想 API、独立额度，经 Skill 工具调用——
+定量查数用 `mx-data`、定性检索用 `mx-search`、选股筛选用 `mx-xuangu`）。两级均不可用 → 定性检索/筹码分布/
+行业估值水位走降级链（见 data-collection.md），且**必须在报告显式标注「妙想 MCP 与 mx skill 均不可用，已走降级路径」**；
+经 skill 接力的标注「妙想经 mx-data/mx-search/mx-xuangu skill 通道」——禁止静默跳过
+（普通网络失败、查询无结果或未指明额度耗尽的限流不触发 skill 接力；缺席/耗尽未标注 = 违反降级纪律，见文末「数据降级与反幻觉」）。
 
 ### Phase 2: 逐维评分
 
@@ -439,4 +440,4 @@ if 命中红灯项（财务造假/ST/立案调查/主营不可逆衰退/审计�
 - 目标价必须可追溯到 Phase 0 驱动 + Phase 3 PE 校准，不套"市场惯例"或经验法则
 - 数据冲突时并列呈现区间并注明冲突
 - 降级必须同时满足：① 已尝试 ≥2 种路径 ② 报告中明确标注降级原因
-- **妙想 MCP 与 mx-* skill 双缺席必须显式标注「已走降级路径」，禁止静默跳过**（硬门禁与标注语句见 Phase 1「工具检查硬门禁」，缺席未标注 = 违反降级纪律）
+- **妙想 MCP 与 mx-* skill 均不可用（缺席或明确额度耗尽）必须显式标注「已走降级路径」，禁止静默跳过**（硬门禁与标注语句见 Phase 1「工具检查硬门禁」，缺席/耗尽未标注 = 违反降级纪律）

@@ -220,9 +220,10 @@ stock-deep-analysis/
 │   ├── fill-schema.md          # fill→render JSON 契约 + HTML 骨架（报告结构唯一权威）
 │   ├── forensic-accounting.md  # 财报质量核查（应计/M-Score/评级）
 │   ├── industry-financials.md  # 银行/保险/券商口径（金融股必读）
-│   ├── industry-pharma.md      # 创新药/管线股口径：rNPV 估值（医药管线股必读）
+│   ├── industry-pharma.md      # 医药口径：创新药 rNPV / 器械集采 / CXO 订单（医药医疗股必读）
 │   ├── industry-realestate.md  # 开发型地产口径：NAV 估值（地产股必读）
-│   └── industry-internet.md    # 平台型互联网口径：SOTP 估值（平台互联网必读）
+│   ├── industry-internet.md    # 平台型互联网口径：SOTP 估值（平台互联网必读）
+│   └── industry-resources.md   # 上游资源品口径：储量/成本曲线/正常化 PE 时段匹配（油气矿业煤炭必读）
 ├── scripts/
 │   ├── em_fetch.py             # 一键取数（A股/港股，tushare 优先 + 东财兜底，429 硬停）
 │   ├── em_core.py              # 传输/缓存/映射/格式化核心层：ts_call/get + 取数窗口 + 跨块共享 helper

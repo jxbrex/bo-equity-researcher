@@ -133,9 +133,10 @@ sensitivity 的 name）或写**带数字的排除理由**（`excluded`，如「A
 | **困境反转** | 财务指标全面恶化但存在反转催化剂 | 70:30 | 正常化利润 PE、重置成本、清算价值对照 | 3B/3C 反转催化剂、红灯 a 生存风险（现金流能否撑到反转） |
 
 **L1 六维权重（层内）按分型浮动，详见 `references/scoring.md`**——决定性维度上浮、噪音维度下沉，
-不再等权。金融子类（银行/保险/券商）另见 `references/industry-financials.md`；创新药管线、
-开发型地产、多元平台互联网分别另见 `references/industry-pharma.md`、`references/industry-realestate.md`、
-`references/industry-internet.md`（触发条件以各附录开头声明为准）。
+不再等权。金融子类（银行/保险/券商）另见 `references/industry-financials.md`；医药（创新药管线/
+器械/CXO）、开发型地产、多元平台互联网、上游资源品（油气/矿业/煤炭）分别另见
+`references/industry-pharma.md`、`references/industry-realestate.md`、`references/industry-internet.md`、
+`references/industry-resources.md`（触发条件以各附录开头声明为准）。
 
 **分型规则：**
 - 一只股票只归一个主类型；撞车（同时满足两型判据）按 scoring.md「撞车分级」处置——
@@ -382,9 +383,10 @@ if 命中红灯项（财务造假/ST/立案调查/主营不可逆衰退/审计�
 | `references/scoring.md` | **评分+估值章必读**（含估值方法/基准率节；附录含历史报告分析经验） | Phase 2 / 3 |
 | `references/forensic-accounting.md` | 1D 财报可信度评级时必读 | Phase 2 1D |
 | `references/industry-financials.md` | **银行/保险/券商评分与估值时必读** | Phase 0.5 / 2 / 3 |
-| `references/industry-pharma.md` | **创新药/管线型医药评分与估值（rNPV）时必读** | Phase 0.5 / 2 / 3 |
+| `references/industry-pharma.md` | **医药评分与估值时必读**（创新药/管线 rNPV、器械集采口径、CXO 订单口径） | Phase 0.5 / 2 / 3 |
 | `references/industry-realestate.md` | **开发型地产评分与估值（NAV）时必读** | Phase 0.5 / 2 / 3 |
 | `references/industry-internet.md` | **多元平台互联网评分与估值（SOTP）时必读** | Phase 0.5 / 2 / 3 |
+| `references/industry-resources.md` | **上游资源品（油气/矿业/煤炭）评分与估值时必读** | Phase 0.5 / 2 / 3 |
 | `references/backtest.md` | **回测模式必读** | Phase 6.5/6.6 |
 | `references/fill-schema.md` | **写 fragment 前必读** | Report Output |
 | `scripts/em_fetch.py` | 执行取数（`python` 运行，**不 Read**——禁读脚本学结构；诊断报错允许 grep/局部读相关行） | Phase 1 |

@@ -103,9 +103,11 @@ def build_growth_plot(fill: dict) -> str:
             parts.append(f'<text x="{cx:.1f}" y="{H - B + 31}" text-anchor="middle" font-size="10" '
                          f'fill="{_C_STONE}">差 {d:+.1f}pct</text>')
     parts.append(_svg_close())
-    parts.append('<span class="source">利润增长（脚本按 growth_plot 字段生成）：柱=历史增速（沙=收入、钢蓝=归母净利，'
-                 '取 E3 年表同比），区间竖条=本文净利增速预测区间，◆=卖方一致预期（E5 研报汇总）；'
-                 f'预期差（本文中枢−一致预期）：{"；".join(diffs)}；全图为中性色，红涨绿跌仅用于股价方向</span>')
+    parts.append(_chart_source(
+        "利润增长", "历史定期报告（同比）、券商盈利预测汇总、本文预测区间",
+        '柱=历史增速（沙=收入、钢蓝=归母净利，'
+        '取历史年报同比），区间竖条=本文净利增速预测区间，◆=卖方一致预期（券商研报汇总）；'
+        f'预期差（本文中枢−一致预期）：{"；".join(diffs)}；全图为中性色，红涨绿跌仅用于股价方向'))
     return "".join(parts)
 
 
@@ -176,9 +178,10 @@ def build_holders_plot(fill: dict) -> str:
             parts.append(f'<text x="{x + bar_w / 2:.1f}" y="{H - B + 31}" text-anchor="middle" '
                          f'font-size="10.5" fill="{chg_color}">{p["chg"]:+.1f}%</text>')
     parts.append(_svg_close())
-    parts.append('<span class="source">股东户数趋势（脚本按 holders 字段生成，数据来自 em_fetch E4）：'
-                 '柱=期末股东户数，柱下=截止日与环比；<strong>户数增=筹码分散（红），户数减=集中（绿）</strong>，'
-                 '钢蓝柱=最新一期</span>')
+    parts.append(_chart_source(
+        "股东户数趋势", "公司定期报告与公开股东户数披露（季末口径）",
+        '柱=期末股东户数，柱下=截止日与环比；<strong>户数增=筹码分散（红），户数减=集中（绿）</strong>，'
+        '钢蓝柱=最新一期'))
     return "".join(parts)
 
 
@@ -236,17 +239,18 @@ def build_anchor_ledger(fill: dict, calc: dict) -> str:
         ev_html = ('<div class="info-card"><strong>锚移动增量证据</strong>（两版报告间的新增信息；'
                    '无新增基本面证据时 PE 带不得移动——估值锚纪律一，价格与卖方观点不构成理由）：'
                    f'<ul>{lis}</ul></div>')
-    src = ('锚移动台账（脚本生成）：上版照抄 prev.scenarios（extract_review 对上版报告的解析），'
-           '本版为脚本计算值；中枢=目标价区间中点（上版为报告显示口径中点），Δ=本版中枢÷'
-           '上版中枢−1；锚的每次移动必须归因到上方增量证据清单，写不出基本面增量的移动不合法'
-           + ('；上版含解析降级行（旧版格式或市值口径），以原文对照为准' if degraded else ''))
+    src = _chart_source(
+        "锚移动台账", "上版报告情景锚点（照录原文）与本版计算值",
+        '中枢=目标价区间中点（上版为报告显示口径中点），Δ=本版中枢÷'
+        '上版中枢−1；锚的每次移动必须归因到上方增量证据清单，写不出基本面增量的移动不合法'
+        + ('；上版含解析降级行（旧版格式或市值口径），以原文对照为准' if degraded else ''))
     return (f'<span class="section-tag">估值锚移动台账（较上版 '
             f'{_esc(str(prev.get("date") or "—"))}）</span>'
             '<div class="table-scroll"><table><thead><tr><th>情景</th>'
             '<th>上版锚（利润×PE→中枢）</th><th>本版锚（利润×PE→中枢）</th>'
             '<th class="num">Δ中枢</th></tr></thead><tbody>'
             + "".join(trs) + '</tbody></table></div>' + ev_html
-            + f'<span class="source">{src}</span>')
+            + src)
 
 
 def build_review_dumbbell(prev: dict, quality: float, valuation: float, timing) -> str:
@@ -280,8 +284,10 @@ def build_review_dumbbell(prev: dict, quality: float, valuation: float, timing) 
         parts.append(f'<text x="{BAR_B + 10}" y="{cy + 4.5:.1f}" font-size="12" font-weight="700" '
                      f'fill="{dcolor}">{d:+.2f}</text>')
     parts.append(_svg_close())
-    parts.append(f'<span class="source">三轨分新旧对比（脚本按 prev 字段生成）：灰点={_esc(str(prev.get("date", "上版")))} 上版，'
-                 f'蓝点=本版；连线箭头指向上版→本版方向（绿=上调、红=下调）；右列=分差；0-10 定域</span>')
+    parts.append(_chart_source(
+        "三轨分新旧对比", f"上版报告（{_esc(str(prev.get('date', '上版')))}）与本版评分计算",
+        f'灰点={_esc(str(prev.get("date", "上版")))} 上版，'
+        '蓝点=本版；连线箭头指向上版→本版方向（绿=上调、红=下调）；右列=分差；0-10 定域'))
     return "".join(parts)
 
 
@@ -330,8 +336,10 @@ def build_triggers_strip(fill: dict) -> str:
         return ""
     return ('<span class="section-tag">触发条件状态</span>'
             '<div class="trig-strip">' + "".join(rows) + '</div>'
-            '<span class="source">触发条件状态（脚本按 triggers 字段生成）：绿=已兑现、红=未兑现、'
-            '灰=待验证（评价色，与涨跌红绿无关）；status 由填写方按最新数据核对后标注</span>')
+            + _chart_source(
+                "触发条件状态", "上版报告触发条件与最新公开数据核对（本报告跟踪标注）",
+                '绿=已兑现、红=未兑现、灰=待验证（评价色，与涨跌红绿无关）；'
+                '兑现状态按最新公开数据核对后标注'))
 
 
 # ════════════════════ 2 关键利润驱动 · 驱动卡 / 11 周期规律 · 阶段卡（v4.11.3） ════════════════════

@@ -46,7 +46,7 @@ def test_optional_charts_render():
         "cycle_html": '<table><thead><tr><th>阶段</th><th class="num">时间</th><th class="num">PE</th>'
                       '<th>驱动</th></tr></thead><tbody><tr><td>景气顶</td><td class="num">2021H1</td>'
                       '<td class="num">46.9x</td><td>商品价格见顶</td></tr></tbody></table>'
-                      '<span class="source">阶段拆解：E2 月线 + 当年 EPS 估算 PE</span>'
+                      '<span class="source">阶段拆解：公开月线行情 + 当年 EPS 估算 PE</span>'
                       '<div class="conclusion-box"><strong>可复用规律：</strong>低分位≠便宜。</div>',
     }
     html = render_fill(minimal_fill(**extra))
@@ -194,7 +194,7 @@ def test_price_history_and_holders():
                     {"date": "2025-09-30", "num": 160800, "chg": -8.2},
                     {"date": "2025-12-31", "num": 152300, "chg": -5.3}],
         "cycle_html": '<table><tr><td>景气顶</td></tr></table>'
-                      '<span class="source">阶段拆解：E2 月线</span>',
+                      '<span class="source">阶段拆解：公开月线行情</span>',
     }
     html = render_fill(minimal_fill(**extra))
     assert 'aria-label="股价与PE历史走势"' in html, "发丝图应生成"
@@ -884,7 +884,7 @@ def test_price_history_verdict_block():
     html = render_fill(minimal_fill(price_history={"label": "近3年", "series": months},
                                     cycle_html='<table><tr><td>x</td></tr></table>'))
     seg = html.split('aria-label="股价季K与PE历史走势"', 1)[1]
-    src_seg = seg.split('<span class="source">', 1)[1].split("</span>", 1)[0]
+    src_seg = re.search(r'<span class="source[^"]*">(.*?)</span>', seg, re.S).group(1)
     assert "当前：" not in src_seg and "全区间" not in src_seg, "判词不应再混在图注里"
     v_seg = seg.split('<div class="layer-summary"><strong>判词：</strong>', 1)[1].split("</div>", 1)[0]
     assert "区间业绩驱动的上涨：区间价 +32%、PE(TTM) +14%。" in v_seg, "区间归因应为人话结论"

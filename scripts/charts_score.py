@@ -49,9 +49,11 @@ def build_score_bars(sc: dict) -> str:
             y += ROW_H
         y += GROUP_GAP
     parts.append(_svg_close())
-    parts.append('<span class="source">评分分布（脚本按 scores/weights 生成）：条长=维度得分（0-10 定域），'
-                 '条色=徽章档（≥7 绿 / 4-6.9 橙 / &lt;4 红），条端=得分与判词，右列=层内权重 · 加权得分，'
-                 '虚线=7.0 良好线</span>')
+    parts.append(_chart_source(
+        "评分分布", "本报告评分模型输出（维度得分×层内权重加权）",
+        '条长=维度得分（0-10 定域），'
+        '条色=徽章档（≥7 绿 / 4-6.9 橙 / &lt;4 红），条端=得分与判词，右列=层内权重 · 加权得分，'
+        '虚线=7.0 良好线'))
     return "".join(parts)
 
 
@@ -122,8 +124,10 @@ def build_sensitivity_tornado(fill: dict) -> str:
         parts.append(f'<text x="{X0 + w + 8:.1f}" y="{cy + BAR_H / 2 + 4.5:.1f}" font-size="12" '
                      f'font-weight="700" fill="{_C_GREEN}">+{_fmt(it["impact"])}%</text>')
     parts.append(_svg_close())
-    parts.append('<span class="source">敏感性龙卷风（脚本按 sensitivity 字段生成）：条长/条端/坐标轴=变量变动'
-                 '对归母净利的影响幅度 %（估算绝对值），红=不利方向、绿=有利方向，'
-                 '左列=变量自身变动幅度（pct=百分点、%=比例）→ 金额影响，'
-                 '排序=弹性大小（首行=第一变量）；填了本字段，P0 不必再写敏感性表</span>')
+    parts.append(_chart_source(
+        "敏感性龙卷风", "本报告假设与估算（变量变动对归母净利影响）",
+        '条长/条端/坐标轴=变量变动'
+        '对归母净利的影响幅度 %（估算绝对值），红=不利方向、绿=有利方向，'
+        '左列=变量自身变动幅度（pct=百分点、%=比例）→ 金额影响，'
+        '排序=弹性大小（首行=第一变量）；填了敏感性字段后，P0 不必再写敏感性表'))
     return "".join(parts)

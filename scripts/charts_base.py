@@ -140,6 +140,41 @@ def _period_ratio(pt: dict, amt_k: str, goal_k: str = None, cons_k: str = None):
 _PERIOD_VERDICTS = ("超前", "正常", "滞后", "无法判定")
 
 
+# 来源注内部黑话禁词（v5.7.3 统一权威，_chart_source 自检与 render_report 最终 HTML
+# 门禁同源消费）：报告 .source 只回答读者关心的问题——数据从哪里来、哪些是估算/本报告
+# 计算、口径是什么；内部实现名（抓取脚本/fill 字段名/E1-E6 编号）一律不得出现在来源注。
+# 大小写不敏感（防 EM_FETCH 类绕过）；字段名带词边界（Shareholders 等正常词不误伤）。
+_SOURCE_BANNED_RE = re.compile(
+    r"脚本按|字段生成|照抄行"
+    r"|(?<![A-Za-z0-9_])(?:em_fetch|extract_review|period_track|segments|growth_plot"
+    r"|fin_trend|industry_chain|holders|gap_plot|gap_history|pe_history|price_history"
+    r"|valuation_inputs|peers_plot|sensitivity|triggers|prev\.scenarios)(?![A-Za-z0-9_])"
+    r"|(?<![A-Za-z0-9])E[1-6](?![0-9A-Za-z])", re.I)
+
+
+def _chart_source(title: str, source: str, note: str = "") -> str:
+    """脚本图注统一来源注（v5.7.3）：<span class="source chart-source">标题（数据来源：真实来源）：口径说明</span>。
+    保留模板 .source 样式；chart-source 供 render_report 最终 HTML 门禁识别（脚本图注必含
+    非空「数据来源：」）。source 必须是读者可核验的真实来源（公司定期报告/公开行情/券商一致
+    预期/本报告计算等），空/空白来源直接 ValueError（空壳「数据来源：」等于没写）；
+    title/source/note 先过 _SOURCE_BANNED_RE 自检，命中即 ValueError——
+    新增图表把内部黑话写进图注时在开发期尽早失败。"""
+    if not isinstance(source, str) or not source.strip():
+        raise ValueError(f"图注来源必须是 strip 后非空的字符串（收到 {type(source).__name__}: "
+                         f"{str(source)[:40]!r}）——chart-source 必须写读者可核验的真实来源"
+                         "（公司定期报告/公开行情/券商一致预期/本报告计算等），空壳「数据来源：」等于没写")
+    for label, text in (("标题", title), ("来源", source), ("口径说明", note)):
+        m = _SOURCE_BANNED_RE.search(str(text))
+        if m:
+            raise ValueError(f"图注{label}含内部实现名「{m.group(0)}」：{str(text)[:80]}——"
+                             "来源注面向读者，须写可核验的真实来源，"
+                             "禁写抓取脚本名/fill 字段名/E1-E6 编号")
+    src = f"{title}（数据来源：{source}）"
+    if note:
+        src += f"：{note}"
+    return f'<span class="source chart-source">{src}</span>'
+
+
 
 _SCENARIO_COLORS = {"pess": _C_RED, "base": _C_ORANGE, "opt": _C_GREEN}
 
@@ -328,6 +363,7 @@ __all__ = [
     "_fmt_px", "_fmt_amt", "_SCENARIO_COLORS", "_prev_track_rows",
     "_var_key", "_sensitivity_items", "_first_var_name", "_gap_dim_ok", "_period_ratio",
     "parse_stage_period", "_PERIOD_VERDICTS", "_arrow_dumbbell",
+    "_SOURCE_BANNED_RE", "_chart_source",
     "_pad_domain", "_lin_map", "_text_w", "_wrap_label", "_ticks",
     "_SVG_STYLE", "_svg_open", "_svg_close", "_vgrid_ticks", "_hgrid_ticks", "_legend_row",
     "_inject_chart_anchors", "_anchor_fit", "_anchor_clamp",

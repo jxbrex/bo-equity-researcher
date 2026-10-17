@@ -7,8 +7,10 @@
 拆分自 test_render_core.py（v4.10.2），断言逐字沿用。
 """
 import os
+import re
 import sys
 import tempfile
+from html import unescape as _html_unescape
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import render_report as R
@@ -2626,14 +2628,15 @@ def test_gap_plot_street_source_gate():
             code="01810",
             gap_plot={"dims": dims, "source_file": os.path.join(d, "不存在.json")}))
         assert "gap_plot.source_file 读取失败" in out, "source_file 读不到应告警"
-        # 图下注释：注明基名（不露本地全路径），无 source_file 则保持 E5 口径（存量 A 股）
+        # 图下来源注：注明调研纪要落盘核对（v5.7.3 起不外露本地文件名与内部数据源编号）
         html = render_fill(minimal_fill(code="01810",
                                         gap_plot={"dims": dims, "source_file": ok}))
-        assert "调研落盘" in html and os.path.basename(ok) in html, \
-            "有 source_file 时图注应注明实际来源"
-        assert ok not in html, "图注不得暴露本地全路径（只显示 basename）"
-    assert "E5 逐研报明细回填" in render_fill(minimal_fill(gap_plot={"dims": dims})), \
-        "无 source_file 时图注保持 E5 口径"
+        assert "人工调研纪要（落盘核对）" in html, \
+            "有 source_file 时图注应注明调研纪要落盘核对口径"
+        assert os.path.basename(ok) not in html and ok not in html, \
+            "图注不得暴露本地文件名或全路径"
+    assert "券商研报明细与一致预期汇总" in render_fill(minimal_fill(gap_plot={"dims": dims})), \
+        "无 source_file 时图注写券商研报明细口径"
     print("OK gap_plot street 落盘源软校验（无源告警/对账/读不到/结构/四要素，A 股不误伤）")
 
 
@@ -2975,3 +2978,162 @@ def test_gap_history_handwritten_dupe():
         gap_history={"rows": rows}, gap_html="<!--GAP--><p>档位 A：已检索到具体券商研报假设（妙想+tushare，查询日 2026-10-14），分歧集中在 2026E 净利的出货量假设上，本文基础情景处于一致预期区间内部偏上，证伪时向下修正至一致均值。</p>" + plain))
     assert "手写券商态度变化表" not in out, f"无关表不应误伤: {out}"
     print("OK gap_history 手写变化表并存检测（告警/无字段静默/无关表不误伤）")
+
+
+# ---------------- v5.7.3 来源注根治：最终 HTML 内部黑话硬门禁 ----------------
+
+# 读者可见来源注（class token 含 source 的 span）禁用内部实现名。测试侧硬编码本清单，
+# 与实现侧（charts_base）各自独立维护——防实现正则退化时测试同步失明（假绿）。
+_SRC_BANNED = (
+    "脚本按", "字段生成", "照抄行", "em_fetch", "extract_review",
+    "period_track", "segments", "growth_plot", "fin_trend", "industry_chain",
+    "holders", "gap_plot", "gap_history", "pe_history", "price_history",
+    "valuation_inputs", "peers_plot", "sensitivity", "triggers", "prev.scenarios",
+)
+_SRC_BANNED_E = re.compile(r"(?<![A-Za-z0-9])E[1-6](?![0-9A-Za-z])")  # E1-E6 内部数据源编号
+
+
+def _source_spans(html):
+    """抽取最终 HTML 全部 class token 含 source 的 <span>：[(class 属性值, 剥标签+unescape 纯文本)]。
+    深度感知配对 </span>——嵌套 span 不截断尾巴（非贪婪正则会在内层 </span> 提前收口，
+    给黑话留逃逸口）；class 属性大小写不敏感、单/双引号/无引号（HTML5 合法）均可；
+    注释对读者不可见，扫描副本剔除 <!--...-->。与实现侧 render_report._iter_source_spans
+    各自独立编写，防同源退化假绿。"""
+    out = []
+    scan = re.sub(r"<!--.*?-->", "", html, flags=re.S)
+    for m in re.finditer(r'<span\b[^>]*?\bclass\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s>]+))[^>]*>',
+                         scan, flags=re.I):
+        classes = (m.group(1) or m.group(2) or m.group(3) or "").split()
+        if "source" not in [c.lower() for c in classes]:
+            continue
+        depth = 1
+        for t in re.finditer(r'<span\b[^>]*>|</span\s*>', scan[m.end():], flags=re.I):
+            depth += 1 if not t.group(0).startswith("</") else -1
+            if depth == 0:
+                inner = scan[m.end():m.end() + t.start()]
+                out.append((" ".join(classes),
+                            _html_unescape(re.sub(r"<[^>]+>", "", inner))))
+                break
+    return out
+
+
+def test_final_html_source_caption_gate():
+    """v5.7.3：最终 HTML 所有 .source 来源注不得含内部实现名（脚本按/em_fetch/E1-E6/
+    fill 字段名等）；脚本生成图注（.chart-source）必须含非空「数据来源：」真实来源。
+    防线在 _fill_template 之后——validate_content 在图表注入前执行，看不到脚本图注，
+    只有最终 HTML 能同时罩住脚本注入图注与手写 HTML 片段。"""
+    for name, fill in (("period_h1", period_fill("h1")), ("full_fill", full_fill())):
+        html = render_fill(fill, name=f"_fill_srcgate_{name}.json")
+        spans = _source_spans(html)
+        assert spans, f"{name}：最终 HTML 应含 .source 来源注"
+        for classes, text in spans:
+            for w in _SRC_BANNED:
+                assert w not in text, f"{name} 来源注含内部实现名「{w}」：{text[:80]}"
+            assert not _SRC_BANNED_E.search(text), \
+                f"{name} 来源注含内部数据源编号 E1-E6：{text[:80]}"
+            if "chart-source" in classes.split():
+                m = re.search(r"数据来源：([^；;）)]*)", text)
+                assert m and re.search(r"\w", m.group(1)), \
+                    f"{name} 脚本图注缺非空「数据来源：」真实来源：{text[:80]}"
+    # 测试侧抽取器自证：嵌套 span 的 .source 必须取到配对 </span> 前的完整文本（含尾巴），
+    # 不被内层 </span> 截断
+    html_n = render_fill(minimal_fill(
+        p0_html='<p>关键驱动分析。</p>'
+                '<span class="source">数据来源：测试 <span>补充</span> 尾巴可见</span>'),
+        name="_fill_srcnest.json")
+    assert any("尾巴可见" in t for _c, t in _source_spans(html_n)), \
+        "嵌套 span 的来源注尾巴必须完整抽取"
+    print("OK 最终 HTML 来源注门禁（period_h1/full_fill 全 span 无内部黑话）")
+
+
+def test_final_html_source_gate_rejects_jargon():
+    """v5.7.3 负向：手写 HTML 片段塞内部黑话 .source → 渲染必须拒绝并点名命中词与片段；
+    手写 .chart-source 缺非空「数据来源：」→ 同样拒绝。"""
+    bad = minimal_fill(p0_html='<p>关键驱动分析。</p>'
+                               '<span class="source">脚本按 demo 字段生成</span>')
+    try:
+        render_fill(bad, name="_fill_srcneg1.json")
+    except ValueError as e:
+        assert "内部实现名" in str(e) and "脚本按" in str(e), \
+            f"报错应点名命中词与片段: {e}"
+    else:
+        raise AssertionError("手写片段含内部黑话 .source，渲染未被拒绝")
+    bad2 = minimal_fill(p0_html='<p>关键驱动分析。</p>'
+                                '<span class="source chart-source">测试图（公司年报数据整理）</span>')
+    try:
+        render_fill(bad2, name="_fill_srcneg2.json")
+    except ValueError as e:
+        assert "数据来源：" in str(e), f"chart-source 缺「数据来源：」应拒: {e}"
+    else:
+        raise AssertionError("chart-source 缺非空「数据来源：」，渲染未被拒绝")
+    print("OK 来源注门禁负向（黑话拒渲染 / chart-source 缺来源拒渲染）")
+
+
+def test_chart_source_helper_selfcheck():
+    """v5.7.3 复核修复①③：_chart_source 空/空白来源必须 ValueError（空壳「数据来源：」逃逸）；
+    title/source/note 三向禁词自检，命中即拒。"""
+    from charts_base import _chart_source
+    s = _chart_source("测试图", "公司定期报告", "口径说明")
+    assert s == '<span class="source chart-source">测试图（数据来源：公司定期报告）：口径说明</span>', s
+    for tag, args in (("空来源", ("测试图", "")),
+                      ("空白来源", ("测试图", "   ")),
+                      ("None 来源", ("测试图", None)),
+                      ("非字符串来源", ("测试图", 123)),
+                      ("列表来源", ("测试图", ["公司年报"])),
+                      ("标题黑话", ("脚本按 x 生成", "公司年报")),
+                      ("来源黑话", ("测试图", "em_fetch E3 年表")),
+                      ("口径黑话", ("测试图", "公司年报", "来自 period_track"))):
+        try:
+            _chart_source(*args)
+        except ValueError as e:
+            assert "来源" in str(e), f"{tag} 报错文案应含来源说明: {e}"
+        else:
+            raise AssertionError(f"_chart_source {tag} 未拒：{args}")
+    print("OK _chart_source 自检（空来源拒 / title/source/note 三向禁词拒）")
+
+
+def test_final_html_source_gate_evasion():
+    """v5.7.3 复核修复②③+追加：门禁绕过八连——空来源壳 / class 单引号 / CLASS 大写 /
+    class 无引号（HTML5 合法写法）/ 嵌套 span 尾巴藏黑话 / HTML 实体（em&#95;fetch）/
+    大小写（EM_FETCH）/ .source span 未闭合（fail-closed，不静默扫余量）——渲染一律拒；
+    Shareholders 类正常词（holders 词边界）与 HTML 注释内黑话（对读者不可见）不误伤。"""
+    base = '<p>关键驱动分析。</p>'
+    for tag, frag in (
+        ("空来源壳", '<span class="source chart-source">测试图（数据来源：）</span>'),
+        ("class 单引号", "<span class='source'>脚本按 demo 字段生成</span>"),
+        ("CLASS 大写", '<span CLASS="source">脚本按 demo 字段生成</span>'),
+        ("class 无引号", '<span class=source>脚本按 demo 字段生成</span>'),
+        ("嵌套尾巴", '<span class="source">正常来源 <span>内嵌</span>脚本按 藏尾巴</span>'),
+        ("实体绕过", '<span class="source">数据来自 em&#95;fetch 抓取</span>'),
+        ("大小写绕过", '<span class="source">数据来自 EM_FETCH 抓取</span>'),
+        ("未闭合", '<div><span class="source">脚本按 demo 字段生成'),
+    ):
+        try:
+            render_fill(minimal_fill(p0_html=base + frag), name="_fill_evasion.json")
+        except ValueError as e:
+            assert "来源注" in str(e) or "数据来源：" in str(e), f"{tag} 报错文案: {e}"
+        else:
+            raise AssertionError(f"{tag} 绕过未被拒：{frag}")
+    ok = minimal_fill(p0_html=base + '<span class="source">Shareholders 户数披露数据</span>')
+    assert "Shareholders" in render_fill(ok, name="_fill_evasion_ok.json"), \
+        "Shareholders 正常词不应被 holders 禁词误伤"
+    commented = minimal_fill(p0_html=base + '<!-- <span class="source">脚本按 demo</span> -->')
+    assert "关键驱动分析" in render_fill(commented, name="_fill_evasion_cmt.json"), \
+        "HTML 注释内的来源注黑话对读者不可见，不应触发门禁"
+    print("OK 来源注门禁绕过八连全拒 + Shareholders/注释内黑话不误伤")
+
+
+def test_final_html_source_gate_banned_words_exhaustive():
+    """v5.7.3 复核③：禁词表退化假绿防线——最终渲染负向参数化遍历测试侧完整 _SRC_BANNED
+    （20 词）+ E1/E6 边界代表，逐个放进 .source 走真实 render_fill，每个都必须 ValueError。
+    测试侧清单独立硬编码（上方 _SRC_BANNED），与实现侧 charts_base._SOURCE_BANNED_RE 互不同源。"""
+    for w in _SRC_BANNED + ("E1", "E6"):
+        frag = f'<span class="source">数据来源标注 {w} 测试</span>'
+        try:
+            render_fill(minimal_fill(p0_html='<p>关键驱动分析。</p>' + frag),
+                        name="_fill_banned.json")
+        except ValueError as e:
+            assert "来源注释含内部实现名" in str(e), f"「{w}」报错文案不符: {e}"
+        else:
+            raise AssertionError(f"禁词「{w}」放进 .source 渲染未被拒——禁词表疑似退化")
+    print(f"OK 禁词表 {len(_SRC_BANNED) + 2} 词逐个 render 负向全拒")

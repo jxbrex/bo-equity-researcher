@@ -234,7 +234,7 @@ def full_fill(**over):
                     "milestones": [{"label": "2021H1", "pe": 46.9}, {"label": "2023Q2", "pe": 13.7}]},
         price_history={"label": "近3年", "series": months},
         cycle_html=('<p>当前处于阶段 03（修复重估）中段：业绩兑现中，PE 仍在历史带下沿。</p>'
-                    '<span class="source">阶段拆解：E2 月线 + 当年 EPS 估算 PE</span>'
+                    '<span class="source">阶段拆解：公开月线行情 + 当年 EPS 估算 PE</span>'
                     '<div class="conclusion-box"><strong>可复用规律：</strong>低分位≠便宜。</div>'),
         cycle_stages=[
             {"name": "景气顶", "period": "2021/01–2021/12", "pe": "30–47x", "price": "9–13",

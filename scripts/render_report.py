@@ -19,6 +19,7 @@ import json
 import os
 import re
 import sys
+from html import unescape as _html_unescape
 
 # Windows GBK 控制台打印 ⚠️/−/🔴 等字符会 UnicodeEncodeError，统一强制 UTF-8 + replace
 for _stream in (sys.stdout, sys.stderr):
@@ -38,7 +39,7 @@ from scoring import (
     compute_valuation, compute_valuation_score, build_dcf_cards, build_regime_note,
     _edge_info, build_edge_upgrade_rows,
 )
-from charts_base import _fmt_px, _prev_track_rows
+from charts_base import _fmt_px, _prev_track_rows, _SOURCE_BANNED_RE
 from charts_scenario import (
     build_scenario_spectrum, build_scenario_block, build_peers_plot,
 )
@@ -59,7 +60,7 @@ from validate import validate_content
 
 # 渲染器版本：嵌入输出 HTML 尾部注释，事后可 grep 验证报告确由本脚本渲染
 # （防"render 报错后手写全文 HTML 绕行"，巨石 2026-08-23 实证）
-RENDERER_VERSION = "v5.7.2"
+RENDERER_VERSION = "v5.7.3"
 
 # Windows 文件名非法字符：\ / : * ? " < > | 及 ASCII 控制字符（\x00-\x1f）
 _WIN_ILLEGAL = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
@@ -340,7 +341,8 @@ def _build_repl_map(fill: dict, cur: str, calc: dict, sc: dict, valuation: float
         # v4.11.3：P0 驱动卡（drivers/driver_verdict 字段，垫在敏感性龙卷风前；空串替换）
         "DRIVER_CARDS_HTML": build_driver_cards(fill),
         # v5.0：3 章「最新报告期透视」占位族（period_track 数据族，脚本生成；口径见上方 pt 段注释）
-        "PERIOD_SUB": (f'{_esc(str(pt.get("period") or "最新报告期"))} · 累计口径 · 数据来源 em_fetch period_track'
+        "PERIOD_SUB": (f'{_esc(str(pt.get("period") or "最新报告期"))} · 累计口径 · '
+                       '数据来源：公司定期报告/经营计划/券商一致预期'
                        if has_period else ""),
         "PERIOD_SUMMARY_HTML": period_summary,
         "PERIOD_KPI_HTML": period_kpi,
@@ -475,6 +477,59 @@ def _check_leftover(html: str) -> None:
     leftover_cn = _cn_placeholders(html)
     if leftover_cn:
         raise ValueError(f"残留中文占位符: {sorted(set(leftover_cn))}")
+
+
+def _iter_source_spans(html: str):
+    r"""产出最终 HTML 中所有 class token 含 source 的 span：（class 属性值, 剥标签+unescape 纯文本）。
+    深度感知配对 </span>——.source 内允许嵌套 <strong>/内联 span，非贪婪正则会在内层
+    </span> 处提前截断，给内部黑话留逃逸口；class 属性大小写不敏感、单/双引号/无引号
+    （HTML5 合法写法）均可，(?<![-\w:]) 防 data-class 这类属性误配；文本先 HTML unescape
+    再交门禁扫黑话（防 em&#95;fetch 实体绕过）；class 含 source 的 span 未闭合 → ValueError
+    （fail-closed，余量不静默扫过）。扫描在剔除 <!--...--> 注释的副本上进行——注释对读者
+    不可见，注释内黑话不误伤（只影响门禁扫描，输出 HTML 不动）。"""
+    scan = re.sub(r"<!--.*?-->", "", html, flags=re.S)
+    for m in re.finditer(r'<span\b[^>]*?(?<![-\w:])class\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s>]+))[^>]*>',
+                         scan, flags=re.I):
+        classes = (m.group(1) or m.group(2) or m.group(3) or "").split()
+        if "source" not in [c.lower() for c in classes]:
+            continue
+        depth = 1
+        for t in re.finditer(r'<span\b[^>]*>|</span\s*>', scan[m.end():], flags=re.I):
+            depth += 1 if not t.group(0).startswith("</") else -1
+            if depth == 0:
+                inner = scan[m.end():m.end() + t.start()]
+                yield " ".join(classes), _html_unescape(re.sub(r"<[^>]+>", "", inner))
+                break
+        else:
+            # fail-closed：class 含 source 的 span 未闭合，余量静默扫过等于放行黑话——直接拒渲染
+            raise ValueError(
+                f"来源注 span 未闭合（找不到配对的 </span>）：「{scan[m.start():m.start() + 80]}」——"
+                "class 含 source 的 <span> 必须闭合后才能完成来源注检查，请修正 HTML 后重新渲染")
+
+
+def _check_source_spans(html: str) -> None:
+    """最终 HTML 来源注硬门禁（v5.7.3）：validate_content 在图表注入前执行，看不到脚本图注
+    与手写片段汇合后的最终形态——防线放在 _fill_template 之后、_write_html 之前，同时罩住
+    脚本注入图注与手写 HTML 片段。
+    ① 所有 class token 含 source 的 span 禁内部实现名（_SOURCE_BANNED_RE：脚本按/字段生成/
+    照抄行/em_fetch/extract_review/E1-E6/fill 字段名等）；② 脚本生成的 .chart-source 另须
+    含非空「数据来源：」（冒号后、分隔/闭括号前至少一个词字符，空壳等于没写）。
+    命中即拒渲染，报错点名命中词、命中片段与修法。"""
+    for classes, text in _iter_source_spans(html):
+        hit = _SOURCE_BANNED_RE.search(text)
+        if hit:
+            raise ValueError(
+                f"来源注释含内部实现名「{hit.group(0)}」：「{text.strip()[:80]}」——"
+                "来源注面向读者，必须写可核验的真实来源（公司定期报告/公开行情/券商一致预期/"
+                "本报告计算等），估算或本报告计算须明示；禁止把 fill 字段名、抓取脚本名、"
+                "E1-E6 编号当数据来源，改正后重新渲染")
+        if "chart-source" in classes.lower().split():
+            m = re.search(r"数据来源：([^；;）)]*)", text)
+            if not (m and re.search(r"\w", m.group(1))):
+                raise ValueError(
+                    f"脚本图注（chart-source）缺非空「数据来源：」：「{text.strip()[:80]}」——"
+                    "脚本生成的来源注一律经 charts_base._chart_source(title, source, note) 生成"
+                    "（形态：标题（数据来源：真实来源）：口径说明，来源不得为空壳），改正后重新渲染")
 
 
 def _make_output_path(fill_path: str, fill: dict, date: str, quality: float,
@@ -613,6 +668,7 @@ def render(fill_path: str, out_path: str = None) -> str:
 
     html = _fill_template(repl)
     _check_leftover(html)
+    _check_source_spans(html)
 
     if not out_path:
         out_path = _make_output_path(fill_path, fill, date, quality, valuation, prev)

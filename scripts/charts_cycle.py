@@ -133,10 +133,11 @@ def build_pe_band(fill: dict) -> str:
         parts.append(f'<text x="{mtx:.1f}" y="{ly}" text-anchor="{ma}" font-size="10.5" '
                      f'fill="{_C_STONE}">{_esc(mtext)}</text>')
     parts.append(_svg_close())
-    parts.append(f'<span class="source">{_esc(mlabel)} 历史带（脚本按 pe_history + valuation_inputs 生成）：'
-                 f'浅带={_esc(plabel)}区间，钢蓝段=合理带，黑刻=当前值，灰虚刻=关键时点 PE；三者同一口径'
-                 + ('；深沙段=P25–P75 分位区（历史上一半时间的 PE 落点，em_fetch E1 分位带回填）' if iq_ok else '')
-                 + ('；右缘「峰值→」=区间上沿超出显示域的截断标注（全量见带上方文字）' if spike else '') + '</span>')
+    parts.append(_chart_source(
+        f'{_esc(mlabel)} 历史带', '公开行情与历史估值数据、公司财务数据',
+        f'浅带={_esc(plabel)}区间，钢蓝段=合理带，黑刻=当前值，灰虚刻=关键时点 PE；三者同一口径'
+        + ('；深沙段=P25–P75 分位区（历史上一半时间的 PE 落点）' if iq_ok else '')
+        + ('；右缘「峰值→」=区间上沿超出显示域的截断标注（全量见带上方文字）' if spike else '')))
     return "".join(parts)
 
 
@@ -500,8 +501,8 @@ def build_price_history(fill: dict) -> str:
                     verdict += "，业绩由弱转强——双杀出现拐点"
                 verdict += "。"
     if has_ohlc:
-        src = ('股价季K/PE 历史走势（脚本按 price_history 字段生成，同源 E2 月线全序列）：'
-               '蜡烛=季度 K 线（季首月开/季内高低/季末月收；红涨绿跌仅股价方向）'
+        title = '股价季K/PE 历史走势'
+        src = ('蜡烛=季度 K 线（季首月开/季内高低/季末月收；红涨绿跌仅股价方向）'
                + ('，暖灰=4 季均线（每季一点，取近 4 季收盘均值——与 PE 同为季度频率，'
                   '「4 季」是平滑窗口非频率）' if ma_pts else '')
                + '，钢蓝=PE(TTM)（右轴，季度）；'
@@ -512,15 +513,15 @@ def build_price_history(fill: dict) -> str:
             src += ('；淡底/竖虚线=周期阶段（交替浅沙、本轮淡蓝；按下方阶段卡手填区间绘制，'
                     '超图序列自动截断）')
     else:
-        src = ('股价/PE 历史走势（脚本按 price_history 字段生成，与上方历史带同源 E2 月线）：'
-               '深灰=月收盘价（左轴）'
+        title = '股价/PE 历史走势'
+        src = ('深灰=月收盘价（左轴）'
                + ('，暖灰=12 月均线' if ma_pts else '')
                + '，钢蓝=PE(TTM)（右轴）'
                + ('；灰底纹段=亏损期（TTM 净利 ≤0，PE 无定义）' if runs else '')
                + (f'；右缘「峰值 {_fmt(hi_raw)}x →」=PE 右轴截断标注' if has_pe and pe_cap else '')
                + '；双轴各自定标，读交叉不读绝对高度；'
                '判读：价涨 PE 平=业绩驱动，价平 PE 跳=估值重定价（财报日 TTM 净利跳变所致）')
-    parts.append(f'<span class="source">{src}</span>')
+    parts.append(_chart_source(title, '公开行情月线与公司财务数据（与上方历史带同源）', src))
     if verdict:
         parts.append(f'<div class="layer-summary"><strong>判词：</strong>{verdict}</div>')
     return "".join(parts)

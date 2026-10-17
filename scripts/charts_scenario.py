@@ -82,9 +82,11 @@ def build_scenario_spectrum(fill: dict, calc: dict) -> str:
     parts.append(f'<text x="{tx:.1f}" y="{T - 18}" text-anchor="{anchor}" font-size="12" '
                  f'font-weight="700" fill="{_C_BLUE}">{price_label}</text>')
     parts.append(_svg_close())
-    parts.append('<span class="source">目标价走廊（脚本按 valuation/scenarios 字段生成）：横条=情景目标价区间，'
-                 '白条刻=区间中枢，竖虚线=现价；条上方=中枢值与较现价涨跌幅'
-                 + ('；灰带=卖方一致目标价区间（E5 研报）' if cons_ok else '') + '</span>')
+    parts.append(_chart_source(
+        "目标价走廊", "本报告三情景假设（利润×PE 计算）与现价行情",
+        '横条=情景目标价区间，'
+        '白条刻=区间中枢，竖虚线=现价；条上方=中枢值与较现价涨跌幅'
+        + ('；灰带=卖方一致目标价区间（券商研报汇总）' if cons_ok else '')))
     return "".join(parts)
 
 
@@ -268,7 +270,9 @@ def build_peers_plot(fill: dict) -> str:
                          f'fill="{_C_STONE}">{_esc(label)}</text>')
     parts.append(_svg_close())
     size_note = '；点大小 ∝ 总市值（sqrt 缩放）' if max_size else ''
-    parts.append('<span class="source">估值-质量散点图（脚本按 peers_plot 字段生成）：横轴 PE(TTM)、纵轴 ROE，'
-                 '虚线为低/中/高分带；左上绿底=优质低估区，右下红底=低质高估区' + size_note + '；'
-                 '目标公司与同业须同口径（A/H 股、IFRS/经调整），混排须在 peers_meta 注明</span>')
+    parts.append(_chart_source(
+        "估值-质量散点图", "同业公开行情与财务数据、券商目标价汇总（同口径筛选）",
+        '横轴 PE(TTM)、纵轴 ROE，'
+        '虚线为低/中/高分带；左上绿底=优质低估区，右下红底=低质高估区' + size_note + '；'
+        '目标公司与同业须同口径（A/H 股、IFRS/经调整），混排须在上方同业口径说明中注明'))
     return "".join(parts)

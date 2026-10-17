@@ -104,10 +104,11 @@ def build_segments_plot(fill: dict) -> str:
                          f'font-weight="700" fill="{_C_BLUE}">{_fmt(it["gross_margin"])}%</text>')
         ry += rh
     parts.append(_svg_close())
-    parts.append('<span class="source">业务构成（脚本按 segments 字段生成，数据来自 em_fetch E6/年报）：'
-                 '横条=收入占比（0-100% 定域），首行=第一大业务，钢蓝圆点=毛利率（同一 % 轴），右列=毛利率数值；'
-                 '条下=收入/毛利额；<strong>利润口径为毛利——分部净利润无公开披露</strong>'
-                 + (f'；<strong>口径备注：</strong>{_esc(note)}' if note else '') + '</span>')
+    parts.append(_chart_source(
+        "业务构成", "公司年报分部披露与公开经营构成数据",
+        '横条=收入占比（0-100% 定域），首行=第一大业务，钢蓝圆点=毛利率（同一 % 轴），右列=毛利率数值；'
+        '条下=收入/毛利额；<strong>利润口径为毛利——分部净利润无公开披露</strong>'
+        + (f'；<strong>口径备注：</strong>{_esc(note)}' if note else '')))
     return "".join(parts)
 
 
@@ -187,9 +188,10 @@ def build_chain_plot(fill: dict) -> str:
         parts.append(f'<text x="{(MX0 + MX1) / 2:.0f}" y="{cy_mid + CARD_H / 2 + 18:.1f}" text-anchor="middle" '
                      f'font-size="11" fill="{_C_LABEL}">{_esc(note)}</text>')
     parts.append(_svg_close())
-    parts.append('<span class="source">产业链位置（脚本按 industry_chain 字段生成，内容来自年报/定性检索）：'
-                 '左=上游行业，右=下游行业，两栏各自在总高内均分（条数不同则间距不同），'
-                 '曲线=供需关系，卡下=本公司定位注；只列行业不列企业，不代表全部玩家</span>')
+    parts.append(_chart_source(
+        "产业链位置", "公司年报与公开行业资料（定性梳理）",
+        '左=上游行业，右=下游行业，两栏各自在总高内均分（条数不同则间距不同），'
+        '曲线=供需关系，卡下=本公司定位注；只列行业不列企业，不代表全部玩家'))
     return "".join(parts)
 
 
@@ -362,10 +364,11 @@ def build_fin_trend(fill: dict) -> str:
     es_tag = es_badge if np_idx is None else ""
     return (f'<span class="section-tag">财务五年趋势（{_esc(years[0])}–{_esc(years[-1])}）{es_tag}</span>'
             + '<div class="mini-grid">' + "".join(cells) + '</div>'
-            '<span class="source">财务五年趋势（脚本按 fin_trend 字段生成，数据照抄 em_fetch E3 年表）：'
-            '组合图双轴——柱=金额（左轴 亿；沙=第一系列/钢蓝=第二系列），'
-            '线=比率（右轴 %/倍，钢蓝实线=第一条、灰虚线=第二条），红虚线=阈值（如现金含量 0.7 盈利质量线）；'
-            '图为概览，异常年份归因见本块正文与红旗四项卡</span>')
+            + _chart_source(
+                "财务五年趋势", "公司历年定期报告（年度财务数据）",
+                '组合图双轴——柱=金额（左轴 亿；沙=第一系列/钢蓝=第二系列），'
+                '线=比率（右轴 %/倍，钢蓝实线=第一条、灰虚线=第二条），红虚线=阈值（如现金含量 0.7 盈利质量线）；'
+                '图为概览，异常年份归因见本块正文与红旗四项卡'))
 
 
 def _inject_l1_charts(l1_html: str, fill: dict) -> str:

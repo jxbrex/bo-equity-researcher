@@ -202,6 +202,38 @@
 
 ## 版本历史
 
+### V5.7.3（2026-10-17）— 图表来源注去内部黑话 + 最终 HTML 硬门禁（卫星化学伪来源实证）
+
+> 缘起：卫星化学 002648 复盘报告再次出现「脚本按 period_track 字段生成，数据照抄
+> em_fetch period_track 照抄行」「脚本按 segments 字段生成，数据来自 em_fetch E6/年报」
+> 「脚本按 growth_plot 字段生成」等伪数据来源注。排查确认不是模型手写失误，而是脚本图注
+> 长期硬编码内部字段/工具名；`validate_content` 在图表注入前执行，最终 HTML 层无来源注
+> 门禁；golden 快照又把病句固化成基线。v5.5.1/v5.6.0 只修过 9 章两图的数据对账，未横扫
+> 同类图注。
+
+- **21 处来源注统一改写**：`charts_base._chart_source(title, source, note)` 统一生成
+  `source chart-source` 图注，来源写公司定期报告/公开行情/券商研报/本报告计算/本文估算等
+  读者可核验出处；覆盖 period/l1/misc/gap/score/cycle/scenario 全部脚本图注与
+  `PERIOD_SUB`，图形数据、布局、颜色、判词不变。gap A 档图例「E5 均值」同步改「券商均值」。
+- **helper 自检**：`_chart_source` 对标题/来源/口径说明做内部黑话禁词检查；来源必须是
+  非空字符串（空壳、None、非字符串一律拒），新增图表在开发期即失败。
+- **最终 HTML 硬门禁**：`render_report._check_source_spans` 在 `_fill_template` 后、
+  `_write_html` 前执行；所有 `.source` 禁「脚本按/字段生成/照抄行/em_fetch/extract_review/
+  E1-E6/fill 字段名」等内部实现名，`.chart-source` 另须含非空「数据来源：」。class 大小写、
+  单双引号、嵌套 span、HTML 实体、禁词大小写变体均不得绕过。
+- **回归测试**：新增最终 HTML 正向全扫、手写黑话拒渲染、helper 三向自检、八种边界负向
+  （空来源壳/class 单引号/大写 CLASS/无引号 class/未闭合 span/嵌套尾巴/HTML 实体/大写禁词）、
+  20 个禁词 + E1/E6 逐词拒渲染，以及 Shareholders 不误伤用例；测试侧禁词表独立硬编码，
+  防实现正则退化假绿。
+- **契约与教训**：SKILL.md / fill-schema.md 明确来源注必须写读者可核验真实来源；
+  tasks/lessons.md 记入「最终 HTML 层验收、同类硬编码一次横扫、字段/工具名不是来源」。
+- **golden**：7 份快照有意重建，逐行核验仅来源注文案、`chart-source` class 与
+  `PERIOD_SUB` 变化；剥离来源注与 section-meta 后与旧版逐字节一致。
+- **验证**：定向测试先红后绿；`python -m pytest scripts -q` → **250 passed**；
+  `python scripts/test_golden.py` → **12 项通过**；golden 74 个 `.source`（50 个
+  chart-source）内部黑话命中 0、空来源命中 0；`git diff --check` 无空白错误；两轮独立
+  代码复核 + ponytail-review 修复轮复核后无 Critical/Important 遗留。
+
 ### V5.7.2（2026-10-17）— 回测跨版高亮漏标分字段告警 + rev class token 计数（卫星化学实证）
 
 > 缘起：卫星化学 002648 复盘报告用户实读发现，除第 13 章外重大跨版变化高亮基本消失。

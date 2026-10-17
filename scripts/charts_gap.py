@@ -114,8 +114,8 @@ def build_gap_plot(fill: dict) -> str:
 
 def _gap_plot_a(dims: list, src_note: str = "") -> str:
     """A 档主形态：逐机构横向分布定位（demo v3 定稿版式：轴 x∈[280,840]、行距 70、右列 x=880）。
-    src_note 非空（fill 的 gap_plot.source_file 基名）= 港股调研落盘源，图下注释注明实际来源
-    文件（v5.5.1；缺省仍写「E5 逐研报明细回填」——A 股存量口径）。"""
+    src_note 非空（fill 的 gap_plot.source_file 基名）= 港股调研落盘源，图下来源注注明
+    调研纪要落盘核对（v5.5.1；v5.7.3 起不再外露本地文件名与内部数据源编号）。"""
     n = len(dims)
     parts = ['<span class="section-tag">卖方分布 vs 本文假设 · 逐机构定位</span>',
              _svg_open(1000, 30 + 70 * n, "市场预期差机构分布图")]
@@ -127,7 +127,7 @@ def _gap_plot_a(dims: list, src_note: str = "") -> str:
     parts.append(f'<circle cx="352" cy="12" r="7" fill="{_C_BLUE}" stroke="{_C_PAPER}" stroke-width="2"/>'
                  f'<text x="365" y="16" font-size="11" fill="{_C_LABEL}">本文假设</text>')
     parts.append(f'<polygon points="470,6 476,12 470,18 464,12" fill="{_C_BLACK}"/>'
-                 f'<text x="483" y="16" font-size="11" fill="{_C_LABEL}">一致预期（E5 均值）</text>')
+                 f'<text x="483" y="16" font-size="11" fill="{_C_LABEL}">一致预期（券商均值）</text>')
     nums = "".join(_GAP_CIRCLED[i] for i in range(n))
     parts.append(f'<text x="600" y="16" font-size="11" fill="{_C_LABEL}">行号 {nums} 对应图下附注 · '
                  f'右列=本文相对一致偏离</text>')
@@ -236,13 +236,15 @@ def _gap_plot_a(dims: list, src_note: str = "") -> str:
         parts.append(f'<text x="880" y="{_px(ay + 4.5)}" font-size="13" font-weight="700" '
                      f'fill="{_C_INK}">{pct:+.1f}%</text>')
     parts.append(_svg_close())
-    parts.append('<span class="source">机构分布定位图（脚本按 gap_plot 字段生成）：一个点=一家机构近 180 天研报预测'
-                 + (f'（来源：{_esc(src_note)} 调研落盘，同机构多份取最新）；' if src_note
-                    else '（E5 逐研报明细回填，同机构多份取最新）；')
-                 + '沙=其他机构、橙=头部/外资（标名称）、蓝=本文、'
-                 '◆=一致预期均值；各维度独立原生单位轴，行内比较有效、跨行比偏离看右列；'
-                 '近点处理=本文点白描边压轴压盖（值接近时灰点露月牙）、灰点间对称泳道错位，'
-                 '◆ 标签与刻度冲突时右移或省略等值刻度</span>')
+    parts.append(_chart_source(
+        "机构分布定位图",
+        ('人工调研纪要（落盘核对）' if src_note else '券商研报明细与一致预期汇总')
+        + '，近 180 天研报、同机构多份取最新',
+        '一个点=一家机构近 180 天研报预测；'
+        '沙=其他机构、橙=头部/外资（标名称）、蓝=本文、'
+        '◆=一致预期均值；各维度独立原生单位轴，行内比较有效、跨行比偏离看右列；'
+        '近点处理=本文点白描边压轴压盖（值接近时灰点露月牙）、灰点间对称泳道错位，'
+        '◆ 标签与刻度冲突时右移或省略等值刻度'))
     return "".join(parts)
 
 
@@ -302,14 +304,14 @@ def _gap_plot_b(dims: list) -> str:
         parts.append(f'<text x="872" y="{_px(cy + 4.5)}" font-size="13" font-weight="700" '
                      f'fill="{_C_INK}">{pct:+.1f}%</text>')
     parts.append(_svg_close())
-    src = ('<span class="source">预期差哑铃图（脚本按 gap_plot 字段生成，B 档）：灰点=卖方一致预期（固定零轴），'
-           '蓝点=本文；横轴=本文相对卖方偏离 %；比率型维度按相对偏离定位，原生差值（+1.5pct）写进行注')
+    note = ('灰点=卖方一致预期（固定零轴），'
+            '蓝点=本文；横轴=本文相对卖方偏离 %；比率型维度按相对偏离定位，原生差值（+1.5pct）写进行注')
     rev_nums = "".join(_GAP_CIRCLED[i] for i, d in enumerate(dims) if d["rev"])
     if rev_nums:
-        src += f'；{rev_nums} 为反推口径——卖方未披露该维度假设，由一致净利/目标价反推'
+        note += f'；{rev_nums} 为反推口径——卖方未披露该维度假设，由一致净利/目标价反推'
     if clamped_any:
-        src += '；虚线棒+空心蓝点=偏离超出 -10%~+15% 定域，按右列数值为准'
-    parts.append(src + '</span>')
+        note += '；虚线棒+空心蓝点=偏离超出 -10%~+15% 定域，按右列数值为准'
+    parts.append(_chart_source("预期差哑铃图（B 档）", "卖方一致预期与本文假设（本报告整理）", note))
     return "".join(parts)
 
 
@@ -491,14 +493,16 @@ def build_gap_history(fill: dict) -> str:
     summary = ('<div class="layer-summary">' + s_parts[0]
                + ("：" + "；".join(s_parts[1:]) if len(s_parts) > 1 else "") + "。</div>")
 
-    parts.append('<span class="source">券商态度变化图（脚本按 gap_history 字段生成）：每行=一家券商'
-                 '近 180 天首末两份研报（按净利变化幅度降序，取前 8 家），沙点=较早一份、最新一份'
-                 '钢蓝=上调 / 中灰=下调 / 沙色环=持平（首末完全相等），箭头指向最新值；'
-                 '① 净利预测仅同预测年度首末对比，跨年预测不直接可比；② 目标价取研报区间中值；'
-                 '右列=两维度首末幅度与评级变化；仅覆盖 180 天内 ≥2 份研报的券商，'
-                 '东财兜底路径与港股无逐份明细、不适用本图；'
-                 '评级变化=同一券商首末对比口径，与 12 章时机信号「近 90 天评级上/下调家数」'
-                 '（E5 评级分布）口径不同，两处数字不要求互洽</span>')
+    parts.append(_chart_source(
+        "券商态度变化图", "券商研报明细（近 180 天首末两份，落盘核对）",
+        '每行=一家券商'
+        '近 180 天首末两份研报（按净利变化幅度降序，取前 8 家），沙点=较早一份、最新一份'
+        '钢蓝=上调 / 中灰=下调 / 沙色环=持平（首末完全相等），箭头指向最新值；'
+        '① 净利预测仅同预测年度首末对比，跨年预测不直接可比；② 目标价取研报区间中值；'
+        '右列=两维度首末幅度与评级变化；仅覆盖 180 天内 ≥2 份研报的券商，'
+        '东财兜底路径与港股无逐份明细、不适用本图；'
+        '评级变化=同一券商首末对比口径，与 12 章时机信号「近 90 天评级上/下调家数」'
+        '（券商评级分布统计）口径不同，两处数字不要求互洽'))
     return "".join(parts) + summary
 
 

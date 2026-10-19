@@ -1071,3 +1071,46 @@ def test_gap_history_chart():
     ]}})
     assert flat.index("升升") < flat.index("平平") < flat.index("降降"),         "顺序应为 升→持平→降"
 
+
+
+def test_gap_history_tp_fallback_dots():
+    """v5.8.0 目标价面板降级（用户拍板形态）：tp 对全缺而 tp_reports 非空时，
+    右面板按同一价值轴单点列示（点落左面板机构共享行、带数值与日期）；
+    行外券商右下文字补列；横条计数口径=截断前全集。"""
+    import charts_gap
+    rows = [{"org": f"券商{c}", "yr": "2026", "d_from": "2026-05-10", "d_to": "2026-08-24",
+             "np_from": 50 + i, "np_to": 60 + i} for i, c in enumerate("ABCDEFGHIJ")]
+    tp_reports = [{"org": "券商A", "date": "2026-08-24", "tp": 50.1},
+                  {"org": "券商B", "date": "2026-08-21", "tp": 48.6},
+                  {"org": "行外券商", "date": "2026-10-10", "tp": 55.0}]
+    html = charts_gap.build_gap_history({"gap_history": {"rows": rows,
+                                                         "tp_reports": tp_reports}})
+    assert "② 目标价（元）· 单份研报列示（无同券商两份可比）" in html
+    assert ">50.1</text>" in html and "08-24" in html, "共享行目标价单点+日期"
+    assert "另有目标价（无净利可比，补列）：行外券商 55（10-10）" in html
+    assert "近 180 天 10 家券商有可比前后研报（图列变化幅度前 8 家）" in html, "横条计数=截断前全集"
+    assert "上调 10 家" in html
+    assert "目标价 3 家给出（无同券商两份可比" in html
+    # 无 tp_reports → 旧空态文案，无补列
+    html2 = charts_gap.build_gap_history({"gap_history": {"rows": rows}})
+    assert "② 目标价：近 180 天无两份可比研报" in html2 and "另有目标价" not in html2
+    print("OK gap_history 目标价降级面板（单点上轴/共享行/行外补列/横条全集口径）")
+
+
+def test_dupont_chain():
+    """v5.8.0：杜邦归因乘积链（charts_l1.build_dupont_html，4.6）——四节点卡+同比幅度+
+    verdict+图注；四因子缺一/字段缺失返空串；无 prev 只显示本期。"""
+    from charts_l1 import build_dupont_html
+    d = {"period": "2026三季", "roe": 16.1, "nm": 30.4, "turn": 0.313, "em": 1.70,
+         "prev": {"roe": 8.3, "nm": 19.2, "turn": 0.258, "em": 1.65},
+         "verdict": "净利率是主驱动（贡献约六成），与 4.4 毛利率归因一致"}
+    html = build_dupont_html({"dupont": d})
+    assert "dup-chain" in html and "净利率" in html and "ROE（加权）" in html
+    assert "30.4%" in html and "+11.2pct" in html, "净利率 pct 点差"
+    assert "+21.3%" in html, "周转率百分比变化"
+    assert "去年同期 19.2%" in html and "归因结论" in html and "东财 F10" in html
+    assert build_dupont_html({}) == ""
+    assert build_dupont_html({"dupont": {"roe": 16.1}}) == "", "四因子缺一返空"
+    only_cur = build_dupont_html({"dupont": {"roe": 16.1, "nm": 30.4, "turn": 0.313, "em": 1.70}})
+    assert "dup-chain" in only_cur and "去年同期" not in only_cur
+    print("OK dupont 杜邦乘积链（生成/缺因子/无 prev）")

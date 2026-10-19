@@ -672,7 +672,8 @@ def test_17_period_track():
 def test_18_period_track_f10_fallback():
     """18. F10 兜底与字段级补齐（无网络 mock _em_f10/ts_call）：
     tushare 全空 → 东财 F10 混合期行兜底产出正确 period/sq/band；
-    F8 期次校验——F10 最新行期次 ≠ tushare 最新期（披露当晚 F10 更快）→ 不借新期数据；
+    v5.8.0 F10 期次领先（披露当晚 F10 更快）→ 整章前移 F10 口径并带 src 标记，
+    新期行营收/归母缺失则放弃前移、且不跨期借字段；期次一致 → 字段级补齐；
     F12——某年 np/rev 皆无有效样本 → band_years 不收录该年。"""
     import em_finance
     f10_rows = [
@@ -698,18 +699,28 @@ def test_18_period_track_f10_fallback():
         assert (t["sq_label"], t["sq_rev"], t["sq_np"]) == ("2026Q2", 110.0, 18.0)
         assert t["band_np"] == [44.4, 50.0] and t["band_years"] == [2023, 2024, 2025]
 
-        # F8：tushare 最新 2026一季，F10 最新行 2026中报（新期更快）→ 期次不一致不借
+        # v5.8.0：tushare 最新 2026一季，F10 最新行 2026中报（披露当晚 F10 更快）→
+        # 整章前移 F10 口径并带 src 标记（旧 F8「期次不一致不借新期字段」的守卫语义
+        # 由前移分支取代：不再把新期字段借进旧期，而是整期换成 F10 新期口径）
         inc = [{"end_date": "20260331", "report_type": "1", "total_revenue": 90e8,
                 "n_income_attr_p": 12e8}]
         em_core.ts_call = lambda api, params=None, fields="": {"income": inc}.get(api, [])
         t2 = em_finance.fetch_period_track("600989", "600989.SH")
-        assert t2["period"] == "2026一季" and t2["np_dedt"] is None and t2["gm"] is None, \
-            f"F10 期次领先 tushare 时不得借新期数据，实际 {t2['np_dedt']}/{t2['gm']}"
+        assert t2["period"] == "2026中报" and t2.get("src") == "em_f10", \
+            f"F10 期次领先应整章前移 F10 口径，实际 {t2['period']}/{t2.get('src')}"
+        assert t2["np_dedt"] == 28.0 and t2["gm"] == 40.0
+        # F10 新期行营收/归母缺失 → 放弃前移退回 tushare 旧期，且仍不跨期借字段
+        em_finance._em_f10 = lambda secucode, size=12, annual_only=False: [
+            {"REPORT_DATE": "2026-06-30", "XSMLL": 40.0}]
+        t2b = em_finance.fetch_period_track("600989", "600989.SH")
+        assert t2b["period"] == "2026一季" and t2b.get("src") is None
+        assert t2b["np_dedt"] is None and t2b["gm"] is None, \
+            f"前移放弃后不得跨期借字段，实际 {t2b['np_dedt']}/{t2b['gm']}"
         # 期次一致 → 正常借（F10 最新行同为 2026一季 → 补齐 np_dedt/gm）
         em_finance._em_f10 = lambda secucode, size=12, annual_only=False: [
             {"REPORT_DATE": "2026-03-31", "KCFJCXSYJLR": 11e8, "XSMLL": 41.0}]
         t3 = em_finance.fetch_period_track("600989", "600989.SH")
-        assert t3["np_dedt"] == 11.0 and t3["gm"] == 41.0
+        assert t3["np_dedt"] == 11.0 and t3["gm"] == 41.0 and t3.get("src") is None
 
         # F12：2024 全年 np/rev 皆缺 → 两条带都不收录 2024，band_years 不再虚挂
         rows2 = [dict(r) for r in f10_rows]
@@ -725,6 +736,36 @@ def test_18_period_track_f10_fallback():
     finally:
         em_core.ts_call, em_finance._em_f10 = _o1, _o2
     print("18. F10 兜底/字段级补齐期次校验/band_years 收录口径 通过")
+
+
+def test_18b_period_track_dup_merge():
+    """18b. 同报告期重复行字段级合并（v5.8.0，中国巨石 20250630 实证）：fina_indicator
+    同 end_date 重复行字段互缺，dict 直推后行整行覆盖会把 profit_dedt 有效值洗成 None
+    → 扣非同比/单季扣非对比双 null；_merge_by_period 非 None 优先合并后应正常产出。"""
+    inc = [
+        {"end_date": "20260630", "report_type": "1", "total_revenue": 200e8, "n_income_attr_p": 30e8},
+        {"end_date": "20260331", "report_type": "1", "total_revenue": 90e8, "n_income_attr_p": 12e8},
+        {"end_date": "20250630", "report_type": "1", "total_revenue": 180e8, "n_income_attr_p": 25e8},
+        {"end_date": "20250331", "report_type": "1", "total_revenue": 80e8, "n_income_attr_p": 10e8},
+    ]
+    ind = [{"end_date": "20260630", "profit_dedt": 28e8},
+           {"end_date": "20260331", "profit_dedt": 12e8},
+           {"end_date": "20250630", "profit_dedt": 23e8},
+           {"end_date": "20250630", "profit_dedt": None},   # 重复空行（后行整行覆盖即事故）
+           {"end_date": "20250331", "profit_dedt": 11e8}]
+    _orig = em_core.ts_call
+    try:
+        em_core.ts_call = lambda api, params=None, fields="": {
+            "income": inc, "cashflow": [], "fina_indicator": ind}.get(api, [])
+        t = em.fetch_period_track("600989")   # secucode=None：夹具自足不触 F10
+        assert t["np_dedt"] == 28.0
+        assert abs(t["np_dedt_yoy"] - (28 / 23 - 1) * 100) < 0.01, f"实际 {t['np_dedt_yoy']}"
+        assert t["sq_dedt"] == 16.0 and t["sq_prev_dedt"] == 12.0, \
+            f"实际 {t['sq_dedt']}/{t['sq_prev_dedt']}"
+        assert abs(t["sq_dedt_yoy"] - (16 / 12 - 1) * 100) < 0.01
+    finally:
+        em_core.ts_call = _orig
+    print("18b. 同报告期重复行字段级合并 通过")
 
 
 def test_19_growth_sigma_parity():
@@ -1013,3 +1054,34 @@ if __name__ == "__main__":
         t()
         print(f"OK {t.__name__}")
     print(f"全部 {len(tests)} 项测试通过")
+
+def test_18c_dupont_factors():
+    """18c. 杜邦四因子（v5.8.0，mock _em_f10）：最新期 vs 去年同期（同 mmdd 年−1）；
+    四值缺一 → {}；去年同期缺 → 仅本期无 prev 键。"""
+    import em_finance
+    f10 = [
+        {"REPORT_DATE": "2026-09-30", "ROEJQ": 16.11, "XSJLL": 30.36, "TOAZZL": 0.3127,
+         "QYCS": 1.7029},
+        {"REPORT_DATE": "2026-06-30", "ROEJQ": 9.06, "XSJLL": 27.14, "TOAZZL": 0.1988,
+         "QYCS": 1.6632},
+        {"REPORT_DATE": "2025-09-30", "ROEJQ": 8.32, "XSJLL": 19.22, "TOAZZL": 0.2577,
+         "QYCS": 1.6501},
+    ]
+    _o = em_finance._em_f10
+    try:
+        em_finance._em_f10 = lambda secucode, size=12, annual_only=False: f10
+        d = em_finance.fetch_dupont_factors("600176.SH")
+        assert d["period"] == "2026三季" and d["roe"] == 16.1 and d["nm"] == 30.4
+        assert d["turn"] == 0.313 and d["em"] == 1.7, f"实际 {d}"
+        assert d["prev"]["roe"] == 8.3 and d["prev"]["turn"] == 0.258
+        # 去年同期缺 → 仅本期、无 prev 键
+        em_finance._em_f10 = lambda secucode, size=12, annual_only=False: f10[:1]
+        d2 = em_finance.fetch_dupont_factors("600176.SH")
+        assert "prev" not in d2 and d2["roe"] == 16.1
+        # 四值缺一 → {}
+        em_finance._em_f10 = lambda secucode, size=12, annual_only=False: [
+            {"REPORT_DATE": "2026-09-30", "ROEJQ": 16.11, "XSJLL": None}]
+        assert em_finance.fetch_dupont_factors("600176.SH") == {}
+    finally:
+        em_finance._em_f10 = _o
+    print("18c. 杜邦四因子（本期+去年同期/缺期降级）通过")

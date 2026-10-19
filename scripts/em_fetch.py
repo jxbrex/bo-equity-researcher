@@ -77,6 +77,7 @@ from em_finance import (  # noqa: E402,F401
     _ts_hk_annual_rows, _growth_sigma,
     fetch_annual_rows, fetch_latest_quarter, fetch_period_track, fetch_hk_period_track,
     fetch_forensic, fetch_audit, fetch_risk_free, fetch_div_yield, fetch_debt, red_flags,
+    fetch_dupont_factors,
 )
 from em_owner import (  # noqa: E402,F401
     fetch_holders, fetch_holders_quarterly, fetch_consensus, fetch_mainop,
@@ -288,7 +289,9 @@ def _sec_e3(pure: str, secucode: str) -> tuple:
     if track:
         _CAPTURE["period_track"] = track
 
-        out.append(f"报告期进度（period_track 照抄行——第 3 章数据源，禁手估）: "
+        src_tag = ("；本期数据源=东财F10（tushare 尚未收录本期，披露日窗口整章前移，"
+                   "tushare 更新后重跑即回归主源）" if track.get("src") == "em_f10" else "")
+        out.append(f"报告期进度（period_track 照抄行——第 3 章数据源，禁手估{src_tag}）: "
                    f"{track['period']}累计 营收{_amt(track['rev'])}亿(同比{yoy_text(track['rev_yoy'])}) ｜ "
                    f"归母净利{_amt(track['np'])}亿(同比{yoy_text(track['np_yoy'])}) ｜ "
                    f"扣非{_amt(track['np_dedt'])}亿(同比{yoy_text(track['np_dedt_yoy'])}) ｜ "
@@ -318,6 +321,17 @@ def _sec_e3(pure: str, secucode: str) -> tuple:
     else:
         out.append("报告期进度: [未获取到（tushare 与东财 F10 均空），请降级：妙想 MCP "
                    "mx_ashare_finance_data 直查最新报告期四值并标注路径；第 3 章不得编造]\n")
+    # 杜邦因子照抄行（v5.8.0，4.6 dupont 乘积链图数据源）：F10 ROEJQ/XSJLL/TOAZZL/QYCS
+    # 最新期 vs 去年同期，禁手算；随 --out 落盘 dupont 键供渲染器交叉校验（quote 防伪同款）
+    dup = fetch_dupont_factors(secucode)
+    if dup:
+        _CAPTURE["dupont"] = dup
+        p = dup.get("prev")
+        prev_txt = (f" ｜ 去年同期 ROE{p['roe']}% / 净利率{p['nm']}% / "
+                    f"周转{p['turn']}次 / 权益乘数{p['em']}" if p else "（去年同期缺，仅本期）")
+        out.append(f"杜邦因子（dupont 照抄行——4.6 图数据源，禁手算；报告期累计口径，非年化）: "
+                   f"{dup['period']} ROE{dup['roe']}% ｜ 净利率{dup['nm']}% × "
+                   f"总资产周转{dup['turn']}次 × 权益乘数{dup['em']}{prev_txt}\n")
     capex_bits = [f"{r['REPORT_DATE_NAME']} {yi(r.get('CAPEX'))}亿" for r in annual[:3]
                   if r.get("CAPEX") is not None]
     if capex_bits:
@@ -570,7 +584,11 @@ def _sec_e5(pure: str, is_hk: bool) -> list:
                 cnt_note = f"前 12 家/共 {len(hist)} 家" if len(hist) > 12 else f"{len(hist)} 家"
                 lines.append(f"券商态度变化（gap_history 照抄行，{cnt_note}，"
                              f"同一券商近180天首末两份）: " + "；".join(segs))
-                _CAPTURE["gap_history"] = {"rows": hist[:12]}
+                gh_cap = {"rows": hist[:12]}
+                if c.get("tp_reports"):
+                    # v5.8.0：目标价研报清单一并落盘（无同券商可比两份时的面板降级数据源）
+                    gh_cap["tp_reports"] = c["tp_reports"][:12]
+                _CAPTURE["gap_history"] = gh_cap
             out.append("\n".join(lines) + "\n")
         elif c:
             # v5.1.0：东财降级源无净利字段但有当年 EPS 均值——捕获存根，main 落盘前按

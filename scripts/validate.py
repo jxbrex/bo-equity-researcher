@@ -469,6 +469,80 @@ def _check_gap_history(fill: dict, warns: list) -> None:
                              f"（落盘 {rv if rv is None else round(rv, 4)}）——照抄禁手改"
                              f"（容差：相对 1%，下限 0.005）")
 
+    # v5.8.0：tp_reports（目标价面板降级「研报一览」数据源）——结构检查 + 落盘同源对账
+    tp = gh.get("tp_reports")
+    if tp is not None:
+        if not isinstance(tp, list):
+            raise ValueError(f"gap_history.tp_reports 字段需为数组，实际: {type(tp).__name__}")
+        ref_tp = ((ref or {}).get("gap_history") or {}).get("tp_reports") or []
+        if tp and not ref_tp:
+            warns.append("gap_history.tp_reports 已填但落盘 JSON 无该键：手填嫌疑——"
+                         "请重跑 em_fetch --out 落盘后照抄")
+        ref_set = {(str(x.get("org") or "").strip(), str(x.get("date") or "").strip()):
+                   _num(x.get("tp")) for x in ref_tp if isinstance(x, dict)}
+        for i, x in enumerate(tp):
+            if not isinstance(x, dict):
+                raise ValueError(f"gap_history.tp_reports[{i}] 不是对象：每行需 {{org, date, tp}}")
+            org = str(x.get("org") or "").strip()
+            fv = _num(x.get("tp"))
+            if not org or fv is None:
+                warns.append(f"gap_history.tp_reports[{i}]（{org or '未具名'}）org/tp 不可解析："
+                             f"该行图内剔除")
+                continue
+            rv = ref_set.get((org, str(x.get("date") or "").strip()))
+            if ref_tp and (rv is None or abs(fv - rv) > max(abs(rv) * 0.01, 0.005)):
+                warns.append(f"gap_history.tp_reports「{org} {x.get('date')}」tp={fv:g} "
+                             f"与落盘值不一致——照抄禁手改（容差：相对 1%，下限 0.005）")
+
+
+def _check_dupont(fill: dict, warns: list) -> None:
+    """v5.8.0 dupont（4.6 杜邦乘积链）校验：① 结构——roe/nm/turn/em 四因子缺一图不生成
+    （此处提示等于白填）；verdict 为唯一手填槽位，缺失或过短告警。② 照抄对账——fill 四因子
+    （含 prev 去年同期）与 quote.source_file 落盘 dupont 同值（容差：相对 1%，下限 0.005，
+    同 street 款）；fill 已填而落盘无 dupont 键 → 手填嫌疑告警（提示重跑 em_fetch --out）。"""
+    d = fill.get("dupont")
+    if d is None:
+        return
+    if not isinstance(d, dict):
+        raise ValueError(f"dupont 字段需为对象，实际: {type(d).__name__}")
+    for k in ("roe", "nm", "turn", "em"):
+        if _num(d.get(k)) is None:
+            warns.append(f"dupont.{k} 不可解析：四因子缺一乘积链不生成——照抄 em_fetch「杜邦因子」行")
+    pv = d.get("prev")
+    if pv is not None and not isinstance(pv, dict):
+        raise ValueError(f"dupont.prev 字段需为对象，实际: {type(pv).__name__}")
+    verdict = re.sub(r"<[^>]+>", "", str(d.get("verdict") or "")).strip()
+    if len(verdict) < 20:
+        warns.append("dupont.verdict 缺失或 <20 字：乘积链只给数字，归因结论句"
+                     "（哪个因子是主驱动、与 4.4 毛利率归因是否一致）必须写")
+    ref = _quote_ref(fill)
+    if ref is None:
+        warns.append("dupont 已填但 quote.source_file 缺失或读不到：杜邦因子无落盘源可核对——"
+                     "应照抄 em_fetch「杜邦因子」行（--out 落盘 dupont）")
+        return
+    ref_d = ref.get("dupont")
+    if not isinstance(ref_d, dict):
+        warns.append("dupont 已填但落盘 JSON 无 dupont 键：手填嫌疑——请重跑 em_fetch --out 后照抄")
+        return
+    for k in ("roe", "nm", "turn", "em"):
+        fv, rv = _num(d.get(k)), _num(ref_d.get(k))
+        if fv is None:
+            continue
+        if rv is None or abs(fv - rv) > max(abs(rv) * 0.01, 0.005):
+            warns.append(f"dupont.{k}={fv:g} 与落盘值不一致"
+                         f"（落盘 {rv if rv is None else round(rv, 4)}）——照抄禁手改"
+                         f"（容差：相对 1%，下限 0.005）")
+    ref_prev = ref_d.get("prev")
+    if isinstance(ref_prev, dict):
+        for k in ("roe", "nm", "turn", "em"):
+            rv = _num(ref_prev.get(k))
+            fv = _num((pv or {}).get(k))
+            if rv is not None and fv is None:
+                warns.append(f"dupont.prev.{k} 漏抄（落盘 {rv:g}）：去年同期四因子请完整回填")
+            elif fv is not None and rv is not None and abs(fv - rv) > max(abs(rv) * 0.01, 0.005):
+                warns.append(f"dupont.prev.{k}={fv:g} 与落盘值不一致（落盘 {round(rv, 4)}）"
+                             f"——照抄禁手改")
+
 
 def _check_chart_fields(fill: dict) -> None:
     """v4.9 必填图字段硬校验：fin_trend（4.4 小图墙，替手写年表）/ growth_plot（5.1 增长图）。
@@ -1968,6 +2042,7 @@ def _validate_content_impl(fill: dict, calc: dict, warns: list) -> None:
     _check_gap_plot(fill, calc, warns)  # v4.11.1：gap_plot 分布图字段校验（可选字段，缺失不查）
     _check_gap_plot_street_source(fill, warns)  # v5.5.1 F2：street 落盘第二照抄源（软告警）
     _check_gap_history(fill, warns)     # v5.6.0：gap_history 态度变化照抄对账（软告警）
+    _check_dupont(fill, warns)          # v5.8.0：dupont 杜邦乘积链照抄对账（软告警）
 
     _check_red_flag_breaker(fill)
     _check_red_flag_conclusion(fill)  # v5.1.2：红旗 ≥2 项 → 首卡首句存疑句硬门禁
@@ -2087,6 +2162,15 @@ def _check_handwritten_dupes(fill: dict, warns: list) -> None:
             and re.search(r"首末|态度变化|上调.{0,4}下调", gh):
         warns.append("gap_html 含手写券商态度变化表：v5.6.0 起由 gap_history 图承载"
                      "（图+判词横条自动生成），请删除手写表")
+    # v5.8.0：散文罗列同禁——≥2 组「数值→数值亿」首末数字 + 上调/下调表述即与图重复
+    # （中国巨石复盘实证：佐证段与图完全同源，且手写「12家」与横条「8家」口径打架）；
+    # 佐证只写方向性结论与本文相对位置，数值留给图与判词横条
+    if (fill.get("gap_history") or {}).get("rows"):
+        n_arrows = len(re.findall(r"\d+(?:\.\d+)?\s*→\s*\d+(?:\.\d+)?\s*亿", gh))
+        if n_arrows >= 2 and re.search(r"上调|下调", gh):
+            warns.append("gap_html 散文罗列券商首末数字（≥2 组「→」幅度+上/下调表述）："
+                         "与券商态度变化图内容重复——只写方向性结论与本文相对位置，"
+                         "首末数值由图与判词横条承载")
 
 
 def _check_slot_widths(fill: dict, warns: list) -> None:

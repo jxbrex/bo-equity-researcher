@@ -371,16 +371,78 @@ def build_fin_trend(fill: dict) -> str:
                 '图为概览，异常年份归因见本块正文与红旗四项卡'))
 
 
+def build_dupont_html(fill: dict) -> str:
+    """4.6 杜邦归因乘积链（fill["dupont"] 可选字段，锚点 <!--DUPONT--> 挂 4.6 维度块；
+    缺失/四因子缺一 → 空串不告警）。净利率 × 总资产周转率 × 权益乘数 = ROE（加权）
+    四节点横排卡，各带去年同期值与变化幅度（净利率/ROE 计 pct 点，周转/权益乘数计 %）。
+    dupont: {"period":"2026三季","roe":16.1,"nm":30.4,"turn":0.313,"em":1.70,
+             "prev":{"roe":8.3,"nm":19.2,"turn":0.258,"em":1.65},"verdict":"归因结论句（手写）"}
+    ——四因子照抄 em_fetch「杜邦因子」照抄行/落盘 dupont 键（F10 ROEJQ/XSJLL/TOAZZL/QYCS，
+    报告期累计口径，禁手算）；verdict 是唯一的模型手填槽位。"""
+    d = fill.get("dupont") or {}
+    if not isinstance(d, dict):
+        return ""
+    cur = {k: _num(d.get(k)) for k in ("roe", "nm", "turn", "em")}
+    if any(v is None for v in cur.values()):
+        return ""
+    prev_raw = d.get("prev") if isinstance(d.get("prev"), dict) else {}
+    prev = {k: _num(prev_raw.get(k)) for k in cur}
+    period = str(d.get("period") or "").strip()
+    verdict = str(d.get("verdict") or "").strip()
+
+    def _fmt(key, v):
+        if key == "turn":
+            return f"{v:g} 次"
+        if key == "em":
+            return f"{v:.2f}"
+        return f"{v:.1f}%"
+
+    def _node(name, key, final=False):
+        v, p = cur[key], prev.get(key)
+        delta = prev_txt = ""
+        if p is not None:
+            if key in ("roe", "nm"):
+                dv, txt = v - p, f"{v - p:+.1f}pct"
+            elif p:
+                dv, txt = (v / p - 1) * 100, f"{(v / p - 1) * 100:+.1f}%"
+            else:
+                dv, txt = None, ""          # 基数为 0 的比率无意义，只列去年同期值
+            if dv is not None:
+                cls = "dup-delta" if dv >= 0 else "dup-delta down"
+                arrow = "▲" if dv >= 0 else "▼"
+                delta = f'<div class="{cls}">{arrow} {txt}</div>'
+            prev_txt = f'<div class="dup-prev">去年同期 {_fmt(key, p)}</div>'
+        cls = "dup-node final" if final else "dup-node"
+        return (f'<div class="{cls}"><div class="dup-name">{name}</div>'
+                f'<div class="dup-val">{_fmt(key, v)}</div>{delta}{prev_txt}</div>')
+
+    nodes = (_node("净利率", "nm") + '<div class="dup-op">×</div>'
+             + _node("总资产周转率", "turn") + '<div class="dup-op">×</div>'
+             + _node("权益乘数", "em") + '<div class="dup-op">=</div>'
+             + _node("ROE（加权）", "roe", final=True))
+    parts = [f'<div class="dup-chain">{nodes}</div>']
+    if verdict:
+        parts.append(f'<div class="dup-verdict"><b>归因结论：</b>{verdict}</div>')
+    cap = f"{_esc(period)}累计" if period else "最新报告期累计"
+    has_prev = any(v is not None for v in prev.values())
+    cmp_txt = " vs 去年同期累计" if has_prev else ""
+    parts.append(_chart_source(
+        "杜邦归因乘积链", f"东财 F10 主要财务指标（{cap}{cmp_txt}）",
+        "净利率×总资产周转率×权益乘数=ROE；报告期累计口径（非年化）；"
+        "加权 ROE 与三因子乘积存在口径差（加权平均 vs 期末权益），结论以方向为准"))
+    return "".join(parts)
+
+
 def _inject_l1_charts(l1_html: str, fill: dict) -> str:
-    """4.1/4.2/4.4 图锚点注入（v4.8 起，v4.9 加 FIN_TREND；v4.10.2 收编进 charts_base
-    _inject_chart_anchors，与第 5 章 _inject_l3_charts 同一注入机）：l1_html 里的
-    <!--SEGMENTS--> / <!--CHAIN--> / <!--FIN_TREND--> 注释替换为对应脚本图；锚点缺失但字段已填 →
-    图追加第 4 章末尾 + 告警；字段未填 → 锚点静默清除。（与第 11 章 {{PE_BAND_HTML}} 裸占位符
-    同款思路：避开模板条件块不支持嵌套的限制，又让模型保留图在维度块内的位置控制权。）"""
+    """4.1/4.2/4.4/4.6 图锚点注入（v4.8 起，v4.9 加 FIN_TREND，v5.8.0 加 DUPONT；v4.10.2 收编进
+    charts_base _inject_chart_anchors，与第 5 章 _inject_l3_charts 同一注入机）：l1_html 里的
+    <!--SEGMENTS--> / <!--CHAIN--> / <!--FIN_TREND--> / <!--DUPONT--> 注释替换为对应脚本图；
+    锚点缺失但字段已填 → 图追加第 4 章末尾 + 告警；字段未填 → 锚点静默清除。"""
     return _inject_chart_anchors(
         l1_html,
         (("<!--SEGMENTS-->", build_segments_plot(fill), "segments"),
          ("<!--CHAIN-->", build_chain_plot(fill), "industry_chain"),
-         ("<!--FIN_TREND-->", build_fin_trend(fill), "fin_trend")),
+         ("<!--FIN_TREND-->", build_fin_trend(fill), "fin_trend"),
+         ("<!--DUPONT-->", build_dupont_html(fill), "dupont")),
         "l1_html", "第 4 章末尾",
-        "建议把锚点放到对应维度块内，4.1=业务构成 / 4.2=产业链位置 / 4.4=财务趋势图墙")
+        "建议把锚点放到对应维度块内，4.1=业务构成 / 4.2=产业链位置 / 4.4=财务趋势图墙 / 4.6=杜邦归因")

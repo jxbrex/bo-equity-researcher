@@ -87,6 +87,26 @@ def _pick_latest_per_period(rows: list) -> list:
     return [seen[k] for k in sorted(seen, reverse=True)]
 
 
+def _merge_by_period(rows: list) -> dict:
+    """end_date → 行映射（同报告期重复行逐字段合并：先收行的非 None 值优先，None 字段
+    用后行非 None 值补齐）。tushare 对同一报告期会返回重复行且字段互缺（中国巨石
+    20250630 实证：fina_indicator 两行，后行 profit_dedt=None）——dict 直推后者整行
+    覆盖会把有效值洗空，致扣非同比/单季扣非对比双 null。"""
+    m = {}
+    for r in rows:
+        ed = r.get("end_date")
+        if not ed:
+            continue
+        base = m.get(ed)
+        if base is None:
+            m[ed] = dict(r)
+        else:
+            for k, v in r.items():
+                if base.get(k) is None and v is not None:
+                    base[k] = v
+    return m
+
+
 def _ts_stmt(code: str, api: str, annual: bool = False, rt1: bool = False) -> list:
     """三表/指标 tushare 拉取的统一窗口+谓词+空返（v5.1.5 收编四处同构样板：年表/最新季度/
     period_track/forensic）——_fin_rng() 统一窗口（年表/forensic/最新季度/period_track 共享
@@ -442,41 +462,93 @@ def _period_track_calc(rows: list) -> dict:
             "band_np": _band(band_np), "band_rev": _band(band_rev), "band_years": years}
 
 
+def _f10_period_rows(f10: list) -> list:
+    """东财 F10 行 → _period_track_calc 入参（REPORT_DATE 归一为 ED=YYYYMMDD，期次非法行剔除）。"""
+    rows = []
+    for r in f10:
+        ed = str(r.get("REPORT_DATE") or "")[:10].replace("-", "")
+        if len(ed) == 8:
+            rows.append({**r, "ED": ed})
+    return rows
+
+
 def fetch_period_track(code: str, secucode: str = None) -> dict:
     """最新报告期透视（A股，v5.0 第 3 章数据源）：累计四值+同比、单季拆分、近三年同期占比带。
     tushare 统一窗口本地过滤全报告期（income/cashflow/fina_indicator 与年表共享缓存），
     扣非/毛利率缺期次用东财 F10 最新行字段级补齐；tushare 空/失败 → 东财 F10 混合期行兜底。
+    v5.8.0：F10 最新期次领先 tushare（财报披露当晚 tushare 滞后，中国巨石三季报实证）时
+    整章前移 F10 口径重建，返回 dict 带 src="em_f10" 标记（供摘要行标注数据源，渲染校验
+    只迭代固定键清单、忽略该键）。
     返回 {} 表示两链皆空。"""
     try:
         inc = _pick_latest_per_period(_ts_stmt(code, "income", rt1=True))
         if not inc:
             raise RuntimeError("tushare income 无数据")
-        ind_map = {r["end_date"]: r for r in _ts_stmt(code, "fina_indicator")}
-        cf_map = {r["end_date"]: r for r in _ts_stmt(code, "cashflow")}
+        ind_map = _merge_by_period(_ts_stmt(code, "fina_indicator"))
+        cf_map = _merge_by_period(_ts_stmt(code, "cashflow"))
         rows = [_period_row_norm(r, ind_map.get(r["end_date"]) or {},
                                  cf_map.get(r["end_date"]) or {}, r["end_date"]) for r in inc]
         t = _period_track_calc(rows)
-        if t and secucode and (t["np_dedt"] is None or t["gm"] is None):
-            # 字段级补齐（同 _ts_latest_quarter 纪律）：tushare 季报期扣非/毛利率覆盖不全时
-            em = (_em_f10(secucode, size=1) or [{}])[0]
-            # F8：期次校验——F10 最新行可能快于 tushare（中报披露当晚），期次不一致不借新期数据
-            em_ed = str(em.get("REPORT_DATE") or "")[:10].replace("-", "")
-            if em_ed == t["end_date"]:
-                if t["np_dedt"] is None and isinstance(em.get("KCFJCXSYJLR"), (int, float)):
-                    t["np_dedt"] = round(em["KCFJCXSYJLR"] / 1e8, 2)
-                if t["gm"] is None and isinstance(em.get("XSMLL"), (int, float)):
-                    t["gm"] = round(em["XSMLL"], 1)
+        if t and secucode:
+            f10 = _em_f10(secucode, size=_EM_F10_PAGE) or []
+            em_ed = str(f10[0].get("REPORT_DATE") or "")[:10].replace("-", "") if f10 else ""
+            if len(em_ed) == 8 and em_ed > t["end_date"]:
+                # F10 期次领先 → 整期前移（F8 字段级守卫管「跨期借字段」，不管整期前移；
+                # 新期行营收/归母缺一即放弃前移，退回 tushare 旧期口径）
+                t2 = _period_track_calc(_f10_period_rows(f10))
+                if t2 and t2["rev"] is not None and t2["np"] is not None:
+                    t2["src"] = "em_f10"
+                    return t2
+            if t["np_dedt"] is None or t["gm"] is None:
+                # 字段级补齐（同 _ts_latest_quarter 纪律）：tushare 季报期扣非/毛利率覆盖不全时
+                # F8：期次校验——期次不一致不借新期数据（F10 更快的情形已被前移分支拦截）
+                if f10 and em_ed == t["end_date"]:
+                    em = f10[0]
+                    if t["np_dedt"] is None and isinstance(em.get("KCFJCXSYJLR"), (int, float)):
+                        t["np_dedt"] = round(em["KCFJCXSYJLR"] / 1e8, 2)
+                    if t["gm"] is None and isinstance(em.get("XSMLL"), (int, float)):
+                        t["gm"] = round(em["XSMLL"], 1)
         if t:
             return t
     except Exception:
         pass
     try:  # 东财 F10 兜底：混合报告期 20 行（与年表/最新季度共享 _EM_F10_CACHE）
-        rows = []
-        for r in _em_f10(secucode, size=_EM_F10_PAGE):
+        return _period_track_calc(_f10_period_rows(_em_f10(secucode, size=_EM_F10_PAGE)))
+    except Exception:
+        return {}
+
+
+def fetch_dupont_factors(secucode: str) -> dict:
+    """杜邦四因子（v5.8.0，4.6 乘积链图数据源）：东财 F10 主要财务指标 ROEJQ（加权 ROE%）/
+    XSJLL（净利率%）/TOAZZL（总资产周转率，次）/QYCS（权益乘数），最新期 vs 去年同期
+    （同 mmdd、年 −1）。报告期累计口径（非年化）；本期四值缺一返回 {}，去年同期缺则仅本期
+    （无 prev 键）。period 标签复用 _QTR_NAME（如「2026三季」）。"""
+    try:
+        by_ed = {}
+        for r in _em_f10(secucode, size=_EM_F10_PAGE) or []:
             ed = str(r.get("REPORT_DATE") or "")[:10].replace("-", "")
             if len(ed) == 8:
-                rows.append({**r, "ED": ed})
-        return _period_track_calc(rows)
+                by_ed.setdefault(ed, r)
+        if not by_ed:
+            return {}
+
+        def _pack(r):
+            vals = [r.get("ROEJQ"), r.get("XSJLL"), r.get("TOAZZL"), r.get("QYCS")]
+            if any(not isinstance(v, (int, float)) for v in vals):
+                return None
+            return {"roe": round(vals[0], 1), "nm": round(vals[1], 1),
+                    "turn": round(vals[2], 3), "em": round(vals[3], 2)}
+
+        ed = max(by_ed)
+        cur = _pack(by_ed[ed])
+        if not cur:
+            return {}
+        out = {"period": f"{ed[:4]}{_QTR_NAME.get(ed[4:], ed[4:])}", **cur}
+        prev = by_ed.get(f"{int(ed[:4]) - 1}{ed[4:]}")
+        p = _pack(prev) if prev else None
+        if p:
+            out["prev"] = p
+        return out
     except Exception:
         return {}
 

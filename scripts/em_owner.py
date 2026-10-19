@@ -155,6 +155,8 @@ def fetch_consensus(code: str) -> dict:
         latest_by_org = {}   # v4.11.1（gap_plot 落地）：(yr, org) → 最新研报行，供 E5 逐机构明细
         aim_by_org = {}      # org → 最新含目标价研报行
         hist_rows = {}       # v5.6.0（gap_history 落地）：org → [(rd, yr, np亿, tp中值, rating)] 全量保留
+        tp_reports = []      # v5.8.0：180 天内全部含目标价研报（org/date/tp 中值，日期倒序）——
+                             # 态度变化图目标价面板「无同券商可比两份」时的研报一览降级数据源
         for r in recent:
             q = str(r.get("quarter") or "")
             yr = q[:4] if len(q) >= 4 else ""
@@ -178,6 +180,10 @@ def fetch_consensus(code: str) -> dict:
                         latest_by_org[k] = r
             if r.get("min_price") and r.get("max_price"):
                 prices.append((float(r["min_price"]), float(r["max_price"])))
+                if org:
+                    tp_reports.append({"org": org,
+                                       "date": (f"{rd[:4]}-{rd[4:6]}-{rd[6:8]}" if len(rd) == 8 else rd),
+                                       "tp": round((float(r["min_price"]) + float(r["max_price"])) / 2, 2)})
                 if org and (org not in aim_by_org or rd > aim_by_org[org]["report_date"]):
                     aim_by_org[org] = r
             rt = (r.get("rating") or "").strip()
@@ -198,6 +204,7 @@ def fetch_consensus(code: str) -> dict:
         return {"_src": "tushare", "orgs": len(orgs), "n_reports": len(recent),
                 "years": years, "detail": detail, "aim_detail": aim_detail,
                 "history": _org_history(hist_rows),
+                "tp_reports": sorted(tp_reports, key=lambda x: x["date"], reverse=True),
                 "aim": (min(p[0] for p in prices), max(p[1] for p in prices)) if prices else None,
                 "ratings": ratings}
     except Exception:

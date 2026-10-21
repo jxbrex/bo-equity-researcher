@@ -588,6 +588,24 @@ def _sec_e5(pure: str, is_hk: bool) -> list:
                 if c.get("tp_reports"):
                     # v5.8.0：目标价研报清单一并落盘（无同券商可比两份时的面板降级数据源）
                     gh_cap["tp_reports"] = c["tp_reports"][:12]
+                    # v5.8.1：清单此前只落盘不进摘要行，填报方不可见 → 漏抄断链
+                    # （宁德 300750 复盘 2026-10-21 实证）；摘要行按 机构+目标价 去重列示，
+                    # fill 须照抄落盘同名子键、禁手填
+                    seen, uniq = set(), []
+                    for t in gh_cap["tp_reports"]:
+                        if not isinstance(t, dict) or t.get("tp") is None:
+                            continue
+                        k = (str(t.get("org") or "").strip(), t.get("tp"))
+                        if k not in seen:
+                            seen.add(k)
+                            uniq.append(t)
+                    tseg = "·".join(f"{t.get('org')}{t['tp']:g}"
+                                    f"({str(t.get('date') or '')[5:]})" for t in uniq[:8])
+                    if uniq:
+                        n_orgs = len({str(t.get("org") or "").strip() for t in uniq})
+                        lines.append(f"目标价研报清单（gap_history.tp_reports 照抄键，"
+                                     f"{n_orgs} 家/{len(gh_cap['tp_reports'])} 份，"
+                                     f"降级面板数据源）: {tseg}")
                 _CAPTURE["gap_history"] = gh_cap
             out.append("\n".join(lines) + "\n")
         elif c:

@@ -1094,7 +1094,21 @@ def test_gap_history_tp_fallback_dots():
     # 无 tp_reports → 旧空态文案，无补列
     html2 = charts_gap.build_gap_history({"gap_history": {"rows": rows}})
     assert "② 目标价：近 180 天无两份可比研报" in html2 and "另有目标价" not in html2
-    print("OK gap_history 目标价降级面板（单点上轴/共享行/行外补列/横条全集口径）")
+    # v5.8.1 审核实证①：同券商多份取日期最新（此前存量存 MM-DD 与完整日期混比，恒取最旧）
+    tp_multi = [{"org": "券商A", "date": "2026-08-24", "tp": 52.7},
+                {"org": "券商A", "date": "2026-06-11", "tp": 51.3},
+                {"org": "券商A", "date": "2026-05-10", "tp": 49.9}]
+    html3 = charts_gap.build_gap_history({"gap_history": {"rows": rows,
+                                                          "tp_reports": tp_multi}})
+    assert ">52.7</text>" in html3 and ">49.9</text>" not in html3 \
+        and ">51.3</text>" not in html3, "同券商多份应取日期最新"
+    # v5.8.1 审核实证②：机构名归一化——rows「中金」匹配 tp_reports「中金公司」，点落共享行
+    rows_zj = [{"org": "中金", "yr": "2026", "d_from": "2026-05-10", "d_to": "2026-08-24",
+                "np_from": 50, "np_to": 60}]
+    html4 = charts_gap.build_gap_history({"gap_history": {"rows": rows_zj, "tp_reports": [
+        {"org": "中金公司", "date": "2026-09-13", "tp": 500.0}]}})
+    assert ">500</text>" in html4 and "另有目标价" not in html4, "归一化后应落共享行而非补列"
+    print("OK gap_history 目标价降级面板（单点上轴/共享行/行外补列/横条全集口径/取最新/名归一）")
 
 
 def test_dupont_chain():

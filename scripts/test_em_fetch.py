@@ -1048,6 +1048,50 @@ def test_26_consensus_history():
     print("26. E5 券商态度变化 通过")
 
 
+def test_27_tp_reports_hint():
+    """27. E5 目标价研报清单提示行（v5.8.1，宁德 300750 复盘漏抄断链实证）：
+    tp_reports 非空时摘要须出「目标价研报清单」照抄键提示（按 机构+目标价 去重、家/份计数、
+    日期 MM-DD）；条目全缺 tp 或键缺失时不出行；落盘 _CAPTURE 原样带 tp_reports。"""
+    hist = [{"org": "中金公司", "yr": "2026", "d_from": "2026-04-25", "d_to": "2026-07-26",
+             "np_from": 959.8, "np_to": 959.8}]
+    tp_reps = [{"org": "群益证券(香港)", "date": "2026-09-29", "tp": 390.0},
+               {"org": "群益证券(香港)", "date": "2026-09-29", "tp": 390.0},
+               {"org": "中金公司", "date": "2026-09-13", "tp": 500.0}]
+    c = {"_src": "tushare", "orgs": 44, "n_reports": 181,
+         "years": {"2026": {"np": [952.0], "eps": []}},
+         "history": hist, "tp_reports": tp_reps,
+         "aim": [390.0, 500.0], "ratings": {"买入": 30}}
+    _orig = em.fetch_consensus
+    em._CAPTURE.pop("gap_history", None)
+    try:
+        em.fetch_consensus = lambda code: c
+        out = "\n".join(em._sec_e5("300750", False))
+    finally:
+        em.fetch_consensus = _orig
+    assert "目标价研报清单" in out, f"应出提示行: {out}"
+    assert "2 家/3 份" in out, f"家/份计数应按去重后/原始: {out}"
+    assert "群益证券(香港)390(09-29)" in out and "中金公司500(09-13)" in out, f"去重列示: {out}"
+    assert out.count("群益证券(香港)") == 1, f"同机构同价重复条目应去重: {out}"
+    gh = em._CAPTURE.get("gap_history") or {}
+    assert gh.get("tp_reports") == tp_reps, f"落盘应原样带 tp_reports: {gh}"
+    c2 = dict(c, tp_reports=[{"org": "某券商", "date": "2026-09-29"}])
+    try:
+        em.fetch_consensus = lambda code: c2
+        out2 = "\n".join(em._sec_e5("300750", False))
+    finally:
+        em.fetch_consensus = _orig
+    assert "目标价研报清单" not in out2, f"条目全缺 tp 不应出行: {out2}"
+    c3 = dict(c)
+    del c3["tp_reports"]
+    try:
+        em.fetch_consensus = lambda code: c3
+        out3 = "\n".join(em._sec_e5("300750", False))
+    finally:
+        em.fetch_consensus = _orig
+    assert "目标价研报清单" not in out3, f"键缺失不应出行: {out3}"
+    print("27. E5 目标价研报清单提示行 通过")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

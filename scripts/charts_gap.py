@@ -336,6 +336,18 @@ def _gh_sort_key(r: dict):
     return (1, -(d if d is not None else -9))
 
 
+def _gh_org_key(org: str) -> str:
+    """机构名归一化（v5.8.1）：tushare org_name 存在「中金/中金公司」口径漂移，
+    rows 与 tp_reports 同机构名可能不一致——去尾部公司后缀后比对（宁德 300750 复盘
+    实证：归一前降级面板单点落行外补列）。括号注（如 (香港)）保留，区分境内外主体。"""
+    s = org.strip()
+    for suf in ("证券股份有限公司", "股份有限公司", "有限责任公司", "有限公司", "公司", "证券"):
+        if s.endswith(suf):
+            s = s[:-len(suf)]
+            break
+    return s
+
+
 def build_gap_history(fill: dict) -> str:
     """9 章券商态度变化图（fill["gap_history"] 可选字段，缺失/无有效行 → 空串不告警）。
 
@@ -377,18 +389,22 @@ def build_gap_history(fill: dict) -> str:
     # v5.8.0 目标价面板降级（用户拍板形态）：无同券商两份可比时，各家最新目标价按同一
     # 价值轴单点列示——落在左面板机构共享行上（各家价格可比）；有目标价但不在左面板行
     # （无净利可比）的券商在右面板下方文字补列。数据=gap_history.tp_reports（落盘照抄键）
-    tp_map = {}     # org → {"tp","date"}（同券商多份取日期最新）
+    tp_map = {}     # 归一化机构名 → {"tp","date","org"}（同券商多份取日期最新）
     if not has_tp:
         for r in gh.get("tp_reports") or []:
             if not isinstance(r, dict):
                 continue
             org = str(r.get("org") or "").strip()
             tp, dte = _num(r.get("tp")), str(r.get("date") or "")
-            if org and tp is not None and (org not in tp_map or dte > tp_map[org]["date"]):
-                tp_map[org] = {"tp": tp, "date": dte[5:]}
-    row_orgs = {r["org"] for r in rows}
-    tp_dots = [(i, tp_map[r["org"]]) for i, r in enumerate(rows) if r["org"] in tp_map]
-    tp_extra = sorted(((o, v) for o, v in tp_map.items() if o not in row_orgs),
+            key = _gh_org_key(org)
+            # v5.8.1 审核实证：存量须存完整日期再比较（此前存 MM-DD 与完整日期混比，
+            # '2' 恒大于 '0'/'1'，同券商多份恒被最旧一份覆盖）；渲染处再切片 MM-DD
+            if key and tp is not None and (key not in tp_map or dte > tp_map[key]["date"]):
+                tp_map[key] = {"tp": tp, "date": dte, "org": org}
+    row_keys = {_gh_org_key(r["org"]) for r in rows}
+    tp_dots = [(i, tp_map[_gh_org_key(r["org"])]) for i, r in enumerate(rows)
+               if _gh_org_key(r["org"]) in tp_map]
+    tp_extra = sorted(((v["org"], v) for k, v in tp_map.items() if k not in row_keys),
                       key=lambda kv: -kv[1]["tp"])
     n_extra_lines = (min(len(tp_extra), 6) + 2) // 3 if tp_extra else 0
     yrs = {r["yr"] for r in rows if r["yr"]}
@@ -513,9 +529,9 @@ def build_gap_history(fill: dict) -> str:
                          f'<text x="{_px(x)}" y="{cy - 10}" text-anchor="middle" font-size="10" '
                          f'font-weight="600" fill="{_C_INK}">{_gap_fmt(v["tp"])}</text>'
                          f'<text x="{_px(x)}" y="{cy + 14}" text-anchor="middle" font-size="8.5" '
-                         f'fill="{_C_LABEL}">{_esc(v["date"])}</text>')
+                         f'fill="{_C_LABEL}">{_esc(v["date"][5:])}</text>')
     if tp_extra:
-        seg = [f'{o} {_gap_fmt(v["tp"])}（{v["date"]}）' for o, v in tp_extra[:6]]
+        seg = [f'{o} {_gap_fmt(v["tp"])}（{v["date"][5:]}）' for o, v in tp_extra[:6]]
         if len(tp_extra) > 6:
             seg[-1] += f' 等 {len(tp_extra)} 家'
         for li in range(n_extra_lines):

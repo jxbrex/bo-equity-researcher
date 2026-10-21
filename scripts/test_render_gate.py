@@ -2960,6 +2960,51 @@ def test_gap_history_gate():
     print("OK gap_history 照抄对账（一致静默/偏差/缺机构/缺落盘/缺源/混年/空行/非法拒）")
 
 
+def test_gap_history_tp_reports_gate():
+    """v5.8.1：tp_reports 反向漏抄告警（宁德 300750 复盘 2026-10-21 实证）——
+    落盘有目标价研报清单而 fill 缺 tp_reports 且 rows 无 tp 对 → 告警；
+    fill 照抄 / 落盘无清单 / rows 自带 tp 对（降级面板非必需）→ 不告警。"""
+    import tempfile
+    row = {"org": "中金公司", "yr": "2026", "d_from": "2026-06-30", "d_to": "2026-09-28",
+           "np_from": 930.0, "np_to": 952.0}
+    tp_reps = [{"org": "中金公司", "date": "2026-09-13", "tp": 500.0},
+               {"org": "群益证券(香港)", "date": "2026-09-29", "tp": 390.0}]
+    with tempfile.TemporaryDirectory() as d:
+        ref = write_fill({"price": 10.0, "pe_ttm": 11.0,
+                          "gap_history": {"rows": [row], "tp_reports": tp_reps}},
+                         d, name="em_ghtp.json")
+        q = {"source_file": ref, "date": "2026-10-21"}
+        out = validate_stderr(minimal_fill(quote=q, gap_history={"rows": [dict(row)]}))
+        assert "tp_reports 漏抄" in out, f"落盘有清单而 fill 未抄应告警: {out}"
+        out = validate_stderr(minimal_fill(quote=q, gap_history={
+            "rows": [dict(row)], "tp_reports": [dict(x) for x in tp_reps]}))
+        assert "漏抄" not in out, f"照抄一致不应告警: {out}"
+        out = validate_stderr(minimal_fill(quote=q, gap_history={
+            "rows": [dict(row, tp_from=490.0, tp_to=500.0)]}))
+        assert "漏抄" not in out, f"rows 有 tp 对时降级面板非必需，不应告警: {out}"
+        ref2 = write_fill({"price": 10.0, "pe_ttm": 11.0,
+                           "gap_history": {"rows": [row]}}, d, name="em_ghtp2.json")
+        out = validate_stderr(minimal_fill(
+            quote={"source_file": ref2, "date": "2026-10-21"},
+            gap_history={"rows": [dict(row)]}))
+        assert "漏抄" not in out, f"落盘无清单不应告警: {out}"
+        # v5.8.1 审核实证：判定与渲染同源（排序后前 8 判 tp 对）——8 行 np 对 +
+        # tp 对落第 9 行，fill 漏抄 tp_reports 时必须告警（全量扫描会漏报）
+        rows9 = [{"org": f"券商{c}", "yr": "2026", "d_from": "2026-05-10",
+                  "d_to": "2026-08-24", "np_from": 50 + i, "np_to": 60 + i}
+                 for i, c in enumerate("ABCDEFGH")]
+        rows9.append({"org": "券商I", "yr": "2026", "d_from": "2026-05-10",
+                      "d_to": "2026-08-24", "tp_from": 40.0, "tp_to": 45.0})
+        ref3 = write_fill({"price": 10.0, "pe_ttm": 11.0,
+                           "gap_history": {"rows": rows9, "tp_reports": tp_reps}},
+                          d, name="em_ghtp3.json")
+        out = validate_stderr(minimal_fill(
+            quote={"source_file": ref3, "date": "2026-10-21"},
+            gap_history={"rows": [dict(r) for r in rows9]}))
+        assert "tp_reports 漏抄" in out, f"tp 对在第 9 名后、fill 漏抄应告警: {out}"
+    print("OK gap_history.tp_reports 反向漏抄告警（漏抄告警/照抄静默/有 tp 对静默/落盘无静默/第9名盲区）")
+
+
 def test_gap_history_handwritten_dupe():
     """v5.6.0：gap_history 图会生成时，gap_html 手写同内容变化表 → 告警；
     无 gap_history 或表不含变化关键词 → 不告警。"""
@@ -3157,4 +3202,9 @@ def test_gap_history_prose_dupe():
     clean = "<p>佐证：市场在向乐观方向修正，本文谨慎是对价格外推的结构性保留。</p>"
     out = validate_stderr(minimal_fill(gap_history={"rows": rows}, gap_html=head + clean))
     assert "散文罗列券商首末数字" not in out, f"纯结论句不应误伤: {out}"
-    print("OK gap_history 散文罗列检测（告警/无字段静默/结论句不误伤）")
+    # v5.8.1 审核实证：A 档假设分行列写（无 首末/态度变化/佐证 语境词）不应误伤
+    assume = ("<ul><li>净利——东吴（05-10）：57.6→82.3亿（上调）；国投（06-02）："
+              "59.8→84.0亿（上调）</li></ul>")
+    out = validate_stderr(minimal_fill(gap_history={"rows": rows}, gap_html=head + assume))
+    assert "散文罗列券商首末数字" not in out, f"A 档假设列写不应误伤: {out}"
+    print("OK gap_history 散文罗列检测（告警/无字段静默/结论句不误伤/A 档列写不误伤）")

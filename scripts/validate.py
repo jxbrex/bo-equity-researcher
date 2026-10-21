@@ -494,6 +494,40 @@ def _check_gap_history(fill: dict, warns: list) -> None:
                 warns.append(f"gap_history.tp_reports「{org} {x.get('date')}」tp={fv:g} "
                              f"与落盘值不一致——照抄禁手改（容差：相对 1%，下限 0.005）")
 
+    # v5.8.1：反向漏抄告警——落盘有目标价研报清单而 fill 缺/空 tp_reports 且 rows 无 tp 对时，
+    # 渲染端降级面板静默退化为「无两份可比研报」纯文字（宁德 300750 复盘 2026-10-21 实证）
+    if not tp:
+        ref_tp_miss = ((ref or {}).get("gap_history") or {}).get("tp_reports") or []
+        # v5.8.1 审核实证：判定须与渲染端同源——rows 先按「np 幅度降序、无 np 按 tp 幅度」
+        # 排序取前 8 再判 tp 对（charts_gap._gh_sort_key 同款口径内联复制，不把渲染依赖
+        # 拖进校验脚本）；全量扫描会在「≥9 家可比且 tp 对落在第 9 名后」时漏报
+        parsed = []
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            npf, npt = _num(r.get("np_from")), _num(r.get("np_to"))
+            tpf, tpt = _num(r.get("tp_from")), _num(r.get("tp_to"))
+            if (npf is None or npt is None) and (tpf is None or tpt is None):
+                continue
+            parsed.append((npf, npt, tpf, tpt))
+
+        def _gh_dl(a, b):
+            return None if a is None or b is None or not a else b / a - 1
+
+        def _gh_key(t):
+            d = _gh_dl(t[0], t[1])
+            if d is not None:
+                return (0, -d)
+            d = _gh_dl(t[2], t[3])
+            return (1, -(d if d is not None else -9))
+
+        parsed.sort(key=_gh_key)
+        has_tp_pair = any(t[2] is not None for t in parsed[:8])
+        if ref_tp_miss and not has_tp_pair:
+            warns.append(f"gap_history.tp_reports 漏抄：落盘有 {len(ref_tp_miss)} 份目标价"
+                         "研报清单（降级面板数据源）而 fill 未照抄——rows 无 tp 对时右面板"
+                         "将退化为「无两份可比研报」纯文字；请照抄落盘同名子键")
+
 
 def _check_dupont(fill: dict, warns: list) -> None:
     """v5.8.0 dupont（4.6 杜邦乘积链）校验：① 结构——roe/nm/turn/em 四因子缺一图不生成
@@ -2164,10 +2198,13 @@ def _check_handwritten_dupes(fill: dict, warns: list) -> None:
                      "（图+判词横条自动生成），请删除手写表")
     # v5.8.0：散文罗列同禁——≥2 组「数值→数值亿」首末数字 + 上调/下调表述即与图重复
     # （中国巨石复盘实证：佐证段与图完全同源，且手写「12家」与横条「8家」口径打架）；
-    # 佐证只写方向性结论与本文相对位置，数值留给图与判词横条
+    # 佐证只写方向性结论与本文相对位置，数值留给图与判词横条。
+    # v5.8.1 审核实证：须加佐证域关键词门槛（首末/态度变化/佐证）——A 档卖方假设分行列写
+    # （「净利——东吴（05-10）：57.6→82.3亿（上调）」）合法含 ≥2 组箭头数字，无门槛会误伤
     if (fill.get("gap_history") or {}).get("rows"):
         n_arrows = len(re.findall(r"\d+(?:\.\d+)?\s*→\s*\d+(?:\.\d+)?\s*亿", gh))
-        if n_arrows >= 2 and re.search(r"上调|下调", gh):
+        if n_arrows >= 2 and re.search(r"上调|下调", gh) \
+                and re.search(r"首末|态度变化|佐证", gh):
             warns.append("gap_html 散文罗列券商首末数字（≥2 组「→」幅度+上/下调表述）："
                          "与券商态度变化图内容重复——只写方向性结论与本文相对位置，"
                          "首末数值由图与判词横条承载")

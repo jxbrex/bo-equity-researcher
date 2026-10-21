@@ -210,7 +210,10 @@ def _check_l4_order(l4_html: str) -> None:
 
 
 def _clean_peers_matrix(fill: dict, peers_plot_html: str) -> str:
-    """散点图已生成 → 手写九宫格冗余，自动删除（含"估值-质量矩阵："引导句）。"""
+    """渲染期内容修正（v5.8.3 明写身份）：不是 validate 校验——不产生拒渲染错误，只在
+    渲染阶段静默修正并 stderr 留痕。修正内容：peers_plot 散点图已生成时，peers_html 里
+    手写的九宫格（matrix-table，含"估值-质量矩阵："引导句）属冗余，自动删除。
+    将来类似的渲染期自动修正集中到本函数附近，保持修正点单源可寻。"""
     peers_html = fill.get("peers_html", "")
     if peers_plot_html and "matrix-table" in peers_html:
         # 散点图已生成 → 手写九宫格冗余，自动删除（含"估值-质量矩阵："引导句）

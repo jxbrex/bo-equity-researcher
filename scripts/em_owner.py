@@ -135,6 +135,67 @@ def _org_history(hist_rows: dict) -> list:
     return out
 
 
+def _cap_note(cap: int, total: int) -> str:
+    """截断家数声明（审计 P2-3：截断时家数声明与行内条数不得矛盾；v5.8.3 自 _sec_e5
+    cnt_note 三处同构计算下沉单源）。"""
+    return f"前 {cap} 家/共 {total} 家" if total > cap else f"{total} 家"
+
+
+def _e5_render_ready(detail: dict, aim_detail: list, history: list, tp_reports: list) -> dict:
+    """E5 渲染就绪行（v5.8.3 自 _sec_e5 下沉的数据变换）：逐机构明细/目标价明细/券商态度
+    变化/目标价研报清单四行的截断、家数声明与 "·".join 格式化在此一次算好，_sec_e5 瘦身为
+    纯拼接。截断口径与落盘一致：明细 20 家、history/tp_reports 落盘 12 家、清单去重后 8 家；
+    清单按（机构,目标价）去重、份数=截断后原始份数；条目全缺目标价时清单行 None（不出行）。
+    摘要行文案逐字同旧 _sec_e5 内联实现。"""
+    detail_lines = []
+    for yr in sorted(detail or {}):
+        det = detail[yr]
+        seg = "·".join(f"{d['org']}{d['np']:g}({d['date'][4:6]}-{d['date'][6:8]})"
+                       for d in det[:20])
+        detail_lines.append(f"{yr}E 净利明细（gap_plot 照抄行，{_cap_note(20, len(det))}，"
+                            f"按值降序）: {seg}")
+    aim_line = None
+    if aim_detail:
+        seg = "·".join(f"{d['org']}{d['tp']:g}({d['date'][4:6]}-{d['date'][6:8]})"
+                       for d in aim_detail[:20])
+        aim_line = (f"目标价明细（gap_plot 照抄行，{_cap_note(20, len(aim_detail))}，"
+                    f"(研报下限+上限)/2）: {seg}")
+    history_line = None
+    if history:
+        segs = []
+        for h in history[:12]:
+            seg = h["org"]
+            if "np_from" in h:
+                seg += (f" {h['yr']}E净利{h['np_from']:g}({h['d_from'][5:]})"
+                        f"→{h['np_to']:g}({h['d_to'][5:]})")
+            if "tp_from" in h:
+                seg += f"·目标价{h['tp_from']:g}→{h['tp_to']:g}"
+            if "rating_from" in h:
+                seg += f"·评级{h['rating_from']}→{h['rating_to']}"
+            segs.append(seg)
+        history_line = (f"券商态度变化（gap_history 照抄行，{_cap_note(12, len(history))}，"
+                        f"同一券商近180天首末两份）: " + "；".join(segs))
+    tp_reports_line = None
+    if tp_reports:
+        tp12 = tp_reports[:12]
+        seen, uniq = set(), []
+        for t in tp12:
+            if not isinstance(t, dict) or t.get("tp") is None:
+                continue
+            k = (str(t.get("org") or "").strip(), t.get("tp"))
+            if k not in seen:
+                seen.add(k)
+                uniq.append(t)
+        if uniq:
+            tseg = "·".join(f"{t.get('org')}{t['tp']:g}"
+                            f"({str(t.get('date') or '')[5:]})" for t in uniq[:8])
+            n_orgs = len({str(t.get("org") or "").strip() for t in uniq})
+            tp_reports_line = (f"目标价研报清单（gap_history.tp_reports 照抄键，"
+                               f"{n_orgs} 家/{len(tp12)} 份，降级面板数据源）: {tseg}")
+    return {"detail_lines": detail_lines, "aim_line": aim_line,
+            "history_line": history_line, "tp_reports_line": tp_reports_line}
+
+
 def fetch_consensus(code: str) -> dict:
     """E5 一致预期。tushare report_rc（券商盈利预测明细）优先；东财 RPT_WEB_RESPREDICT 兜底。
     返回带 _src 标记的 dict。tushare 返回近180天研报聚合：家数/分年度净利与EPS均值/目标价区间。"""
@@ -205,12 +266,17 @@ def fetch_consensus(code: str) -> dict:
                       for org, r in sorted(aim_by_org.items(),
                                            key=lambda kv: -(float(kv[1]["min_price"])
                                                             + float(kv[1]["max_price"])))]
+        hist = _org_history(hist_rows)
+        tp_sorted = sorted(tp_reports, key=lambda x: x["date"], reverse=True)
         return {"_src": "tushare", "orgs": len(orgs), "n_reports": len(recent),
                 "years": years, "detail": detail, "aim_detail": aim_detail,
-                "history": _org_history(hist_rows),
-                "tp_reports": sorted(tp_reports, key=lambda x: x["date"], reverse=True),
+                "history": hist,
+                "tp_reports": tp_sorted,
                 "aim": (min(p[0] for p in prices), max(p[1] for p in prices)) if prices else None,
-                "ratings": ratings}
+                "ratings": ratings,
+                # v5.8.3：渲染就绪行（detail_lines/aim_line/history_line/tp_reports_line）——
+                # 原 _sec_e5 的截断/去重/计数/格式化在此产出，_sec_e5 只拼接
+                **_e5_render_ready(detail, aim_detail, hist, tp_sorted)}
     except RateLimitError:
         raise  # v5.8.2 硬停纪律：东财一致预期限流不吞成「无覆盖」，穿透至 main 退 2
     except Exception:

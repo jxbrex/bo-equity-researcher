@@ -26,31 +26,31 @@ def test_01_market_map():
 
     # A股沪市（60/68 开头）
     assert em.secid_of("600989") == ("1.600989", "600989.SH", False)
-    assert em.to_ts_code("600989") == "600989.SH"
+    assert em_core.to_ts_code("600989") == "600989.SH"
     assert em.secid_of("688981") == ("1.688981", "688981.SH", False)
     # A股深市（00/30 开头，默认分支）
     assert em.secid_of("000528") == ("0.000528", "000528.SZ", False)
-    assert em.to_ts_code("000528") == "000528.SZ"
+    assert em_core.to_ts_code("000528") == "000528.SZ"
     assert em.secid_of("300750") == ("0.300750", "300750.SZ", False)
     # 北交所（43/83/87/88/92 开头）：两边都必须是 BJ，secid 前缀 0.
     for bj in ("430047", "830799", "871245", "880001", "920001"):
         assert em.secid_of(bj) == (f"0.{bj}", f"{bj}.BJ", False), bj
-        assert em.to_ts_code(bj) == f"{bj}.BJ", bj
+        assert em_core.to_ts_code(bj) == f"{bj}.BJ", bj
     # B股（9 开头 → 沪市；200 开头深B → 深市默认分支）
     assert em.secid_of("900901") == ("1.900901", "900901.SH", False)
-    assert em.to_ts_code("900901") == "900901.SH"
+    assert em_core.to_ts_code("900901") == "900901.SH"
     assert em.secid_of("200002") == ("0.200002", "200002.SZ", False)
     # 港股 5 位
     assert em.secid_of("06082") == ("116.06082", "06082.HK", True)
-    assert em.to_ts_code("06082") == "06082.HK"
+    assert em_core.to_ts_code("06082") == "06082.HK"
     assert em.secid_of("00700") == ("116.00700", "00700.HK", True)
     # 带后缀输入：secid_of 剥后缀重判，to_ts_code 原样透传
     assert em.secid_of("600989.SH") == ("1.600989", "600989.SH", False)
-    assert em.to_ts_code("600989.SH") == "600989.SH"
+    assert em_core.to_ts_code("600989.SH") == "600989.SH"
     assert em.secid_of("06082.HK") == ("116.06082", "06082.HK", True)
     # 非法输入：非纯数字或长度非 5/6 → 两边都报 ValueError，不静默按深市处理
     for bad in ("abc", "12345x", "1234567", "", "123", "60098A"):
-        for fn in (em.secid_of, em.to_ts_code):
+        for fn in (em.secid_of, em_core.to_ts_code):
             try:
                 fn(bad)
                 raise AssertionError(f"{fn.__name__}({bad!r}) 应报 ValueError")
@@ -64,8 +64,8 @@ def test_02_leap_day():
     """2. 闰日路径"""
 
     # 2024-02-29 是闰日：旧写法 replace(year=2023) 会 ValueError，新写法必须正常
-    assert em._ttm_cutoff(date(2024, 2, 29)) == "20230301"
-    assert em._ttm_cutoff(date(2026, 8, 26)) == "20250826"
+    assert em_core._ttm_cutoff(date(2024, 2, 29)) == "20230301"
+    assert em_core._ttm_cutoff(date(2026, 8, 26)) == "20250826"
     print("2. 闰日路径 通过")
 
 
@@ -73,14 +73,14 @@ def test_02_leap_day():
 def test_03_yoy_text():
     """3. 同比文字化"""
 
-    assert em._yoy(5, -3) == "扭亏"        # pre<0, cur>0
-    assert em._yoy(-5, 10) == "转亏"       # pre>0, cur<0
-    assert em._yoy(-3, -5) == "减亏"       # pre<0, 亏损收窄
-    assert em._yoy(-6, -5) == "增亏"       # pre<0, 亏损扩大
-    assert abs(em._yoy(110, 100) - 10.0) < 1e-9   # 正常正分母 → 数值百分比
-    assert em._yoy(5, 0) is None           # pre==0 无意义
-    assert em._yoy(None, 5) is None
-    assert em._yoy(5, None) is None
+    assert em_core._yoy(5, -3) == "扭亏"        # pre<0, cur>0
+    assert em_core._yoy(-5, 10) == "转亏"       # pre>0, cur<0
+    assert em_core._yoy(-3, -5) == "减亏"       # pre<0, 亏损收窄
+    assert em_core._yoy(-6, -5) == "增亏"       # pre<0, 亏损扩大
+    assert abs(em_core._yoy(110, 100) - 10.0) < 1e-9   # 正常正分母 → 数值百分比
+    assert em_core._yoy(5, 0) is None           # pre==0 无意义
+    assert em_core._yoy(None, 5) is None
+    assert em_core._yoy(5, None) is None
     # 渲染：文字原样、数值走百分比
     assert em.yoy_text("扭亏") == "扭亏"
     assert em.yoy_text(10.0) == "10.0%"
@@ -121,7 +121,7 @@ def test_04_rate_limit_hardstop():
     try:
         # get() 遇到 429：抛 RateLimitError，且不重试同一 URL、不回落 urllib
         try:
-            em.get("http://example.invalid/x")
+            em_core.get("http://example.invalid/x")
             raise AssertionError("429 应抛 RateLimitError")
         except em.RateLimitError:
             pass
@@ -135,7 +135,7 @@ def test_04_rate_limit_hardstop():
         calls["curl"] = 0
         em_core.subprocess.run = lambda *a, **k: (calls.__setitem__("curl", calls["curl"] + 1), _Fake500())[1]
         try:
-            em.get("http://example.invalid/y")
+            em_core.get("http://example.invalid/y")
             raise AssertionError("502 应抛 RateLimitError")
         except em.RateLimitError:
             pass
@@ -146,12 +146,12 @@ def test_04_rate_limit_hardstop():
             stdout = b'{"data": {"x": 1}}\n200'
 
         em_core.subprocess.run = lambda *a, **k: _Fake200()
-        assert em.get("http://example.invalid/ok") == {"data": {"x": 1}}
+        assert em_core.get("http://example.invalid/ok") == {"data": {"x": 1}}
 
         # 网络层错误（连接失败）维持原逻辑：curl 失败 → urllib 兜底
         em_core.subprocess.run = lambda *a, **k: (_ for _ in ()).throw(ConnectionError("mock 连接失败"))
         em_core._get_via_urllib = lambda url: b'{"ok": true}'
-        assert em.get("http://example.invalid/net") == {"ok": True}
+        assert em_core.get("http://example.invalid/net") == {"ok": True}
     finally:
         em_core.subprocess.run = _orig_run
         em_core._get_via_urllib = _orig_urllib
@@ -161,6 +161,7 @@ def test_04_rate_limit_hardstop():
 
 def test_05_stale_code_guard():
     """5. 陈旧档拦截（无网络，mock get）"""
+    import em_market
 
     _orig_get = em_core.get
     try:
@@ -168,7 +169,7 @@ def test_05_stale_code_guard():
         em_core.get = lambda url: {"data": {"f43": 0, "f57": "832982", "f58": "锦波生物(已切换)",
                                             "f116": 0, "f162": 0, "f167": 0, "f168": 0, "f170": 0}}
         try:
-            em._em_quote("0.832982")
+            em_market._em_quote("0.832982")
             raise AssertionError("已切换标的全零行情必须抛 ValueError")
         except ValueError as e:
             assert "920" in str(e), "报错应提示北交所 920 新代码段"
@@ -176,7 +177,7 @@ def test_05_stale_code_guard():
         em_core.get = lambda url: {"data": {"f43": 12099, "f57": "920982", "f58": "锦波生物",
                                             "f116": 1.39e10, "f162": 2473, "f167": 683,
                                             "f168": 103, "f170": -14}}
-        q = em._em_quote("0.920982")
+        q = em_market._em_quote("0.920982")
         assert q["名称"] == "锦波生物" and q["最新价"] == 120.99
     finally:
         em_core.get = _orig_get
@@ -1049,17 +1050,25 @@ def test_26_consensus_history():
 
 
 def test_27_tp_reports_hint():
-    """27. E5 目标价研报清单提示行（v5.8.1，宁德 300750 复盘漏抄断链实证）：
-    tp_reports 非空时摘要须出「目标价研报清单」照抄键提示（按 机构+目标价 去重、家/份计数、
-    日期 MM-DD）；条目全缺 tp 或键缺失时不出行；落盘 _CAPTURE 原样带 tp_reports。"""
+    """27. E5 目标价研报清单提示行（v5.8.1，宁德 300750 复盘漏抄断链实证；v5.8.3 渲染就绪行
+    下沉 em_owner.fetch_consensus——stub 渲染键直测 _sec_e5 出行门禁，渲染文案真调数据层钉住）：
+    tp_reports_line 非空时摘要须出「目标价研报清单」照抄键提示（按 机构+目标价 去重、家/份计数、
+    日期 MM-DD）；清单行 None 或 tp_reports 键缺失时不出行（tp_reports 落盘不受影响）；
+    落盘 _CAPTURE 原样带 tp_reports。"""
     hist = [{"org": "中金公司", "yr": "2026", "d_from": "2026-04-25", "d_to": "2026-07-26",
              "np_from": 959.8, "np_to": 959.8}]
+    hist_line = ("券商态度变化（gap_history 照抄行，1 家，同一券商近180天首末两份）: "
+                 "中金公司 2026E净利959.8(04-25)→959.8(07-26)")
     tp_reps = [{"org": "群益证券(香港)", "date": "2026-09-29", "tp": 390.0},
                {"org": "群益证券(香港)", "date": "2026-09-29", "tp": 390.0},
                {"org": "中金公司", "date": "2026-09-13", "tp": 500.0}]
+    tp_line = ("目标价研报清单（gap_history.tp_reports 照抄键，2 家/3 份，降级面板数据源）: "
+               "群益证券(香港)390(09-29)·中金公司500(09-13)")
     c = {"_src": "tushare", "orgs": 44, "n_reports": 181,
          "years": {"2026": {"np": [952.0], "eps": []}},
-         "history": hist, "tp_reports": tp_reps,
+         "history": hist, "history_line": hist_line,
+         "tp_reports": tp_reps, "tp_reports_line": tp_line,
+         "detail_lines": [], "aim_line": None,
          "aim": [390.0, 500.0], "ratings": {"买入": 30}}
     _orig = em.fetch_consensus
     em._CAPTURE.pop("gap_history", None)
@@ -1068,28 +1077,59 @@ def test_27_tp_reports_hint():
         out = "\n".join(em._sec_e5("300750", False))
     finally:
         em.fetch_consensus = _orig
+    assert "券商态度变化" in out and "中金公司 2026E净利959.8(04-25)→959.8(07-26)" in out,         f"态度变化行应出行: {out}"
     assert "目标价研报清单" in out, f"应出提示行: {out}"
     assert "2 家/3 份" in out, f"家/份计数应按去重后/原始: {out}"
     assert "群益证券(香港)390(09-29)" in out and "中金公司500(09-13)" in out, f"去重列示: {out}"
     assert out.count("群益证券(香港)") == 1, f"同机构同价重复条目应去重: {out}"
     gh = em._CAPTURE.get("gap_history") or {}
     assert gh.get("tp_reports") == tp_reps, f"落盘应原样带 tp_reports: {gh}"
-    c2 = dict(c, tp_reports=[{"org": "某券商", "date": "2026-09-29"}])
+    assert gh.get("rows") == hist, f"落盘应原样带 rows: {gh}"
+    # 清单行 None（条目全缺 tp 的清单形态）→ 不出行，但 tp_reports 仍落盘
+    c2 = dict(c, tp_reports_line=None)
     try:
         em.fetch_consensus = lambda code: c2
         out2 = "\n".join(em._sec_e5("300750", False))
     finally:
         em.fetch_consensus = _orig
-    assert "目标价研报清单" not in out2, f"条目全缺 tp 不应出行: {out2}"
+    assert "目标价研报清单" not in out2, f"全缺 tp 不应出行: {out2}"
+    gh2 = em._CAPTURE.get("gap_history") or {}
+    assert gh2.get("tp_reports") == tp_reps, "tp_reports 落盘不随行取消"
+    # 键缺失 → 不出行
     c3 = dict(c)
-    del c3["tp_reports"]
+    del c3["tp_reports_line"]
     try:
         em.fetch_consensus = lambda code: c3
         out3 = "\n".join(em._sec_e5("300750", False))
     finally:
         em.fetch_consensus = _orig
     assert "目标价研报清单" not in out3, f"键缺失不应出行: {out3}"
+
+    # v5.8.3：渲染键真值由 fetch_consensus 产出——真调数据层钉文案（去重/计数/格式化在此层）
+    import em_owner
+    rows = [
+        {"org_name": "野村", "report_date": "20260830", "quarter": "2026Q4",
+         "np": 9520000, "eps": 2.1, "min_price": 30, "max_price": 32, "rating": "买入"},
+        {"org_name": "野村", "report_date": "20260701", "quarter": "2026Q4", "np": 9000000},
+        {"org_name": "摩根士丹利", "report_date": "20260812", "quarter": "2026Q4",
+         "np": 8780000, "eps": 2.0},
+        {"org_name": "老券商", "report_date": "20250101", "quarter": "2026Q4", "np": 1000000},
+    ]
+    _orig_ts = em_core.ts_call
+    try:
+        em_core.ts_call = lambda name, params, **k: rows
+        c4 = em_owner.fetch_consensus("600938")
+    finally:
+        em_core.ts_call = _orig_ts
+    assert c4["history_line"] == \
+        "券商态度变化（gap_history 照抄行，1 家，同一券商近180天首末两份）: 野村 2026E净利900(07-01)→952(08-30)", \
+        f"实际 {c4['history_line']}"
+    assert c4["detail_lines"] == [
+        "2026E 净利明细（gap_plot 照抄行，2 家，按值降序）: 野村952(08-30)·摩根士丹利878(08-12)"],         f"实际 {c4['detail_lines']}"
+    assert c4["aim_line"] ==         "目标价明细（gap_plot 照抄行，1 家，(研报下限+上限)/2）: 野村31(08-30)",         f"实际 {c4['aim_line']}"
+    assert c4["tp_reports_line"] ==         "目标价研报清单（gap_history.tp_reports 照抄键，1 家/1 份，降级面板数据源）: 野村31(08-30)",         f"实际 {c4['tp_reports_line']}"
     print("27. E5 目标价研报清单提示行 通过")
+
 
 
 if __name__ == "__main__":

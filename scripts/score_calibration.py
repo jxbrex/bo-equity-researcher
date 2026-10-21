@@ -23,9 +23,12 @@ from datetime import date
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import extract_review as E
 from extract_review import parse_report_name, norm_code  # 文件名解析/代码归一唯一 owner（合并口径）
+import em_core
 import em_fetch as em
 # debt: stdout/stderr UTF-8 reconfigure 靠 extract_review/em_fetch 的 import 副作用保障；
 # 若改为不 import 它们，需自带 reconfigure 块
+# v5.8.3：ts_call/get/to_ts_code 经 em_fetch re-export 的兼容别名已收敛（em_fetch 内零裸用），
+# 此处直接打 em_core 命名空间；em.kline_url/em.secid_of 仍在 em_fetch 取数块 re-export 清单。
 
 DEFAULT_DIR = r"D:\个股深度分析"
 SHORT_WINDOW = 20  # 交易日
@@ -95,12 +98,12 @@ def collect_reports(directory: str) -> list:
 def _ts(api_name: str, params: dict) -> list:
     """ts_call 限流包装：tushare 分钟级频次限制（如 hk_daily 1次/分）命中时睡 62s 重试一次。"""
     try:
-        return em.ts_call(api_name, params)
+        return em_core.ts_call(api_name, params)
     except RuntimeError as e:
         if "频率超限" in str(e) or "频次" in str(e):
             print(f"  tushare 限流，62s 后重试 {api_name}...", file=sys.stderr)
             time.sleep(62)
-            return em.ts_call(api_name, params)
+            return em_core.ts_call(api_name, params)
         raise
 
 
@@ -108,7 +111,7 @@ def _em_kline_daily(secid: str, start: str, end: str) -> list:
     """东财日 K（klt=101, fqt=1 前复权）→ [{trade_date, adj_close}]。
     港股日线走此通道（tushare hk_daily 限 1次/小时，批量校准不可用）。"""
     url = em.kline_url(secid, 101, start, end)
-    d = em.get(url).get("data") or {}
+    d = em_core.get(url).get("data") or {}
     return [{"trade_date": k.split(",")[0].replace("-", ""), "adj_close": float(k.split(",")[1])}
             for k in (d.get("klines") or [])]
 
@@ -117,7 +120,7 @@ def _daily_adj_rows(code: str, start: str, end: str, is_hk: bool) -> list:
     """日线 + 复权因子合成前复权口径行 [{trade_date, adj_close}]（港股走东财前复权日 K）。"""
     if is_hk:
         return _em_kline_daily(em.secid_of(code)[0], start, end)
-    ts = em.to_ts_code(code)
+    ts = em_core.to_ts_code(code)
     rows = _ts("daily", {"ts_code": ts, "start_date": start, "end_date": end})
     adj = {r["trade_date"]: float(r["adj_factor"]) for r in
            _ts("adj_factor", {"ts_code": ts, "start_date": start, "end_date": end})

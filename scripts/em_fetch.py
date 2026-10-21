@@ -42,15 +42,15 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 
 import em_core as _C
-# 兼容性 re-export：外部按 em_fetch.X 按名访问（score_calibration / monthly_checkup / 测试），
-# 只保留有真实消费方的名字——此处名字供外部访问与内部函数体裸用（yi/pct/yoy_text/secid_of/
-# RateLimitError/_TS_DEBUG/_STATS）；其余内部解析走 _C.<name>（迟绑定）。
+# 兼容性 re-export：只保留内部函数体裸用名（yi/pct/yoy_text/secid_of/RateLimitError/
+# _TS_DEBUG/_STATS）；其余解析一律走 _C.<name>（迟绑定）。v5.8.3 收敛：to_ts_code/ts_call/
+# get/_yoy/_ttm_cutoff 在 em_fetch 内零裸用，消费方（test_em_fetch/score_calibration）已改为
+# 直接 import em_core（rebind 本就打在 em_core 命名空间），不再经 em_fetch 转发。
 from em_core import (  # noqa: F401
     RateLimitError,
-    secid_of, to_ts_code,
+    secid_of,
     _TS_DEBUG, _STATS,
-    ts_call, get,
-    yi, pct, _yoy, yoy_text, _ttm_cutoff,
+    yi, pct, yoy_text,
 )
 
 # Windows 控制台默认 GBK 编码，打印中文/货币符号会 UnicodeEncodeError —— 强制 UTF-8
@@ -67,10 +67,10 @@ _CAPTURE: dict = {}
 # ---------------- 取数函数族 re-export（四个取数块，v4.10.3 Step 3 起） ----------------
 # 从取数块 re-export 供宿主函数体与 score_calibration（import em_fetch as em 按名访问）
 # 实际消费的名字，历史上面向"全量门面"的纯挂名已收窄；em_fetch 是唯一汇总出口。
-# 传输函数不是内部解析路径：宿主一律走 _C.<name>（迟绑定），em_fetch.ts_call 只是 em_core
-# 的兼容别名——rebind 目标是 em_core 命名空间（约定见 em_core.py 文件头）。
+# v5.8.3 收敛：_em_quote 仅测试消费（em_market 内裸用不受影响），测试已改为直接
+# import em_market，此处不再转发。
 from em_market import (  # noqa: E402,F401
-    _em_quote, kline_url,
+    kline_url,
     fetch_pe_pb_band, fetch_quote, fetch_kline_monthly, fetch_timing_material,
 )
 from em_finance import (  # noqa: E402,F401
@@ -222,6 +222,57 @@ def _amt(v):
     return f"{v:.2f}" if isinstance(v, (int, float)) else "—"
 
 
+def _render_period_track(track: dict, full: bool) -> list:
+    """period_track 照抄行渲染镜像（v5.8.3 提取：_sec_e3 A股段与 _sec_e3_hk 港股段渲染同
+    一个 dict 形状，差异仅在港股无扣非/经营现金流/单季拆分/营收带/src 前移标记/完成度分母）。
+    full=True=A股全字段；full=False=港股降级口径（进度行尾缀「港股季报口径未获取」、占比带
+    只出净利、无样本不足兜底、无完成度分母行）。各节取数失败的降级提示文案留调用点。"""
+    lines = []
+    if full:
+        src_tag = ("；本期数据源=东财F10（tushare 尚未收录本期，披露日窗口整章前移，"
+                   "tushare 更新后重跑即回归主源）" if track.get("src") == "em_f10" else "")
+        head = f"报告期进度（period_track 照抄行——第 3 章数据源，禁手估{src_tag}）: "
+        body = (f"{track['period']}累计 营收{_amt(track['rev'])}亿(同比{yoy_text(track['rev_yoy'])}) ｜ "
+                f"归母净利{_amt(track['np'])}亿(同比{yoy_text(track['np_yoy'])}) ｜ "
+                f"扣非{_amt(track['np_dedt'])}亿(同比{yoy_text(track['np_dedt_yoy'])}) ｜ "
+                f"经营现金流{_amt(track['ocf'])}亿(同比{yoy_text(track['ocf_yoy'])}) ｜ "
+                f"毛利率{pct(track['gm'])}（毛利率供 4.4 归因照抄，不进第 3 章）")
+    else:
+        head = "报告期进度（period_track 照抄行——第 3 章数据源，禁手估；港股口径）: "
+        body = (f"{track['period']}累计 营收{_amt(track['rev'])}亿"
+                f"(同比{yoy_text(track['rev_yoy'])}) ｜ 归母净利{_amt(track['np'])}亿"
+                f"(同比{yoy_text(track['np_yoy'])}) ｜ 扣非/经营现金流/单季拆分："
+                f"港股季报口径未获取")
+    lines.append(head + body + "\n")
+    if full and track.get("sq_label"):
+        lines.append(f"单季拆分: {track['sq_label']} 营收{_amt(track['sq_rev'])}亿 / "
+                     f"净利{_amt(track['sq_np'])}亿 / 扣非{_amt(track.get('sq_dedt'))}亿 / "
+                     f"经营现金流{_amt(track.get('sq_ocf'))}亿 vs {track['sq_prev_label']} "
+                     f"营收{_amt(track['sq_prev_rev'])}亿 / 净利{_amt(track['sq_prev_np'])}亿 / "
+                     f"扣非{_amt(track.get('sq_prev_dedt'))}亿 / "
+                     f"经营现金流{_amt(track.get('sq_prev_ocf'))}亿"
+                     f"（单季同比 营收{yoy_text(track['sq_rev_yoy'])} / "
+                     f"净利{yoy_text(track['sq_np_yoy'])} / "
+                     f"扣非{yoy_text(track.get('sq_dedt_yoy'))} / "
+                     f"经营现金流{yoy_text(track.get('sq_ocf_yoy'))}）\n")
+    if track.get("band_np") or track.get("band_rev"):
+        yrs = "/".join(str(y) for y in track["band_years"])
+        bnp = f"{track['band_np'][0]}%~{track['band_np'][1]}%" if track.get("band_np") else "—"
+        if full:
+            brev = (f"{track['band_rev'][0]}%~{track['band_rev'][1]}%"
+                    if track.get("band_rev") else "—")
+            lines.append(f"季节性占比带（近三年同期累计÷全年，{yrs}）: 净利 {bnp} ｜ 营收 {brev}\n")
+        else:
+            lines.append(f"季节性占比带（近三年同期累计÷全年，{yrs}）: 净利 {bnp}\n")
+    elif full:
+        lines.append("季节性占比带: 样本不足（近三年同期/全年序列缺），第 3 章判词走「无法判定」口径\n")
+    if full:
+        lines.append("完成度分母：公司经营目标（年报「经营计划」段，手工查证填 period_track.goal_*，"
+                     "未披露标 null）＋卖方一致预期（E5 有覆盖时已落盘 consensus_np，"
+                     "无覆盖标未披露）——两者并列，缺一标「未披露」\n")
+    return lines
+
+
 def _sec_e3_hk(pure: str) -> list:
     """E3 财务年表段（港股分支）。"""
     out = []
@@ -241,17 +292,7 @@ def _sec_e3_hk(pure: str) -> list:
         hk_track = fetch_hk_period_track(pure)
         if hk_track:
             _CAPTURE["period_track"] = hk_track
-
-            out.append(f"报告期进度（period_track 照抄行——第 3 章数据源，禁手估；港股口径）: "
-                       f"{hk_track['period']}累计 营收{_amt(hk_track['rev'])}亿"
-                       f"(同比{yoy_text(hk_track['rev_yoy'])}) ｜ 归母净利{_amt(hk_track['np'])}亿"
-                       f"(同比{yoy_text(hk_track['np_yoy'])}) ｜ 扣非/经营现金流/单季拆分："
-                       f"港股季报口径未获取\n")
-            if hk_track.get("band_np") or hk_track.get("band_rev"):
-                yrs = "/".join(str(y) for y in hk_track["band_years"])
-                bnp = (f"{hk_track['band_np'][0]}%~{hk_track['band_np'][1]}%"
-                       if hk_track.get("band_np") else "—")
-                out.append(f"季节性占比带（近三年同期累计÷全年，{yrs}）: 净利 {bnp}\n")
+            out.extend(_render_period_track(hk_track, False))
         else:
             out.append("报告期进度: [港股季报口径未获取（tushare hk_income 无数据），"
                        "请降级：妙想 MCP mx_hk_finance_data 直查并标注路径；第 3 章不得编造]\n")
@@ -292,36 +333,7 @@ def _sec_e3(pure: str, secucode: str) -> tuple:
     track = fetch_period_track(pure, secucode)
     if track:
         _CAPTURE["period_track"] = track
-
-        src_tag = ("；本期数据源=东财F10（tushare 尚未收录本期，披露日窗口整章前移，"
-                   "tushare 更新后重跑即回归主源）" if track.get("src") == "em_f10" else "")
-        out.append(f"报告期进度（period_track 照抄行——第 3 章数据源，禁手估{src_tag}）: "
-                   f"{track['period']}累计 营收{_amt(track['rev'])}亿(同比{yoy_text(track['rev_yoy'])}) ｜ "
-                   f"归母净利{_amt(track['np'])}亿(同比{yoy_text(track['np_yoy'])}) ｜ "
-                   f"扣非{_amt(track['np_dedt'])}亿(同比{yoy_text(track['np_dedt_yoy'])}) ｜ "
-                   f"经营现金流{_amt(track['ocf'])}亿(同比{yoy_text(track['ocf_yoy'])}) ｜ "
-                   f"毛利率{pct(track['gm'])}（毛利率供 4.4 归因照抄，不进第 3 章）\n")
-        if track.get("sq_label"):
-            out.append(f"单季拆分: {track['sq_label']} 营收{_amt(track['sq_rev'])}亿 / "
-                       f"净利{_amt(track['sq_np'])}亿 / 扣非{_amt(track.get('sq_dedt'))}亿 / "
-                       f"经营现金流{_amt(track.get('sq_ocf'))}亿 vs {track['sq_prev_label']} "
-                       f"营收{_amt(track['sq_prev_rev'])}亿 / 净利{_amt(track['sq_prev_np'])}亿 / "
-                       f"扣非{_amt(track.get('sq_prev_dedt'))}亿 / "
-                       f"经营现金流{_amt(track.get('sq_prev_ocf'))}亿"
-                       f"（单季同比 营收{yoy_text(track['sq_rev_yoy'])} / "
-                       f"净利{yoy_text(track['sq_np_yoy'])} / "
-                       f"扣非{yoy_text(track.get('sq_dedt_yoy'))} / "
-                       f"经营现金流{yoy_text(track.get('sq_ocf_yoy'))}）\n")
-        if track.get("band_np") or track.get("band_rev"):
-            yrs = "/".join(str(y) for y in track["band_years"])
-            bnp = f"{track['band_np'][0]}%~{track['band_np'][1]}%" if track.get("band_np") else "—"
-            brev = f"{track['band_rev'][0]}%~{track['band_rev'][1]}%" if track.get("band_rev") else "—"
-            out.append(f"季节性占比带（近三年同期累计÷全年，{yrs}）: 净利 {bnp} ｜ 营收 {brev}\n")
-        else:
-            out.append("季节性占比带: 样本不足（近三年同期/全年序列缺），第 3 章判词走「无法判定」口径\n")
-        out.append("完成度分母：公司经营目标（年报「经营计划」段，手工查证填 period_track.goal_*，"
-                   "未披露标 null）＋卖方一致预期（E5 有覆盖时已落盘 consensus_np，"
-                   "无覆盖标未披露）——两者并列，缺一标「未披露」\n")
+        out.extend(_render_period_track(track, True))
     else:
         out.append("报告期进度: [未获取到（tushare 与东财 F10 均空），请降级：妙想 MCP "
                    "mx_ashare_finance_data 直查最新报告期四值并标注路径；第 3 章不得编造]\n")
@@ -446,7 +458,8 @@ def _sec_e4(pure: str, is_hk: bool) -> list:
             out.append("")
         elif is_hk:
             out.append("## E4 股东户数\n[港股不支持，跳过]\n")
-        elif not h:
+        else:
+            # v5.8.3：原 elif not h 恒真（h falsy 已排除于前两分支），收敛为 else
             # v4.11.1（审核 D6）：A股户数全空时补降级提示（对齐 E3/E5/E6/治理段纪律，
             # 筹码面是时机分 67% 权重的核心输入，缺席必须显式标注）
             out.append("## E4 股东户数\n[未获取到股东户数数据，请降级：妙想 MCP "
@@ -551,23 +564,13 @@ def _sec_e5(pure: str, is_hk: bool) -> list:
                     if slot["eps"]:
                         line += f" EPS均值{sum(slot['eps'])/len(slot['eps']):.2f}"
                     lines.append(line)
-            # v4.11.1（gap_plot 落地）：逐机构明细行——fill 的 gap_plot.street 照抄本行，
-            # 禁手估/禁编造机构名（同机构 180 天内多份已去重取最新；np 单位亿元）
-            for yr in sorted(c.get("detail") or {}):
-                det = c["detail"][yr]
-                seg = "·".join(f"{d['org']}{d['np']:g}({d['date'][4:6]}-{d['date'][6:8]})"
-                               for d in det[:20])
-                # 审计 P2-3：截断时家数声明与行内条数不得矛盾
-                cnt_note = f"前 20 家/共 {len(det)} 家" if len(det) > 20 else f"{len(det)} 家"
-                lines.append(f"{yr}E 净利明细（gap_plot 照抄行，{cnt_note}，"
-                             f"按值降序）: {seg}")
-            if c.get("aim_detail"):
-                det = c["aim_detail"]
-                seg = "·".join(f"{d['org']}{d['tp']:g}({d['date'][4:6]}-{d['date'][6:8]})"
-                               for d in det[:20])
-                cnt_note = f"前 20 家/共 {len(det)} 家" if len(det) > 20 else f"{len(det)} 家"
-                lines.append(f"目标价明细（gap_plot 照抄行，{cnt_note}，"
-                             f"(研报下限+上限)/2）: {seg}")
+            # v4.11.1（gap_plot 落地）：逐机构明细行 + 目标价明细行——fill 的 gap_plot.street
+            # 照抄本行，禁手估/禁编造机构名（同机构 180 天内多份已去重取最新；np 单位亿元）。
+            # v5.8.3：截断/家数声明/格式化已下沉 fetch_consensus 渲染就绪键（detail_lines/
+            # aim_line），本段只拼接
+            lines.extend(c.get("detail_lines") or [])
+            if c.get("aim_line"):
+                lines.append(c["aim_line"])
             if c.get("aim"):
                 lines.append(f"目标价区间: {c['aim'][0]:.1f}-{c['aim'][1]:.1f}元")
             if c.get("ratings"):
@@ -575,45 +578,20 @@ def _sec_e5(pure: str, is_hk: bool) -> list:
                                                       sorted(c["ratings"].items(), key=lambda x: -x[1])))
             # v5.6.0（gap_history 落地）：同一券商首末两份研报对比行——fill 的 gap_history.rows
             # 照抄本行（np 仅同预测年度首末对比、tp 为研报区间中值首末、评级仅记变化）；
-            # 并落盘 _CAPTURE["gap_history"] 供 render 对账（防伪链同 consensus_np 款）
+            # 并落盘 _CAPTURE["gap_history"] 供 render 对账（防伪链同 consensus_np 款）。
+            # v5.8.0：目标价研报清单一并落盘（无同券商可比两份时的面板降级数据源）；
+            # v5.8.1：清单此前只落盘不进摘要行，填报方不可见 → 漏抄断链（宁德 300750 复盘
+            # 2026-10-21 实证）；fill 须照抄落盘同名子键、禁手填。
+            # v5.8.3：对比行/清单行的截断/去重/计数/格式化已下沉 fetch_consensus 渲染就绪键
+            # （history_line/tp_reports_line），本段只拼接；落盘截断口径不变
             hist = c.get("history") or []
             if hist:
-                segs = []
-                for h in hist[:12]:
-                    seg = h["org"]
-                    if "np_from" in h:
-                        seg += (f" {h['yr']}E净利{h['np_from']:g}({h['d_from'][5:]})"
-                                f"→{h['np_to']:g}({h['d_to'][5:]})")
-                    if "tp_from" in h:
-                        seg += f"·目标价{h['tp_from']:g}→{h['tp_to']:g}"
-                    if "rating_from" in h:
-                        seg += f"·评级{h['rating_from']}→{h['rating_to']}"
-                    segs.append(seg)
-                cnt_note = f"前 12 家/共 {len(hist)} 家" if len(hist) > 12 else f"{len(hist)} 家"
-                lines.append(f"券商态度变化（gap_history 照抄行，{cnt_note}，"
-                             f"同一券商近180天首末两份）: " + "；".join(segs))
+                lines.append(c["history_line"])
                 gh_cap = {"rows": hist[:12]}
                 if c.get("tp_reports"):
-                    # v5.8.0：目标价研报清单一并落盘（无同券商可比两份时的面板降级数据源）
                     gh_cap["tp_reports"] = c["tp_reports"][:12]
-                    # v5.8.1：清单此前只落盘不进摘要行，填报方不可见 → 漏抄断链
-                    # （宁德 300750 复盘 2026-10-21 实证）；摘要行按 机构+目标价 去重列示，
-                    # fill 须照抄落盘同名子键、禁手填
-                    seen, uniq = set(), []
-                    for t in gh_cap["tp_reports"]:
-                        if not isinstance(t, dict) or t.get("tp") is None:
-                            continue
-                        k = (str(t.get("org") or "").strip(), t.get("tp"))
-                        if k not in seen:
-                            seen.add(k)
-                            uniq.append(t)
-                    tseg = "·".join(f"{t.get('org')}{t['tp']:g}"
-                                    f"({str(t.get('date') or '')[5:]})" for t in uniq[:8])
-                    if uniq:
-                        n_orgs = len({str(t.get("org") or "").strip() for t in uniq})
-                        lines.append(f"目标价研报清单（gap_history.tp_reports 照抄键，"
-                                     f"{n_orgs} 家/{len(gh_cap['tp_reports'])} 份，"
-                                     f"降级面板数据源）: {tseg}")
+                    if c.get("tp_reports_line"):
+                        lines.append(c["tp_reports_line"])
                 _CAPTURE["gap_history"] = gh_cap
             out.append("\n".join(lines) + "\n")
         elif c:

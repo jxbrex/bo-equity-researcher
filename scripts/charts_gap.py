@@ -112,8 +112,12 @@ def _gap_plot_a(dims: list, src_note: str = "") -> str:
     src_note 非空（fill 的 gap_plot.source_file 基名）= 港股调研落盘源，图下来源注注明
     调研纪要落盘核对（v5.5.1；v5.7.3 起不再外露本地文件名与内部数据源编号）。"""
     n = len(dims)
+    # 布局常数（v5.8.3 收拢：原散落于函数体各字面量，版式照 demo v3 定稿不动）：
+    # W=画布宽、TOP=顶缘留白、ROW=行距（行基线=ROW+ROW*i）、X0/X1=行轴域、
+    # LX=行标签列（右对齐）、RX=右列（本文相对一致偏离%）
+    W, TOP, ROW, X0, X1, LX, RX = 1000, 30, 70, 280, 840, 240, 880
     parts = ['<span class="section-tag">卖方分布 vs 本文假设 · 逐机构定位</span>',
-             _svg_open(1000, 30 + 70 * n, "市场预期差机构分布图")]
+             _svg_open(W, TOP + ROW * n, "市场预期差机构分布图")]
     # 图例行（v5.8.2 收敛为 _legend_row glyph 数据列表：圆点/菱形/纯文字项；起点 57、
     # xround=True，坐标与间距逐项反推自定稿手写值；行末「本文 vs 一致」为右列头，保留手写）
     nums = "".join(_GAP_CIRCLED[i] for i in range(n))
@@ -125,22 +129,22 @@ def _gap_plot_a(dims: list, src_note: str = "") -> str:
         ("一致预期（券商均值）", {"k": "diamond", "r": 6, "fill": _C_BLACK, "dx": 19, "gap": 7}),
         (f"行号 {nums} 对应图下附注 · 右列=本文相对一致偏离", {"k": "none", "dx": 0}),
     ], 57, xround=True, ty=16)
-    parts.append(f'<text x="880" y="32" font-size="11" fill="{_C_LABEL}">本文 vs 一致</text>')
+    parts.append(f'<text x="{RX}" y="32" font-size="11" fill="{_C_LABEL}">本文 vs 一致</text>')
     for i, d in enumerate(dims):
-        ay = 70 + 70 * i
+        ay = ROW + ROW * i
         pt = d["pt"]
         vals = [s["v"] for s in d["street"]] + [d["ours"], d["cons"]]
         lo, hi, step = _gap_axis(min(vals), max(vals))
-        X = _lin_map(lo, hi, 280, 840)
+        X = _lin_map(lo, hi, X0, X1)
         xc, x_ours = X(d["cons"]), X(d["ours"])
-        parts.append(f'<text x="240" y="{ay - 26}" text-anchor="end" font-size="12.5" font-weight="600" '
+        parts.append(f'<text x="{LX}" y="{ay - 26}" text-anchor="end" font-size="12.5" font-weight="600" '
                      f'fill="{_C_INK}">{_GAP_CIRCLED[i]} {_esc(d["name"])}</text>')
         cover = d["cover"] or (f'{len(d["street"])} 家覆盖' if d["street"] else "未见逐机构明细")
         if i == 0:
             cover += " · 近 180 天研报"
-        parts.append(f'<text x="240" y="{ay - 12}" text-anchor="end" font-size="10.5" '
+        parts.append(f'<text x="{LX}" y="{ay - 12}" text-anchor="end" font-size="10.5" '
                      f'fill="{_C_LABEL}">{_esc(cover)}</text>')
-        parts.append(f'<line x1="280" y1="{ay}" x2="840" y2="{ay}" stroke="{_C_AXIS}" stroke-width="1.2"/>')
+        parts.append(f'<line x1="{X0}" y1="{ay}" x2="{X1}" y2="{ay}" stroke="{_C_AXIS}" stroke-width="1.2"/>')
         # 刻度：先省略与 ◆ 过近（≤30px）者（等值刻度由 ◆ 标签承载）
         ticks = [t for t in _gap_ticks(lo, hi, step) if abs(X(t) - xc) > 30]
 
@@ -227,7 +231,7 @@ def _gap_plot_a(dims: list, src_note: str = "") -> str:
         parts.append(f'<text x="{_px(cons_x)}" y="{ay + 22}"{anchor_attr} font-size="10.5" '
                      f'fill="{_C_STONE}">{_esc(cons_label)}</text>')
         pct = (d["ours"] / d["cons"] - 1) * 100
-        parts.append(f'<text x="880" y="{_px(ay + 4.5)}" font-size="13" font-weight="700" '
+        parts.append(f'<text x="{RX}" y="{_px(ay + 4.5)}" font-size="13" font-weight="700" '
                      f'fill="{_C_INK}">{pct:+.1f}%</text>')
     parts.append(_svg_close())
     parts.append(_chart_source(
@@ -246,42 +250,47 @@ def _gap_plot_b(dims: list) -> str:
     """B 档兜底形态：零轴偏离哑铃（street 整体缺失时）——灰点=卖方一致预期（固定零轴），蓝点=本文，
     棒长∝相对偏离 %（定域 -10%~+15%，跨行可比）；reverse 维度行注/图源标「反推」口径。"""
     n = len(dims)
-    y2 = 62 * n + 38
-    X = _lin_map(-10, 15, 290, 850)
+    # 布局常数（v5.8.3 收拢：原散落于函数体各字面量）：W=画布宽、ROW=行距、ROW0=行起点、
+    # BOT=底缘留白、DOM=定域（%，截断同此）、X0/X1=轴域、TY=网格顶 y、LG=图例起点 x、
+    # LX=行标签列（右对齐）、RX=右列（相对偏离%）
+    W, ROW, ROW0, BOT, DOM = 1000, 62, 71, 38, (-10, 15)
+    X0, X1, TY, LG, LX, RX = 290, 850, 30, 62, 255, 872
+    y2 = ROW * n + BOT
+    X = _lin_map(DOM[0], DOM[1], X0, X1)
     zx = X(0)
     has_rev = any(d["rev"] for d in dims)
     # 审计 P1-3：tag 的「（反推口径）」只在确有 reverse 行时输出（纯 B 档不误标）
     tag = "卖方一致预期 vs 本文假设 · 偏离拆解（反推口径）" if has_rev \
         else "卖方一致预期 vs 本文假设 · 偏离拆解"
     parts = [f'<span class="section-tag">{tag}</span>',
-             _svg_open(1000, y2 + 26, "市场预期差哑铃图（B 档）")]
+             _svg_open(W, y2 + 26, "市场预期差哑铃图（B 档）")]
     # 图例行（v5.8.2 收敛为 _legend_row glyph 数据列表，间距按手写坐标反推；末项为纯文字说明）
     _legend_row(parts, [
         ("卖方一致预期（零轴）", {"k": "dot", "r": 6, "fill": _C_SAND, "dx": 12, "gap": 38}),
         ("本文假设", {"k": "dot", "r": 7, "fill": _C_BLUE, "stroke": _C_PAPER, "sw2": 2,
                       "dx": 13, "gap": 51}),
         ("蓝点偏右=本文高于卖方，偏左=低于；棒长 ∝ 相对偏离幅度，跨行可比", {"k": "none", "dx": 0}),
-    ], 62, xround=True, ty=16)
+    ], LG, xround=True, ty=16)
     # 定域网格刻度（v5.8.2 收编 _vgrid_ticks；预格式 -10% 等经 (值, 文本) 元组传入）；
     # 零轴线是 AXIS 色 700 字重的轴件（非网格），保留手写
     _vgrid_ticks(parts, X, ((-10, "-10%"), (-5, "-5%"), (5, "+5%"), (10, "+10%"), (15, "+15%")),
-                 30, y2, y2 + 16, xfmt=_px)
-    parts.append(f'<line x1="{_px(zx)}" y1="30" x2="{_px(zx)}" y2="{y2}" stroke="{_C_AXIS}" stroke-width="1.6"/>'
+                 TY, y2, y2 + 16, xfmt=_px)
+    parts.append(f'<line x1="{_px(zx)}" y1="{TY}" x2="{_px(zx)}" y2="{y2}" stroke="{_C_AXIS}" stroke-width="1.6"/>'
                  f'<text x="{_px(zx)}" y="{y2 + 16}" text-anchor="middle" font-size="11" font-weight="700" '
                  f'fill="{_C_STONE}">0</text>')
-    parts.append(f'<text x="872" y="34" font-size="11" fill="{_C_LABEL}">相对偏离</text>')
+    parts.append(f'<text x="{RX}" y="34" font-size="11" fill="{_C_LABEL}">相对偏离</text>')
     clamped_any = False
     for i, d in enumerate(dims):
-        cy = 71 + 62 * i
+        cy = ROW0 + ROW * i
         pt = d["pt"]
         pct = (d["ours"] / d["cons"] - 1) * 100
         # 审计 P2-1：偏离超出定域（-10%~+15%）时点位被夹在边界——虚线棒+空心点作截断记号，
         # 数值仍以右列为准（点位视觉不得撒谎）
-        clamped = pct < -10 or pct > 15
+        clamped = pct < DOM[0] or pct > DOM[1]
         if clamped:
             clamped_any = True
         suffix = "%" if pt else ""
-        parts.append(f'<text x="255" y="{cy - 8}" text-anchor="end" font-size="12.5" font-weight="600" '
+        parts.append(f'<text x="{LX}" y="{cy - 8}" text-anchor="end" font-size="12.5" font-weight="600" '
                      f'fill="{_C_INK}">{_GAP_CIRCLED[i]} {_esc(d["name"])}</text>')
         extra = []
         if pt:
@@ -290,12 +299,12 @@ def _gap_plot_b(dims: list) -> str:
             extra.append("反推")
         note = (f'卖方 {_gap_fmt(d["cons"], pt)}{suffix} → 本文 {_gap_fmt(d["ours"], pt)}{suffix}'
                 + (f'（{"，".join(extra)}）' if extra else ""))
-        parts.append(f'<text x="255" y="{cy + 8}" text-anchor="end" font-size="10.5" '
+        parts.append(f'<text x="{LX}" y="{cy + 8}" text-anchor="end" font-size="10.5" '
                      f'fill="{_C_LABEL}">{_esc(note)}</text>')
-        dx = X(max(-10, min(15, round(pct, 1))))   # 定位与右列显示同值（所见即所量）
+        dx = X(max(DOM[0], min(DOM[1], round(pct, 1))))   # 定位与右列显示同值（所见即所量）
         dash = ' stroke-dasharray="4 3"' if clamped else ""
         parts.append(_arrow_dumbbell(zx, dx, cy, _C_BLUE, _px, dash=dash, hollow=clamped))
-        parts.append(f'<text x="872" y="{_px(cy + 4.5)}" font-size="13" font-weight="700" '
+        parts.append(f'<text x="{RX}" y="{_px(cy + 4.5)}" font-size="13" font-weight="700" '
                      f'fill="{_C_INK}">{pct:+.1f}%</text>')
     parts.append(_svg_close())
     note = ('灰点=卖方一致预期（固定零轴），'
@@ -414,11 +423,15 @@ def build_gap_history(fill: dict) -> str:
     np_title = (f"① {next(iter(yrs))}E 归母净利预测（亿元）· 同预测年度对比" if len(yrs) == 1
                 else "① 归母净利预测（亿元）· 各行同预测年度首末对比")
     n = len(rows)
+    # 布局常数（v5.8.3 收拢：原散落于函数体各字面量）：W=画布宽、NP0/NP1=左（净利）面板轴域、
+    # TP0/TP1=右（目标价）面板轴域、OX=机构列（右对齐）、RX=右列（首末幅度/评级变化）、
+    # TY=面板标题行 y、GY=面板网格顶 y、LG=图例起点 x
+    W, NP0, NP1, TP0, TP1, OX, RX, TY, GY, LG = 1000, 210, 470, 600, 860, 180, 895, 44, 56, 30
     cy0, step = 74, 32
     cy_last = cy0 + step * (n - 1)
     H = cy_last + 40 + (n_extra_lines * 15 + 6 if n_extra_lines else 0)
     parts = ['<span class="section-tag">券商态度变化 · 同一券商首末两份研报对比（近 180 天）</span>',
-             _svg_open(1000, H, "券商态度变化图")]
+             _svg_open(W, H, "券商态度变化图")]
     # 图例（v5.8.2 收敛为 _legend_row glyph 数据列表；「持平」ring 双圈字形与 _dumbbell
     # 持平记号同一 _flat_ring 参数，此前两处手写）
     _legend_row(parts, [
@@ -428,37 +441,37 @@ def build_gap_history(fill: dict) -> str:
         ("持平", {"k": "ring", "r_in": 4, "fill_in": _C_SAND, "r_out": 6.5,
                   "stroke": _C_BLUE, "sw2": 1.5, "dx": 12, "gap": 24}),
         ("箭头指向最新值 · 右列=首末幅度与评级变化", {"k": "none", "dx": 0}),
-    ], 30, fs=10.5, xround=True, ty=14)
+    ], LG, fs=10.5, xround=True, ty=14)
     tp_title = ("② 目标价（元）· 区间中值" if has_tp
                 else "② 目标价（元）· 单份研报列示（无同券商两份可比）" if tp_map
                 else "② 目标价：近 180 天无两份可比研报")
-    parts.append(f'<text x="210" y="44" font-size="12" font-weight="700" fill="{_C_BLACK}">'
+    parts.append(f'<text x="{NP0}" y="{TY}" font-size="12" font-weight="700" fill="{_C_BLACK}">'
                  f'{_esc(np_title) if has_np else "① 归母净利预测：无同机构同年度可比研报"}</text>')
-    parts.append(f'<text x="600" y="44" font-size="12" font-weight="700" fill="{_C_BLACK}">'
+    parts.append(f'<text x="{TP0}" y="{TY}" font-size="12" font-weight="700" fill="{_C_BLACK}">'
                  f'{tp_title}</text>')
-    parts.append(f'<text x="895" y="44" font-size="10.5" fill="{_C_LABEL}">首末变化</text>')
+    parts.append(f'<text x="{RX}" y="{TY}" font-size="10.5" fill="{_C_LABEL}">首末变化</text>')
 
     panels = []   # (面板左 x0, 面板右 x1, 旧值键, 新值键, 值域 min, 值域 max)
     if has_np:
         vals = [v for r in rows if r["npf"] is not None for v in (r["npf"], r["npt"])]
-        panels.append((210, 470, "npf", "npt", min(vals), max(vals)))
+        panels.append((NP0, NP1, "npf", "npt", min(vals), max(vals)))
     if has_tp:
         vals = [v for r in rows if r["tpf"] is not None for v in (r["tpf"], r["tpt"])]
-        panels.append((600, 860, "tpf", "tpt", min(vals), max(vals)))
+        panels.append((TP0, TP1, "tpf", "tpt", min(vals), max(vals)))
     mappers = []
     for x0, x1, kf, kt, vlo, vhi in panels:
         lo, hi, st = _gap_axis(vlo, vhi)
         X = _lin_map(lo, hi, x0, x1)
         mappers.append((x0, kf, kt, X))
         # 面板网格刻度（v5.8.2 收编 _vgrid_ticks：_px 坐标去尾零 + _gap_fmt 数值 + 9.5 字号）
-        _vgrid_ticks(parts, X, _gap_ticks(lo, hi, st), 56, cy_last + 12, cy_last + 26,
+        _vgrid_ticks(parts, X, _gap_ticks(lo, hi, st), GY, cy_last + 12, cy_last + 26,
                      fs=9.5, xfmt=_px, vfmt=_gap_fmt)
     # v5.8.0 降级面板的单点价值轴（与哑铃面板同款刻度，各家目标价横向可比）
     tp_X = None
     if tp_dots:
         lo, hi, st = _gap_axis(min(v["tp"] for _, v in tp_dots), max(v["tp"] for _, v in tp_dots))
-        tp_X = _lin_map(lo, hi, 600, 860)
-        _vgrid_ticks(parts, tp_X, _gap_ticks(lo, hi, st), 56, cy_last + 12, cy_last + 26,
+        tp_X = _lin_map(lo, hi, TP0, TP1)
+        _vgrid_ticks(parts, tp_X, _gap_ticks(lo, hi, st), GY, cy_last + 12, cy_last + 26,
                      fs=9.5, xfmt=_px, vfmt=_gap_fmt)
 
     def _dumbbell(x0, kf, kt, X, r, cy):
@@ -492,10 +505,10 @@ def build_gap_history(fill: dict) -> str:
 
     for i, r in enumerate(rows):
         cy = cy0 + step * i
-        parts.append(f'<text x="180" y="{cy - 2}" text-anchor="end" font-size="11.5" '
+        parts.append(f'<text x="{OX}" y="{cy - 2}" text-anchor="end" font-size="11.5" '
                      f'font-weight="600" fill="{_C_INK}">{_esc(r["org"])}</text>')
         if r["d_from"] or r["d_to"]:
-            parts.append(f'<text x="180" y="{cy + 9}" text-anchor="end" font-size="9" '
+            parts.append(f'<text x="{OX}" y="{cy + 9}" text-anchor="end" font-size="9" '
                          f'fill="{_C_LABEL}">{_esc(r["d_from"])} → {_esc(r["d_to"])}</text>')
         for x0, kf, kt, X in mappers:
             parts.append(_dumbbell(x0, kf, kt, X, r, cy))
@@ -504,10 +517,10 @@ def build_gap_history(fill: dict) -> str:
         pct = " / ".join([f"{d * 100:+.1f}%" if d is not None else "—"
                           for d, has in ((dnp, has_np), (dtp, has_tp)) if has])
         ry = cy + (0 if (r["rf"] and r["rt"]) else 3.5)
-        parts.append(f'<text x="895" y="{_px(ry)}" font-size="11.5" font-weight="700" '
+        parts.append(f'<text x="{RX}" y="{_px(ry)}" font-size="11.5" font-weight="700" '
                      f'fill="{_C_INK}">{pct}</text>')
         if r["rf"] and r["rt"]:
-            parts.append(f'<text x="895" y="{cy + 10}" font-size="9" fill="{_C_STONE}">'
+            parts.append(f'<text x="{RX}" y="{cy + 10}" font-size="9" fill="{_C_STONE}">'
                          f'评级 {_esc(r["rf"])}→{_esc(r["rt"])}</text>')
     # v5.8.0 降级面板：单份目标价点落在左面板机构共享行（数值轴同上，各行可比）；
     # 有目标价但不在左面板行的券商，右面板下缘文字补列（3 家一行，至多 2 行）
@@ -530,7 +543,7 @@ def build_gap_history(fill: dict) -> str:
             if not chunk:
                 break
             prefix = "另有目标价（无净利可比，补列）：" if li == 0 else ""
-            parts.append(f'<text x="600" y="{cy_last + 44 + li * 15}" font-size="9.5" '
+            parts.append(f'<text x="{TP0}" y="{cy_last + 44 + li * 15}" font-size="9.5" '
                          f'fill="{_C_LABEL}">{_esc(prefix + "；".join(chunk))}</text>')
     parts.append(_svg_close())
 

@@ -141,6 +141,73 @@ def build_pe_band(fill: dict) -> str:
     return "".join(parts)
 
 
+def _cycle_verdict(slots: list, pe_line: list, has_ohlc: bool) -> str:
+    """判词（v5.1.0 恒瑞反馈起；v5.1.3 迈瑞一轮反馈独立成条；v5.1.4 二轮反馈重写；
+    v5.8.3 热核审计：从 build_price_history 体内独立成函数，判词逻辑单源）：
+    数据罗列读不出结论 → 叙事主线三段式——①区间归因（人话结论 _quad_word：「杀估值的
+    下跌（业绩仍增）」这类）②当前位置（偏离/方位，全区间上方占比作稀缺性佐证）
+    ③归因切换推断：区间业绩方向（E=价÷PE 的 TTM 业绩方向）与近季相反时才给结论句
+    （增→降「业绩由增转弱——均线拐头尚未得到业绩确认」/ 降→增「业绩由弱转强——双杀
+    出现拐点」）；方向相同不加，不硬凑。全部取自本图已渲染序列，确定性可复算；部件
+    数据不足自动缺席。v5.8.3：仅季K 形态出判词（下方守卫与原 has_ohlc and ma_pts
+    门槛逐条件等价），发丝退化路径无均线不出。"""
+    if not has_ohlc or len(slots) < 5:
+        return ""
+    ma_vals = [sum(slots[k]["c"] for k in range(i - 3, i + 1)) / 4
+               for i in range(3, len(slots))]
+    if ma_vals[-1] <= 0:
+        return ""
+    verdict = ""
+    dev = (slots[-1]["c"] / ma_vals[-1] - 1) * 100
+    sides = [1 if slots[i]["c"] >= mv else -1
+             for i, mv in zip(range(3, len(slots)), ma_vals)]
+    run = 1
+    for s in reversed(sides[:-1]):
+        if s == sides[-1]:
+            run += 1
+        else:
+            break
+    if abs(dev) < 3:
+        pos = f"最新月收贴近 4 季均线，偏离 {dev:+.1f}%"
+    else:
+        pos = f"最新月收{'低' if dev < 0 else '高'}于 4 季均线 {abs(dev):.1f}%"
+    side_s = "下" if sides[-1] < 0 else "上"
+    stint = (f"本季刚转入均线{side_s}方"
+             if run == 1 and len(sides) > 1 else f"连续 {run} 季收于均线{side_s}方")
+    m_up = sum(1 for s in sides if s > 0)
+    # ① 区间归因（首末季 PE 缺一即缺席，w_dir 记录区间业绩方向供③用）
+    w_dir = None
+    pe_first = pe_line[0][1] if pe_line else None
+    pe_lastw = next((v for _x, v, _a, _b in reversed(pe_line) if v is not None), None)
+    # v5.5.2 审计：首季收盘为 0（停牌脏数据）时除零崩整份渲染——分母非正即缺席本句
+    if (pe_first and pe_first > 0 and pe_lastw and len(slots) >= 2
+            and slots[0]["c"] > 0):
+        pcw = (slots[-1]["c"] / slots[0]["c"] - 1) * 100
+        ppew = (pe_lastw / pe_first - 1) * 100
+        dew = ((1 + pcw / 100) / (1 + ppew / 100) - 1) * 100
+        if abs(dew) >= 3:
+            w_dir = 1 if dew > 0 else -1
+        verdict = f"区间{_quad_word(dew, pcw)}：区间价 {pcw:+.0f}%、PE(TTM) {ppew:+.0f}%。"
+    # ② 当前位置（占比作位置稀缺性佐证）
+    verdict += f"当前{pos}，{stint}（全区间 {len(sides)} 季中 {m_up} 季收于上方）。"
+    # ③ 近季归因 + 归因切换推断（与区间业绩方向相反才下结论）
+    k = 4 if len(slots) >= 9 else 0
+    pe_now = pe_line[-1][1] if pe_line else None
+    pe_old = pe_line[-1 - k][1] if k and len(pe_line) > k else None
+    if k and pe_now and pe_old and pe_old > 0 and slots[-1 - k]["c"] > 0:
+        pc = (slots[-1]["c"] / slots[-1 - k]["c"] - 1) * 100
+        ppe = (pe_now / pe_old - 1) * 100
+        de = ((1 + pc / 100) / (1 + ppe / 100) - 1) * 100
+        verdict += f"近 {k} 季{_quad_word(de, pc)}（价 {pc:+.0f}%、PE {ppe:+.0f}%）"
+        n_dir = 1 if de >= 3 else (-1 if de <= -3 else 0)
+        if w_dir == 1 and n_dir == -1:
+            verdict += "，业绩由增转弱——均线拐头尚未得到业绩确认"
+        elif w_dir == -1 and n_dir == 1:
+            verdict += "，业绩由弱转强——双杀出现拐点"
+        verdict += "。"
+    return verdict
+
+
 def build_price_history(fill: dict) -> str:
     """11 周期规律·股价/PE 历史图（fill["price_history"] 可选字段，与 PE 历史带同源 E2 月线）：
     v4.11.0 起主形态=季K蜡烛（series 带 open/high/low/close 时——照抄 E2「全序列」行；按日历季度聚合：
@@ -154,6 +221,10 @@ def build_price_history(fill: dict) -> str:
     超限段平贴域顶、右缘标注「峰值 Nx →」，套 v4.8.1 pe_history 规则——扭亏初期净利极薄会冲出
     200x+ 把正常段压成平线，天齐 2026-03 204.6x 实证）。横轴按年 tick（带竖向浅网格线），
     末端最新值标注带药丸底色。概览→明细：垫在历史带之后、手写时段拆解之前。
+    v5.8.3 热核审计重构：三输入形态（全 OHLC/退化一字线/仅 close+pe）先归一化为统一
+    slots[] 中间表示（每槽=一个渲染单元：季K 一槽=一季、发丝一槽=一月），渲染路径单源化，
+    分支收缩到「聚合与否」一个决策点；判词独立成 _cycle_verdict()。重构输出经 30 变体
+    电池与重构前逐字节对照零漂移（artifacts/_v583_baseline/）。
     price_history: {"label":"近5年", "series":[{"m":"2021-09","open":..,"high":..,"low":..,"close":12.3,"pe":15.2}, ...]}
     （旧→新，月频；open/high/low 可省（回退发丝线）；有效点 <12 → 返回空串，静默跳过）"""
     ph = fill.get("price_history") or {}
@@ -182,11 +253,25 @@ def build_price_history(fill: dict) -> str:
     W, H, L, R, T, B = 1000, 240, 56, 64, 34, 36
     closes = [p["close"] for p in pts]
 
-    # 季度聚合（日历季度；开=季首月开、高/低=季内极值、收=季末月收）
+    # X 映射与月槽步长（v5.8.3 单源）：季K=月槽中心等距（蜡烛占槽），发丝=端点对齐（原契约）。
+    # 阶段底纹/亏损底纹/截断封口都按「月槽」消费 X，故 X 恒为月索引函数，与聚合形态无关
+    if has_ohlc:
+        slot = (W - L - R) / n
+        X = lambda i: L + (i + 0.5) * slot
+        step = slot
+    else:
+        X = lambda i: L + i / (n - 1) * (W - L - R)
+        step = (W - L - R) / (n - 1)
+
+    # v5.8.3 归一化中间表示：任何输入形态先规整成统一 slots[]（每槽=一个渲染单元），
+    # 渲染路径只剩一条，分支收缩到「聚合与否」一个决策点。槽字段——
+    #   x=槽中心；o/h/l/c=开高低收（发丝槽仅 c）；pe=槽 PE（季K=季末月值，v5.0 F 频率统一；
+    #   发丝=月值）；lo/hi=定域极值（季K=低/高、发丝=收盘）；i0/i1=月槽区间；nm=覆盖月数
     def _mi(m):   # "YYYY-MM" → (年, 月)；非法返回 None（该点自成一组，不崩链）
         return (int(m[:4]), int(m[5:7])) if len(m) >= 7 and m[:4].isdigit() and m[5:7].isdigit() else None
-    quarters = []
     if has_ohlc:
+        # 季度聚合（日历季度；开=季首月开、高/低=季内极值、收=季末月收）
+        slots = []
         i = 0
         while i < n:
             q0 = _mi(pts[i]["m"])
@@ -197,34 +282,21 @@ def build_price_history(fill: dict) -> str:
                     break
                 j += 1
             g = pts[i:j + 1]
-            quarters.append({"i0": i, "i1": j, "o": g[0]["o"], "h": max(x["h"] for x in g),
-                             "l": min(x["l"] for x in g), "c": g[-1]["close"]})
+            h, l = max(x["h"] for x in g), min(x["l"] for x in g)
+            slots.append({"x": X((i + j) / 2), "o": g[0]["o"], "h": h, "l": l,
+                          "c": g[-1]["close"], "pe": pts[j]["pe"], "lo": l, "hi": h,
+                          "i0": i, "i1": j, "nm": j - i + 1})
             i = j + 1
-
-    # X 映射：发丝模式端点对齐（原契约）；季K 模式月槽中心（蜡烛占槽）
-    if has_ohlc:
-        slot = (W - L - R) / n
-        X = lambda i: L + (i + 0.5) * slot
-        step = slot
     else:
-        X = lambda i: L + i / (n - 1) * (W - L - R)
-        step = (W - L - R) / (n - 1)
+        slots = [{"x": X(i), "c": p["close"], "pe": p["pe"], "lo": p["close"], "hi": p["close"],
+                  "i0": i, "i1": i, "nm": 1} for i, p in enumerate(pts)]
 
-    # v5.0（F 频率统一）：季K 分支 PE(TTM) 按季聚合——取每季末月值（与季度收盘口径一致），
-    # 点过季度槽中心（与蜡烛/4 季均线同位），缺 PE 的季记 None（断线分段沿用）；
-    # (x, pe, 月槽起, 月槽止) 四元组，右轴定标/截断/亏损期底纹/折线/末端标注同消费。
-    # 非季K 退化路径（月K 发丝）保持月频不动
-    if has_ohlc:
-        pe_line = [(X((q["i0"] + q["i1"]) / 2), pts[q["i1"]]["pe"], q["i0"], q["i1"])
-                   for q in quarters]
-    else:
-        pe_line = [(X(i), p["pe"], i, i) for i, p in enumerate(pts)]
+    # PE 序列 (x, pe, 月槽起, 月槽止) 四元组（v5.8.3 由 slots[] 单源派生，右轴定标/截断/
+    # 亏损期底纹/折线/末端标注同消费）；季K=季末月值过季度槽中心，退化路径仍逐月
+    pe_line = [(s["x"], s["pe"], s["i0"], s["i1"]) for s in slots]
 
-    if has_ohlc:
-        lo_c, hi_c = _pad_domain(min(q["l"] for q in quarters), max(q["h"] for q in quarters),
-                                 0.08, floor=0.0)
-    else:
-        lo_c, hi_c = _pad_domain(min(closes), max(closes), 0.08, floor=0.0)
+    lo_c, hi_c = _pad_domain(min(s["lo"] for s in slots), max(s["hi"] for s in slots),
+                             0.08, floor=0.0)
     Yc = _lin_map(lo_c, hi_c, H - B, T)
     pe_cap = None
     pes = sorted(v for _, v, _, _ in pe_line if v is not None)
@@ -246,16 +318,12 @@ def build_price_history(fill: dict) -> str:
 
     label = str(ph.get("label") or "").strip()
     cur = str(fill.get("currency") or "元")
-    # 趋势均线预计算（v4.11.1，海油反馈）：季K=季度收盘 MA4 过季度槽中心、发丝=月收盘 MA12。
-    # 热核审计 P2-2：图例/source/折线同一门槛——≥2 点才成线（quarters≥5 / n≥13），
-    # 否则图例说了谎却没有线（单点 moveto-only path 不可见）
-    if has_ohlc:
-        ma_pts = [(X((quarters[i]["i0"] + quarters[i]["i1"]) / 2),
-                   Yc(sum(quarters[k]["c"] for k in range(i - 3, i + 1)) / 4))
-                  for i in range(3, len(quarters))] if len(quarters) >= 5 else []
-    else:
-        ma_pts = [(X(i), Yc(sum(closes[i - 11:i + 1]) / 12))
-                  for i in range(11, n)] if n >= 13 else []
+    # 趋势均线预计算（v4.11.1，海油反馈；v5.8.3 归并为单循环，窗口/门槛按形态取值）：
+    # 季K=季度收盘 MA4、发丝=月收盘 MA12；折线/图例/source 同一门槛——≥2 点才成线
+    # （季数 ≥5 / 月数 ≥13，否则图例说了谎却没有线）；均线值域含于价格域内，不影响定标
+    _win = 4 if has_ohlc else 12
+    ma_pts = [(slots[i]["x"], Yc(sum(slots[k]["c"] for k in range(i - _win + 1, i + 1)) / _win))
+              for i in range(_win - 1, len(slots))] if len(slots) >= (5 if has_ohlc else 13) else []
     # PE 序列同源 E2 月线（价格×股本÷TTM净利），恒为 PE(TTM) 口径，不随 metric_label 换标签
     tag = f'股价{"季K " if has_ohlc else ""}与 PE(TTM) 历史{("（" + _esc(label) + "）") if label else ""}'
     parts = [f'<span class="section-tag">{tag}</span>',
@@ -285,7 +353,7 @@ def build_price_history(fill: dict) -> str:
             if e_ym < ms_all[0] or s_ym > ms_all[-1]:
                 continue                      # 整段在序列外
             i0 = min(max(bisect_left(ms_all, s_ym), 0), n - 1)
-            i1 = min(bisect_right(ms_all, e_ym) - 1, n - 1)
+            i1 = min(max(bisect_right(ms_all, e_ym) - 1, 0), n - 1)
             x0 = max(X(i0) - step / 2, L)
             x1 = min(X(i1) + step / 2, W - R)
             if x1 <= x0:
@@ -390,22 +458,21 @@ def build_price_history(fill: dict) -> str:
                          f'fill="{_C_LABEL}">{y}</text>')
     parts.append(f'<line x1="{L}" y1="{H - B}" x2="{W - R}" y2="{H - B}" stroke="{_C_AXIS}" stroke-width="1.2"/>')
     if has_ohlc:
-        # 季K蜡烛：红涨绿跌（仅股价方向用色，v4.9 方向色约定）
-        for q in quarters:
-            cx = X((q["i0"] + q["i1"]) / 2)
-            bw = min(step * (q["i1"] - q["i0"] + 1) * 0.55, max(26, step * 2))
-            col = _C_RED if q["c"] > q["o"] else (_C_GREEN if q["c"] < q["o"] else _C_LABEL)
-            parts.append(f'<line x1="{cx:.1f}" y1="{Yc(q["h"]):.1f}" x2="{cx:.1f}" y2="{Yc(q["l"]):.1f}" '
+        # 季K蜡烛（v5.8.3 改由 slots 单循环渲染）：红涨绿跌（仅股价方向用色，v4.9 方向色约定）
+        for s in slots:
+            bw = min(step * s["nm"] * 0.55, max(26, step * 2))
+            col = _C_RED if s["c"] > s["o"] else (_C_GREEN if s["c"] < s["o"] else _C_LABEL)
+            parts.append(f'<line x1="{s["x"]:.1f}" y1="{Yc(s["h"]):.1f}" x2="{s["x"]:.1f}" y2="{Yc(s["l"]):.1f}" '
                          f'stroke="{col}" stroke-width="1.2"/>')
-            y1, y2 = Yc(max(q["o"], q["c"])), Yc(min(q["o"], q["c"]))
-            parts.append(f'<rect x="{cx - bw / 2:.1f}" y="{y1:.1f}" width="{bw:.1f}" '
+            y1, y2 = Yc(max(s["o"], s["c"])), Yc(min(s["o"], s["c"]))
+            parts.append(f'<rect x="{s["x"] - bw / 2:.1f}" y="{y1:.1f}" width="{bw:.1f}" '
                          f'height="{max(y2 - y1, 1):.1f}" fill="{col}"/>')
     else:
         # 股价发丝线（v4.8.2：线下浅沙色面积填充，发丝 1.3→1.8）
-        path = "M" + " L".join(f"{X(i):.1f},{Yc(p['close']):.1f}" for i, p in enumerate(pts))
+        path = "M" + " L".join(f"{s['x']:.1f},{Yc(s['c']):.1f}" for s in slots)
         parts.append(f'<path d="{path} L{X(n - 1):.1f},{H - B} L{L},{H - B} Z" fill="{_C_TRACK}" stroke="none"/>')
         parts.append(f'<path d="{path}" fill="none" stroke="{_C_INK}" stroke-width="1.8"/>')
-    # 趋势均线（v4.11.1）：折线/图例/source 同门槛（≥2 点），预计算见 legend 区上方
+    # 趋势均线（v4.11.1）：折线/图例/source 同门槛（≥2 点），预计算见上方
     if ma_pts:
         parts.append('<path d="M' + " L".join(f"{x:.1f},{y:.1f}" for x, y in ma_pts)
                      + f'" fill="none" stroke="{_C_STONE}" stroke-width="1.6"/>')
@@ -434,69 +501,13 @@ def build_price_history(fill: dict) -> str:
             # 末端药丸 x 锚 PE 折线实际末点（F18）：季K 末季不完整（序列止于季中）时 X(n-1)
             # 与折线末点（季度槽中心）错位一个月槽；末季完整时 X(n-1) 即季末月槽，
             # 与股价药丸同列对齐。发丝路径逐月，末点 x 即折线末端（亏损尾巴不再漂到序列末）
-            tail_incomplete = has_ohlc and quarters[-1]["i1"] - quarters[-1]["i0"] < 2
+            tail_incomplete = has_ohlc and slots[-1]["i1"] - slots[-1]["i0"] < 2
             px = last[0] if (not has_ohlc or tail_incomplete) else X(n - 1)
             _pill(px - 6, Yp(last[1]) + 16, f'{_fmt(last[1])}x', _C_BLUE)
     parts.append(_svg_close())
-    # 判词（v5.1.0 恒瑞反馈起；v5.1.3 迈瑞一轮反馈独立成条；v5.1.4 二轮反馈重写）：
-    # 数据罗列读不出结论 → 叙事主线三段式——①区间归因（人话结论 _quad_word：「杀估值的
-    # 下跌（业绩仍增）」这类）②当前位置（偏离/方位，全区间上方占比作稀缺性佐证）
-    # ③归因切换推断：区间业绩方向（E=价÷PE 的 TTM 业绩方向）与近季相反时才给结论句
-    # （增→降「业绩由增转弱——均线拐头尚未得到业绩确认」/ 降→增「业绩由弱转强——双杀
-    # 出现拐点」）；方向相同不加，不硬凑。全部取自本图已渲染序列，确定性可复算；
-    # 部件数据不足自动缺席。
-    verdict = ""
-    if has_ohlc and ma_pts:
-        ma_vals = [sum(quarters[k]["c"] for k in range(i - 3, i + 1)) / 4
-                   for i in range(3, len(quarters))]
-        if ma_vals[-1] > 0:
-            dev = (quarters[-1]["c"] / ma_vals[-1] - 1) * 100
-            sides = [1 if quarters[i]["c"] >= mv else -1
-                     for i, mv in zip(range(3, len(quarters)), ma_vals)]
-            run = 1
-            for s in reversed(sides[:-1]):
-                if s == sides[-1]:
-                    run += 1
-                else:
-                    break
-            if abs(dev) < 3:
-                pos = f"最新月收贴近 4 季均线，偏离 {dev:+.1f}%"
-            else:
-                pos = f"最新月收{'低' if dev < 0 else '高'}于 4 季均线 {abs(dev):.1f}%"
-            side_s = "下" if sides[-1] < 0 else "上"
-            stint = (f"本季刚转入均线{side_s}方"
-                     if run == 1 and len(sides) > 1 else f"连续 {run} 季收于均线{side_s}方")
-            m_up = sum(1 for s in sides if s > 0)
-            # ① 区间归因（首末季 PE 缺一即缺席，w_dir 记录区间业绩方向供③用）
-            w_dir = None
-            pe_first = pe_line[0][1] if pe_line else None
-            pe_lastw = next((v for _x, v, _a, _b in reversed(pe_line) if v is not None), None)
-            # v5.5.2 审计：首季收盘为 0（停牌脏数据）时除零崩整份渲染——分母非正即缺席本句
-            if (pe_first and pe_first > 0 and pe_lastw and len(quarters) >= 2
-                    and quarters[0]["c"] > 0):
-                pcw = (quarters[-1]["c"] / quarters[0]["c"] - 1) * 100
-                ppew = (pe_lastw / pe_first - 1) * 100
-                dew = ((1 + pcw / 100) / (1 + ppew / 100) - 1) * 100
-                if abs(dew) >= 3:
-                    w_dir = 1 if dew > 0 else -1
-                verdict = f"区间{_quad_word(dew, pcw)}：区间价 {pcw:+.0f}%、PE(TTM) {ppew:+.0f}%。"
-            # ② 当前位置（占比作位置稀缺性佐证）
-            verdict += f"当前{pos}，{stint}（全区间 {len(sides)} 季中 {m_up} 季收于上方）。"
-            # ③ 近季归因 + 归因切换推断（与区间业绩方向相反才下结论）
-            k = 4 if len(quarters) >= 9 else 0
-            pe_now = pe_line[-1][1] if pe_line else None
-            pe_old = pe_line[-1 - k][1] if k and len(pe_line) > k else None
-            if k and pe_now and pe_old and pe_old > 0 and quarters[-1 - k]["c"] > 0:
-                pc = (quarters[-1]["c"] / quarters[-1 - k]["c"] - 1) * 100
-                ppe = (pe_now / pe_old - 1) * 100
-                de = ((1 + pc / 100) / (1 + ppe / 100) - 1) * 100
-                verdict += f"近 {k} 季{_quad_word(de, pc)}（价 {pc:+.0f}%、PE {ppe:+.0f}%）"
-                n_dir = 1 if de >= 3 else (-1 if de <= -3 else 0)
-                if w_dir == 1 and n_dir == -1:
-                    verdict += "，业绩由增转弱——均线拐头尚未得到业绩确认"
-                elif w_dir == -1 and n_dir == 1:
-                    verdict += "，业绩由弱转强——双杀出现拐点"
-                verdict += "。"
+    verdict = _cycle_verdict(slots, pe_line, has_ohlc)
+    # source 文案（v5.8.3 注释收口：截断句季K 版在「双轴」句后、月频版在其前，峰值/阶段
+    # 尾注位置两形态不同——v4.8.1/v5.1.4 实战定型，不做机械归并，防漂移）
     if has_ohlc:
         title = '股价季K/PE 历史走势'
         src = ('蜡烛=季度 K 线（季首月开/季内高低/季末月收；红涨绿跌仅股价方向）'

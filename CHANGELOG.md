@@ -202,6 +202,48 @@
 
 ## 版本历史
 
+### V5.8.3（2026-10-21）— 热核缓修项清零：build_price_history slots[] 重框架 + validate.py 按域五拆 + 审计残余批处理（全部输出零漂移）
+
+> 缘起：v5.8.2 发布时用户拍板「没修的那几项继续」——热核审计三大缓修项同轮清零：
+> build_price_history 重框架（审计认定的最大单笔代码柔道）、validate.py 2960 行超线
+> 拆分、审计残余清单批处理。最高验收线为输出零漂移（边角输入未必全在测试覆盖内），
+> 全部先冻结基线、变体电池 + 随机差分对照，全空后才算完成。RENDERER_VERSION 保持
+> v5.8.2——渲染输出逐字节未变，版本号不涨是对「零漂移」最诚实的声明。
+
+- **slots[] 归一化**：三输入形态（全 OHLC/退化一字线/仅 close+pe）先规整成统一 slots[]
+  （每槽=一个渲染单元：季K 一槽=一季、发丝一槽=一月；字段 x/o/h/l/c/pe/lo/hi/i0/i1/nm），
+  pe_line 四元组、价格定域（lo/hi 极值）、趋势均线（MA4/MA12 窗口参数化单循环）全部由
+  slots 单源派生；双形态真分支从 9 处收敛到 4 处（X 映射、slots 聚合、蜡烛/发丝绘制、
+  source 文案），浮点运算次序逐项保持（sum 顺序累加、:.1f 格式化点不变）。
+- **判词独立 `_cycle_verdict(slots, pe_line, has_ohlc)`**：52 行判词段从函数体内独立成
+  函数（v5.1.0 三段式叙事主线逻辑一字未动），门槛守卫 `not has_ohlc or len(slots) < 5`
+  与原 `has_ohlc and ma_pts` 逐条件等价（ma_pts 非空 ⟺ 季数 ≥5）。
+- **零漂移验收**：30 变体对照电池（三形态 × 门槛边界 × PE 截断双锚点 × 亏损底纹各宽度档
+  × 阶段底纹全子分支 × 判词全子句与守卫 × golden full_fill 原样输入）逐字节一致；
+  800 组随机差分 fill 全等；基座并行改动期间复验基线无漂移。`pytest scripts -q`
+  262 全绿、`test_golden.py` 12 项通过、零快照重写。
+- **实测行数账**：函数 381→322 行（-59），判词函数 +66 行，文件净 +7 行——判词是
+  「搬家」非「删除」，审计预估的 100-130 行偏乐观；source 双形态文案经评估保留两份
+  （截断句位置/峰值尾注措辞两形态不同，系 v4.8.1/v5.1.4 实战定型，机械归并引入漂移风险）。
+- **validate.py 按域五拆（2960 行 → 273 行薄入口 + 5 域模块）**：validate_audit（792，
+  防伪对账族）/ validate_valuation（478，估值锚族）/ validate_html（766，HTML 内容族）/
+  validate_typing（197，分型族）/ validate_charts（746，图字段族）；56 个 _check_* +
+  helper 按真实消费方归属，跨域公共 helper 9 个留 validate.py 公共层，域模块零横向
+  import；调度清单调用顺序逐字不变；测试契约 5 项 re-export 全保（validate_content /
+  _is_hk_code / _hist_cagr / _gh_sort_key / _PERIOD_*_KEYS）。保真校验：原文件 111 个
+  顶层块在新 6 文件逐字节命中且仅一次；8 份 fill 新旧 warns 逐字含顺序一致。CRLF 孤岛
+  （实测 1041-1230）随迁入 validate_typing.py 归一 LF——缓修项 3 并入本项。
+- **审计残余批处理 8 项（全部零漂移）**：em_fetch re-export 别名收敛（仅测试消费的
+  5 个别名下架，测试与 score_calibration 改直 import em_core）；`_sec_e3`/`_sec_e3_hk`
+  period_track 渲染镜像提取 `_render_period_track(track, full)`；`_sec_e4` 恒真
+  `elif not h` 改 `else`；`_sec_e5` 数据变换下沉 em_owner（`_cap_note`/`_e5_render_ready`
+  渲染就绪键，摘要行与落盘 JSON 逐字/逐键不变）；scoring 注释漂移清扫（分区横幅章号
+  6/7/11→7/8/12、模块 docstring 按现状重写）；`_clean_peers_matrix` docstring 明写
+  「渲染期修正」身份；`_fmt_amt`/`_pamt` 阈值差异 docstring 互指；gap 族三函数布局
+  magic number 收拢常量块。em_fetch 摘要新旧对照 ZERO-DRIFT、gap 三函数 SVG ZERO-DRIFT。
+- **本版不修登记**：`_ts_quiet` 三套降级并一（stderr 账本可见性变化，出现实证再动）、
+  `_hk_daily_series` 哨兵带原因（缓存值形状变化，诊断价值低）——结转 handoff 备查。
+
 ### V5.8.2（2026-10-21）— 全局热核审计修复：429 硬停穿透恢复 + 校验/渲染同源化收口 + 图表层脚手架收敛 + gate 测试按域拆分
 
 > 缘起：全局热核审计（五路并行子代理，覆盖 scripts/ 全部生产代码与测试基建）发现

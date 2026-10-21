@@ -2,8 +2,11 @@
 # -*- coding: utf-8 -*-
 """scoring.py — 评分与卡片公共基座（render_report 拆分模块，v4.8.2 重构）
 
-内容：维度元数据/权重常量、判词与徽章函数、通用文本工具（_num/_fmt/_esc）、
-compute_scores（三轨评分）、7/8/12 章卡片族（质量分汇总、估值过程卡、仓位判定卡）。
+内容：维度元数据/权重常量、判词与徽章函数、通用文本工具（_num/_fmt/_esc/_plain_text）、
+growth_sigma、compute_valuation（四件套输入归集）、compute_valuation_score（估值分映射加权）、
+compute_scores（三轨评分）、7/8/12 章卡片族（质量分汇总、估值过程卡、仓位判定卡）、
+DCF 双卡、regime 偏离系列（pe_band/base_band_regime_dev、regime_scale_devs、build_regime_note）、
+决策链（_position_steps 纯函数 + build_position_card + 14 章临界升档行）。
 依赖方向：最底层共享层，被 charts/validate/render_report 导入；自身仅依赖标准库。
 """
 import re
@@ -525,12 +528,14 @@ def compute_scores(fill: dict):
     }
 
 
-# ---------- 脚本生成区块（6 质量分汇总 / 7 估值过程卡 / 11 三轨判定与仓位结论卡） ----------
+# ---------- 脚本生成区块（7 质量分汇总 / 8 估值过程卡 / 12 三轨判定与仓位结论卡） ----------
+# v5.8.3 修订：章号按 v5.0 重编后现状校正（原写 6/7/11——质量分汇总=7、估值过程卡=8、
+# 三轨判定与仓位结论=12）
 
 def _valuation_four_rows(calc: dict, vc: dict, inputs: dict):
-    """估值四件套明细行（项目/输入值/映射得分/权重），7 估值过程卡用。
-    v5.0：中枢分行按 vc["tax"] 追加乐观税标注；赔率分行在 ∞ 且有地板时按
-    calc["pess_floor"] 追加地板证据。"""
+    """估值四件套明细行（项目/输入值/映射得分/权重），8 估值过程卡用。
+    v5.8.3：章号按 v5.0 重编校正（原写 7）。v5.0：中枢分行按 vc["tax"] 追加乐观税标注；
+    赔率分行在 ∞ 且有地板时按 calc["pess_floor"] 追加地板证据。"""
     pe_ttm = _num(inputs.get("pe_ttm"))
     band = inputs.get("pe_band") or [None, None]
     band_lo, band_hi = _num(band[0]), _num(band[1])

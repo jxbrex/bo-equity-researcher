@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """test_extract_review.py — extract_review 回测触发判定与锚点提取回归测试（无网络，直接 python 运行）"""
 import os
+import subprocess
 import sys
 import tempfile
 
@@ -213,7 +214,6 @@ def test_parse_failure_hint():
 
 def test_cli_find_dir_and_messages():
     """CLI 出口：--dir（含 = 形式）+ 代码后缀归一化命中；三情形文案分明（subprocess 直跑，无网络）。"""
-    import subprocess
     script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "extract_review.py")
 
     def run(*a):
@@ -244,7 +244,6 @@ def test_cli_find_dir_and_messages():
 
 def test_cli_dir_missing_value_errors():
     """v4.10.3 审计：--dir 缺值（或值恰为另一个 --flag）→ 明确报错 exit 1，不再静默回落 "."。"""
-    import subprocess
     script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "extract_review.py")
 
     def run(*a):

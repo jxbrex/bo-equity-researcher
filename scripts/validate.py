@@ -19,6 +19,7 @@ from scoring import (DIMS, _num, _fmt, _scenario_numbers, _plain_text, _LABEL_RE
 from charts_base import (_C_BLUE, _sensitivity_items, _var_key, _gap_dim_ok, _period_ratio,
                          parse_stage_period, _PERIOD_VERDICTS)
 from charts_cycle import _pe_band_ok
+from charts_gap import _gh_sort_key  # v5.8.2 同源 import：漏抄判定排序口径与渲染端单源
 
 
 # 正文 HTML 字段全集（写作纪律/代号泄漏/.rev 高亮检查用）
@@ -187,6 +188,18 @@ def _check_valuation_inputs(fill: dict) -> None:
         raise ValueError(f"valuation_inputs 缺键: {miss_vi}（四键必填：pe_ttm / pe_band / div_yield / risk_free）")
 
 
+def _scenario_by_key(scenarios, key):
+    """v5.8.2：按 key 取情景（大小写不敏感比较，返回匹配 dict 或 None）。
+    校验端对 key 一律 .lower() 归一（_check_valuation_scenarios / compute_valuation 同规），
+    但存量 fill 可能写大写 "Base"（_archive 旧档，硬拒会破坏旧 fill 重渲）——对账取数
+    不得因大小写静默跳过，统一经本 helper 取情景，五处对账口径一致。"""
+    k = str(key or "").lower()
+    for s in scenarios or []:
+        if isinstance(s, dict) and str(s.get("key") or "").lower() == k:
+            return s
+    return None
+
+
 def _check_valuation_scenarios(fill: dict, warns: list) -> None:
     """valuation 结构化三情景必填且完整（每情景：profit+PE 区间 或 mcap 市值区间 + horizon）。
     v4.11.1（审核 D2）：增跨情景顺序硬校验（pess.mid ≤ base.mid ≤ opt.mid，倒挂拒渲染）——
@@ -303,10 +316,8 @@ def _check_gap_plot(fill: dict, calc: dict, warns: list) -> None:
     ref = _quote_ref(fill)
     cnp = (ref or {}).get("consensus_np") or {}
     np_avg = _num(cnp.get("np_avg"))
-    base_profit = None
-    for sc in (fill.get("valuation") or {}).get("scenarios") or []:
-        if isinstance(sc, dict) and sc.get("key") == "base":
-            base_profit = _num(sc.get("profit"))
+    _base_sc = _scenario_by_key((fill.get("valuation") or {}).get("scenarios"), "base")
+    base_profit = _num(_base_sc.get("profit")) if _base_sc else None
     for d in dims:
         if not _gap_dim_ok(d):
             continue
@@ -330,6 +341,32 @@ def _check_gap_plot(fill: dict, calc: dict, warns: list) -> None:
         warns.append(f"gap_plot 有效数值维度仅 {effective} 个 <2：分布图不会生成（准入规则）")
     if len(dims) > 6:
         warns.append(f"gap_plot.dims 共 {len(dims)} 行 >6：图内只画前 6 行，其余请挪 text_dims 附注")
+
+
+# v5.8.2：照抄对账容差单源（原 5 处逐字复制收敛）——相对 1%、下限 0.005，基准为落盘值
+def _tol_floor(rv: float) -> float:
+    """照抄对账容差：max(相对 1%, 绝对下限 0.005)（基准为落盘值 rv）。"""
+    return max(abs(rv) * 0.01, 0.005)
+
+
+def _audit_pairs(warns: list, pairs, fmt, *, miss=None, rv_none: bool = True) -> None:
+    """照抄对账逐键比对骨架（v5.8.2 单源，gap_history/dupont 四键循环同款收敛）：
+    pairs 为 (键名, fill 值, 落盘值) 三元组清单；超容差按 fmt(键, fv, rv) 告警；
+    miss 非空时 fill 缺值而落盘有值按 miss(键, rv) 补「漏抄」；
+    rv_none=False 时落盘缺值不告警（dupont.prev 口径）。
+    告警文案逐字由各调用点自带——五处文案本就不完全相同（street 池比对、tp_reports 无
+    落盘值展示、dupont.prev 无容差尾巴等），此处只收敛循环与容差，不强行统一文案。"""
+    for label, fv, rv in pairs:
+        if fv is None:
+            if rv is not None and miss is not None:
+                warns.append(miss(label, rv))
+            continue
+        if rv is None:
+            if rv_none:
+                warns.append(fmt(label, fv, rv))
+            continue
+        if abs(fv - rv) > _tol_floor(rv):
+            warns.append(fmt(label, fv, rv))
 
 
 def _check_gap_plot_street_source(fill: dict, warns: list) -> None:
@@ -394,7 +431,7 @@ def _check_gap_plot_street_source(fill: dict, warns: list) -> None:
             pool = [_num(r.get("v")) for r in rows if isinstance(r, dict)
                     and (not org or str(r.get("org") or "").strip() == org)]
             pool = [x for x in pool if x is not None]
-            if not any(abs(v - rv) <= max(abs(rv) * 0.01, 0.005) for rv in pool):
+            if not any(abs(v - rv) <= _tol_floor(rv) for rv in pool):
                 shown = "、".join(f"{x:g}" for x in pool) or "无"
                 warns.append(f"gap_plot「{name}」street {org or '未具名'} {v:g} 在 source_file 中"
                              f"无对应记录（同机构落盘值 {shown}）: {src}——"
@@ -458,16 +495,14 @@ def _check_gap_history(fill: dict, warns: list) -> None:
             warns.append(f"gap_history「{org}」在落盘 gap_history.rows 中无对应机构——"
                          f"须照抄 E5「券商态度变化」行、禁手填")
             continue
-        for k in ("np_from", "np_to", "tp_from", "tp_to"):
-            fv, rv = _num(r.get(k)), _num(h.get(k))
-            if fv is None:
-                if rv is not None:
-                    warns.append(f"gap_history「{org}」{k} 漏抄（落盘 {rv:g}）")
-                continue
-            if rv is None or abs(fv - rv) > max(abs(rv) * 0.01, 0.005):
-                warns.append(f"gap_history「{org}」{k}={fv:g} 与落盘值不一致"
-                             f"（落盘 {rv if rv is None else round(rv, 4)}）——照抄禁手改"
-                             f"（容差：相对 1%，下限 0.005）")
+        # v5.8.2：逐键照抄对账收敛 _audit_pairs 单源（漏抄/不一致文案逐字保留）
+        _audit_pairs(warns,
+                     [(k, _num(r.get(k)), _num(h.get(k)))
+                      for k in ("np_from", "np_to", "tp_from", "tp_to")],
+                     lambda k, fv, rv: (f"gap_history「{org}」{k}={fv:g} 与落盘值不一致"
+                                        f"（落盘 {rv if rv is None else round(rv, 4)}）——照抄禁手改"
+                                        f"（容差：相对 1%，下限 0.005）"),
+                     miss=lambda k, rv: f"gap_history「{org}」{k} 漏抄（落盘 {rv:g}）")
 
     # v5.8.0：tp_reports（目标价面板降级「研报一览」数据源）——结构检查 + 落盘同源对账
     tp = gh.get("tp_reports")
@@ -490,7 +525,8 @@ def _check_gap_history(fill: dict, warns: list) -> None:
                              f"该行图内剔除")
                 continue
             rv = ref_set.get((org, str(x.get("date") or "").strip()))
-            if ref_tp and (rv is None or abs(fv - rv) > max(abs(rv) * 0.01, 0.005)):
+            # v5.8.2：容差收敛 _tol_floor 单源（ref_tp 空时不逐行告警的守卫逐字保留）
+            if ref_tp and (rv is None or abs(fv - rv) > _tol_floor(rv)):
                 warns.append(f"gap_history.tp_reports「{org} {x.get('date')}」tp={fv:g} "
                              f"与落盘值不一致——照抄禁手改（容差：相对 1%，下限 0.005）")
 
@@ -499,8 +535,9 @@ def _check_gap_history(fill: dict, warns: list) -> None:
     if not tp:
         ref_tp_miss = ((ref or {}).get("gap_history") or {}).get("tp_reports") or []
         # v5.8.1 审核实证：判定须与渲染端同源——rows 先按「np 幅度降序、无 np 按 tp 幅度」
-        # 排序取前 8 再判 tp 对（charts_gap._gh_sort_key 同款口径内联复制，不把渲染依赖
-        # 拖进校验脚本）；全量扫描会在「≥9 家可比且 tp 对落在第 9 名后」时漏报
+        # 排序取前 8 再判 tp 对；全量扫描会在「≥9 家可比且 tp 对落在第 9 名后」时漏报。
+        # v5.8.2：排序键同源 import charts_gap._gh_sort_key（v5.8.1 内联复制已删——渲染端
+        # 排序策略一变校验端即失准，正是本校验要防的失效模式）；行 dict 键名与渲染端对齐
         parsed = []
         for r in rows:
             if not isinstance(r, dict):
@@ -509,20 +546,9 @@ def _check_gap_history(fill: dict, warns: list) -> None:
             tpf, tpt = _num(r.get("tp_from")), _num(r.get("tp_to"))
             if (npf is None or npt is None) and (tpf is None or tpt is None):
                 continue
-            parsed.append((npf, npt, tpf, tpt))
-
-        def _gh_dl(a, b):
-            return None if a is None or b is None or not a else b / a - 1
-
-        def _gh_key(t):
-            d = _gh_dl(t[0], t[1])
-            if d is not None:
-                return (0, -d)
-            d = _gh_dl(t[2], t[3])
-            return (1, -(d if d is not None else -9))
-
-        parsed.sort(key=_gh_key)
-        has_tp_pair = any(t[2] is not None for t in parsed[:8])
+            parsed.append({"npf": npf, "npt": npt, "tpf": tpf, "tpt": tpt})
+        parsed.sort(key=_gh_sort_key)
+        has_tp_pair = any(t["tpf"] is not None for t in parsed[:8])
         if ref_tp_miss and not has_tp_pair:
             warns.append(f"gap_history.tp_reports 漏抄：落盘有 {len(ref_tp_miss)} 份目标价"
                          "研报清单（降级面板数据源）而 fill 未照抄——rows 无 tp 对时右面板"
@@ -558,24 +584,22 @@ def _check_dupont(fill: dict, warns: list) -> None:
     if not isinstance(ref_d, dict):
         warns.append("dupont 已填但落盘 JSON 无 dupont 键：手填嫌疑——请重跑 em_fetch --out 后照抄")
         return
-    for k in ("roe", "nm", "turn", "em"):
-        fv, rv = _num(d.get(k)), _num(ref_d.get(k))
-        if fv is None:
-            continue
-        if rv is None or abs(fv - rv) > max(abs(rv) * 0.01, 0.005):
-            warns.append(f"dupont.{k}={fv:g} 与落盘值不一致"
-                         f"（落盘 {rv if rv is None else round(rv, 4)}）——照抄禁手改"
-                         f"（容差：相对 1%，下限 0.005）")
+    # v5.8.2：逐键照抄对账收敛 _audit_pairs 单源（本处无漏抄分支：fv 缺失静默跳过）
+    _audit_pairs(warns,
+                 [(k, _num(d.get(k)), _num(ref_d.get(k))) for k in ("roe", "nm", "turn", "em")],
+                 lambda k, fv, rv: (f"dupont.{k}={fv:g} 与落盘值不一致"
+                                    f"（落盘 {rv if rv is None else round(rv, 4)}）——照抄禁手改"
+                                    f"（容差：相对 1%，下限 0.005）"))
     ref_prev = ref_d.get("prev")
     if isinstance(ref_prev, dict):
-        for k in ("roe", "nm", "turn", "em"):
-            rv = _num(ref_prev.get(k))
-            fv = _num((pv or {}).get(k))
-            if rv is not None and fv is None:
-                warns.append(f"dupont.prev.{k} 漏抄（落盘 {rv:g}）：去年同期四因子请完整回填")
-            elif fv is not None and rv is not None and abs(fv - rv) > max(abs(rv) * 0.01, 0.005):
-                warns.append(f"dupont.prev.{k}={fv:g} 与落盘值不一致（落盘 {round(rv, 4)}）"
-                             f"——照抄禁手改")
+        # v5.8.2：同款收敛（落盘缺值不告警 = rv_none=False；漏抄文案带「去年同期」尾巴逐字保留）
+        _audit_pairs(warns,
+                     [(k, _num((pv or {}).get(k)), _num(ref_prev.get(k)))
+                      for k in ("roe", "nm", "turn", "em")],
+                     lambda k, fv, rv: (f"dupont.prev.{k}={fv:g} 与落盘值不一致（落盘 {round(rv, 4)}）"
+                                        f"——照抄禁手改"),
+                     miss=lambda k, rv: f"dupont.prev.{k} 漏抄（落盘 {rv:g}）：去年同期四因子请完整回填",
+                     rv_none=False)
 
 
 def _check_chart_fields(fill: dict) -> None:
@@ -656,8 +680,7 @@ def _check_odds_floor(fill: dict, warns: list, calc=None) -> None:
     shares = _num(v.get("shares"))
     if price is None or shares is None or shares <= 0:
         return
-    pess = next((s for s in v.get("scenarios") or []
-                 if str((s or {}).get("key") or "").lower() == "pess"), None)
+    pess = _scenario_by_key(v.get("scenarios"), "pess")
     if not pess:
         return
     # 悲观下限与 compute_valuation 同源（v5.1.5 热核 P0-5 公式双写收敛）：有 calc 直取
@@ -764,8 +787,7 @@ def _check_anchor_discipline(fill: dict, warns: list) -> None:
                              "scenarios 数组（锚移动台账数据源，禁手改；v5.1.0 起必填）")
         v = fill.get("valuation") or {}
         scen = v.get("scenarios") or []
-        base = next((s for s in scen if isinstance(s, dict)
-                     and str(s.get("key") or "").lower() == "base"), None)
+        base = _scenario_by_key(scen, "base")
         prev_pe = (_parse_prev_scenarios(prev["scenarios"]).get("base") or {}).get("pe")
         ev = v.get("pe_band_evidence")
         if base is not None and prev_pe is not None:
@@ -917,15 +939,6 @@ def _check_content_floor(fill: dict) -> None:
                              f"（报错后禁止绕过脚本手写全文 HTML，只能修 fill 重渲）")
 
 
-def _check_missing_required_warns(fill: dict, warns: list) -> None:
-    """必填字段缺失告警（fill-schema 标 ✓ 但渲染器原零校验，静默缺失会让结构残缺）。
-    timing_scores / yellow_deductions 缺项由 compute_scores 硬拒（拒渲染即最大声提示），
-    此处曾 soft 告警「将显示 —/按 0 处理」与随后硬拒文案矛盾且完全冗余，已删。"""
-    th = fill.get("thesis_html", "")
-    if not th.strip():
-        warns.append("thesis_html 缺失：Hero 一句话结论为空")
-
-
 def _check_hero_cross(fill: dict, warns: list) -> None:
     """v5.1.2：Hero 指标卡与估值结构化字段互查（存量 fill 无 quote 时两处自说自话实证）——
     顶层 pe_ttm 与 valuation_inputs.pe_ttm 并存且偏差 >1% → 拒渲染（metric_label 行业口径
@@ -986,10 +999,8 @@ def _check_growth_consistency(fill: dict, warns: list) -> None:
     last_year = int(m_y.group(0))
     cnp = (_quote_ref(fill) or {}).get("consensus_np") or {}
     np_avg = _num(cnp.get("np_avg"))
-    base_profit = None
-    for s in (fill.get("valuation") or {}).get("scenarios") or []:
-        if isinstance(s, dict) and s.get("key") == "base":
-            base_profit = _num(s.get("profit"))
+    _base_sc = _scenario_by_key((fill.get("valuation") or {}).get("scenarios"), "base")
+    base_profit = _num(_base_sc.get("profit")) if _base_sc else None
     for f in fcst:
         ym = re.search(r"20\d{2}", str(f.get("y") or ""))
         if not ym or int(ym.group(0)) != last_year + 1:
@@ -1008,6 +1019,24 @@ def _check_growth_consistency(fill: dict, warns: list) -> None:
             if lo is not None and hi is not None and not (lo - 2 <= g_base <= hi + 2):
                 warns.append(f"valuation 基础情景换算增速（{g_base:.1f}%）越出 growth_plot 本文区间 "
                              f"[{lo:g}, {hi:g}]（容差 ±2pct）：5 章图与 7 章情景应口径一致（v5.1.2）")
+
+
+def _resolve_type_tier(fill: dict, warns: list = None):
+    """标准分型 + 生效成长层解析单源（v5.8.2，typing_v2/ pe_history 禁填/ dcf 三处复制收敛）。
+    返回 (std, tier, legacy)：growth_tier 合法值（high/mid）只在「成长型」下覆盖别名默认层
+    （与 typing_v2 原口径一致；另两处只消费「是否 high」判定，非成长型的层值无消费点）。
+    成长型缺 tier 分两口径：warns 非空 → 告警并按 mid 处理（typing_v2）；
+    warns 为 None → 静默按 mid 兜底（另两处原为 None，「== high」/「!= high」判定等价）。"""
+    std, tier, legacy = _normalize_stock_type(fill.get("stock_type"))
+    if std == "成长型":
+        gt = str(fill.get("growth_tier") or "").strip().lower()
+        if gt in ("high", "mid"):
+            tier = gt
+        elif tier is None:
+            if warns is not None:
+                warns.append("growth_tier 缺失：成长型须声明 high（扣非 CAGR>25%）/ mid 分层（v5.3.0），本报告按 mid 处理")
+            tier = "mid"
+    return std, tier, legacy
 
 # 分型判据 v2（v5.3.0）常量表——判据全文见 scoring.md「分型判据（v2）」节
 _TYPE_ALIASES = [  # 顺序敏感：先具体后笼统（「稳定价值」先于「成长」，「稳健/快速成长」先于裸「成长」）
@@ -1133,12 +1162,8 @@ def _check_typing_v2(fill: dict, warns: list) -> None:
                       for a in adj))
 
     if std == "成长型":
-        gt = str(fill.get("growth_tier") or "").strip().lower()
-        if gt in ("high", "mid"):
-            tier = gt
-        elif tier is None:
-            warns.append("growth_tier 缺失：成长型须声明 high（扣非 CAGR>25%）/ mid 分层（v5.3.0），本报告按 mid 处理")
-            tier = "mid"
+        # v5.8.2：成长层解析收敛 _resolve_type_tier 单源（缺 tier 告警+默认 mid 随之）
+        _, tier, _ = _resolve_type_tier(fill, warns)
         if ok_adj:
             # ① 明细齐备 → 人工判定（按声明调整口径），脚本不复算扣非 CAGR
             warns.append("growth_tier 对账按声明调整口径处理（人工判定）：typing_evidence.cagr_adjustments 非空，"
@@ -1259,8 +1284,8 @@ def _check_peers_plot_target(fill: dict, warns: list) -> None:
             if not tg:
                 warns.append("peers_plot 目标点 roe/pe 均不可解析：图中无蓝色目标点"
                              "（渲染丢弃），请核对 target 点数据")
-            elif fill.get("company") and str(fill["company"]) not in str(tg[0].get("name", "")):
-                warns.append(f"peers_plot 目标点名称「{tg[0].get('name')}」与公司名「{fill['company']}」不一致")
+            elif fill.get("company") and str(fill.get("company")) not in str(tg[0].get("name", "")):
+                warns.append(f"peers_plot 目标点名称「{tg[0].get('name')}」与公司名「{fill.get('company')}」不一致")
         # 口径一致性（赤峰 2026-09-02 实证：图中目标点用 A 股 PE 23.58x，正文用 H 股 18.6x）
         if tg:
             tpe = _num(tg[0].get("pe"))
@@ -1293,6 +1318,33 @@ def _peers_name_key(s: str) -> str:
     return re.sub(r"-(?:SW|WD|U|W|S)$", "", s, flags=re.I)
 
 
+# v5.8.2：HTML 表格切分骨架单源（5 处 <table> 切分、6 处行/格切分复制收敛）——
+# 统一口径：整表文本 / 行内容（tr 内部）/ 格内容（cell 内部），全部 re.I | re.S
+_TBL_SPLIT_RE = re.compile(r"<table\b[^>]*>.*?</table>", re.I | re.S)
+_TR_SPLIT_RE = re.compile(r"<tr\b[^>]*>(.*?)</tr>", re.I | re.S)
+_TD_SPLIT_RE = re.compile(r"<t[hd]\b[^>]*>(.*?)</t[hd]>", re.I | re.S)
+
+
+def _iter_tables(html: str):
+    """逐表切出整表文本（生成器）——<table> 切分单源（v5.8.2）。
+    bestworst 处的旧捕获组写法 group(0)==group(1)（组括号罩住全模式），
+    整表文本即等价承载，捕获组语义不丢失。"""
+    return (m.group(0) for m in _TBL_SPLIT_RE.finditer(html or ""))
+
+
+def _iter_rows(tbl: str):
+    """表内逐行切出行内容（生成器）——口径同各 <tr> 切分：元素为 tr 内部文本。
+    需要下标/len 的调用点自行 list() 物化。"""
+    return (m.group(1) for m in _TR_SPLIT_RE.finditer(tbl or ""))
+
+
+def _row_cells(tr: str):
+    """行内逐格切出格内容（生成器）——口径同各 <t[hd]> 切分：元素为 cell 内部文本。
+    唯一消费格属性（cell-best/cell-worst 写在 <td …> 属性串）的 bestworst 处保留其
+    专属双捕获正则不并入本 helper（v5.8.2——不为统一而改语义）。"""
+    return (m.group(1) for m in _TD_SPLIT_RE.finditer(tr or ""))
+
+
 def _check_peers_selection(fill: dict, warns: list) -> None:
     """v5.4.0 peer 选取硬化（五条，与 peers_plot/peers_meta/peers_html 三方对账）：
     ⑨表图一致（**拒渲染**）：peers_plot 非 target 点必须出现在 peers_html **非 matrix-table
@@ -1306,7 +1358,7 @@ def _check_peers_selection(fill: dict, warns: list) -> None:
       凑不齐原因（含「仅/凑不齐/可比公司不足」）→ 抑制（与「meta 注明后可忽略」惯例一致）。
     ⑫rationale（软告警）：有 peer 章节实体（peers_plot 或非占位 peers_meta）时即检查——
       peers_meta 须含两把尺（同行业/同规模/同商业模式 ≥2 种）+ 排除语（排除/未选/剔出），
-      缺一告警（占位「—」由 _check_misc_required 的占位告警兜底，不重复报）。
+      缺一告警（占位「—」由 _check_required_fields 的占位告警兜底，不重复报）。
     ⑬PE 交叉（软告警）：valuation base 情景 pe 下限高于全部非 target 点 pe → 须溢价论证。
     数据缺失的分支一律跳过（不误报）。"""
     meta = str(fill.get("peers_meta") or "")
@@ -1315,13 +1367,12 @@ def _check_peers_selection(fill: dict, warns: list) -> None:
     # ⑨ 表图一致（硬）：非 matrix-table 表内公司名集合（归一）+ peers_meta 声明名单
     if pts:
         tbl_names, n_plain = set(), 0
-        for tbl in re.findall(r"<table\b[^>]*>.*?</table>", fill.get("peers_html") or "",
-                              flags=re.I | re.S):
+        for tbl in _iter_tables(fill.get("peers_html") or ""):
             if "matrix-table" in tbl:
                 continue
             n_plain += 1
-            for tr in re.findall(r"<tr\b[^>]*>(.*?)</tr>", tbl, flags=re.I | re.S):
-                cells = re.findall(r"<t[hd]\b[^>]*>(.*?)</t[hd]>", tr, flags=re.I | re.S)
+            for tr in _iter_rows(tbl):
+                cells = list(_row_cells(tr))
                 key = _peers_name_key(_plain_text(cells[0])) if cells else ""
                 if key:
                     tbl_names.add(key)
@@ -1384,10 +1435,10 @@ def _check_peers_selection(fill: dict, warns: list) -> None:
                          f"（为何不选近邻标的）")
     # ⑬ PE 交叉（软告警）：基础带下限高于全部同业 PE
     base_pe = None
-    for s in (fill.get("valuation") or {}).get("scenarios") or []:
-        if isinstance(s, dict) and str(s.get("key") or "").lower() == "base":
-            pe = s.get("pe") or []
-            base_pe = _num(pe[0]) if len(pe) >= 1 else None
+    _base_sc = _scenario_by_key((fill.get("valuation") or {}).get("scenarios"), "base")
+    if _base_sc:
+        pe = _base_sc.get("pe") or []
+        base_pe = _num(pe[0]) if len(pe) >= 1 else None
     peer_pes = [_num(p.get("pe")) for p in pts
                 if isinstance(p, dict) and not p.get("target") and _num(p.get("pe")) is not None]
     if base_pe is not None and peer_pes and base_pe > max(peer_pes):
@@ -1402,19 +1453,18 @@ def _check_timing_table_cells(fill: dict, warns: list) -> None:
     现价/MA60/MA120/52 周高低 数值与方向词 vs quote 落盘 timing（神华假 MA60 修复闭环——信号取自落盘、
     禁手估，数值偏差 >1% 或方向矛盾告警；自由文本全量语义比对不做）。"""
     pos_html = fill.get("position_html") or ""
-    for tm in re.finditer(r"<table\b[^>]*>.*?</table>", pos_html, re.I | re.S):
-        tbl = tm.group(0)
+    for tbl in _iter_tables(pos_html):
         if "技术面" not in tbl or "筹码面" not in tbl:
             continue
-        for cell in re.findall(r"<t[hd]\b[^>]*>(.*?)</t[hd]>", tbl, re.I | re.S):
+        for cell in _row_cells(tbl):
             if len(_plain_text(cell)) > 40:
                 warns.append("时机判定小表存在 >40 字单元格：只写短语（≤15 字/条），"
                              "长解释与降级说明挪到表下 .source 行（fill-schema 固定 4 行 3 列格式）")
                 break
         # v5.1.2：得分比对（固定行形态：维度 ｜ 得分 ｜ 命中信号与加减）
         ts = fill.get("timing_scores") or {}
-        for tr in re.findall(r"<tr\b[^>]*>(.*?)</tr>", tbl, re.I | re.S):
-            cells = [_plain_text(c) for c in re.findall(r"<t[hd]\b[^>]*>(.*?)</t[hd]>", tr, re.I | re.S)]
+        for tr in _iter_rows(tbl):
+            cells = [_plain_text(c) for c in _row_cells(tr)]
             if len(cells) < 2 or "合计" in cells[0]:
                 continue
             for dim in ("筹码面", "技术面"):
@@ -1542,8 +1592,36 @@ def _check_internal_codes(fill: dict, warns: list) -> None:
                          f"请改用章节编号/名称（第 4 章 / 4.4 / 第 6 章风险评估）")
 
 
+# v5.8.2：第 11 章绑定告警表驱动（3 处同骨架收敛）——「{字段} 已填但 cycle_html 缺失」
+# 告警文案后缀逐处不同，由各规格自带；此处只收敛「字段已填 + cycle_html 缺失 → 告警」骨架
+_CH11_BINDINGS = (
+    ("pe_history",
+     lambda fill: (fill.get("pe_history") or {}).get("hist_lo") is not None,
+     "PE 历史带图挂第 11 章，整章被删后图不显示——v4.7.1 起四类分型"
+     "（周期/稳健成长/稳定价值/困境反转）应写第 11 章，或删除 pe_history"),
+    ("price_history",
+     lambda fill: bool((fill.get("price_history") or {}).get("series")),
+     "股价/PE 发丝图挂第 11 章，整章被删后图不显示——与 pe_history 同规则（v4.7.1 绑定关系）"),
+    ("cycle_stages",
+     lambda fill: bool(fill.get("cycle_stages")),
+     "阶段卡挂第 11 章条件块内，整章不渲染则卡无处显示（同 pe_history/price_history 绑定规则）"),
+)
+
+
+def _check_ch11_binding(fill: dict, warns: list) -> None:
+    """第 11 章绑定告警（v5.8.2 表驱动）：图字段已填但 cycle_html 缺失 → 图/卡无处显示。
+    触发谓词逐处保留原口径——pe_history 认 hist_lo 非 None（空串也算已填）、
+    price_history 认 series 真值（空列表不算）、cycle_stages 认列表非空。"""
+    if (fill.get("cycle_html") or "").strip():
+        return
+    for key, triggered, msg in _CH11_BINDINGS:
+        if triggered(fill):
+            warns.append(f"{key} 已填但 cycle_html 缺失：{msg}")
+
+
 def _check_writing_discipline(fill: dict, warns: list) -> None:
-    """v4.7.1 写作纪律告警（东方电气反馈）：四拍挤段 / 3 年趋势三年并排 / pe_history 无第 11 章承载。"""
+    """v4.7.1 写作纪律告警（东方电气反馈）：四拍挤段 / 3 年趋势三年并排。
+    （pe_history 无第 11 章承载告警已迁 _check_ch11_binding 表驱动，v5.8.2）"""
     # 四拍各自成段（fill-schema dim-block 四拍结构）：判词/论据/对比/评分挤进同一个 <p> → 提示拆段
     beats = ("判词：", "论据：", "对比：", "评分：")
     for name in ("l1_html", "l3_html"):
@@ -1565,10 +1643,8 @@ def _check_writing_discipline(fill: dict, warns: list) -> None:
         if any(yseq[i] and yseq[i + 1] and yseq[i + 2] for i in range(len(yseq) - 2)) or stacked:
             warns.append("3 年趋势表疑似三年数字并排：应写「起→终（方向词）」"
                          "（如 8.0→30.8（大升），方向词按指标语义着色），见 fill-schema 趋势表规则")
-    # pe_history 图已挂第 11 章（v4.7.1）：cycle_html 缺失 → 整章删除，图无处显示
-    if (fill.get("pe_history") or {}).get("hist_lo") is not None and not (fill.get("cycle_html") or "").strip():
-        warns.append("pe_history 已填但 cycle_html 缺失：PE 历史带图挂第 11 章，整章被删后图不显示"
-                     "——v4.7.1 起四类分型（周期/稳健成长/稳定价值/困境反转）应写第 11 章，或删除 pe_history")
+    # pe_history 图已挂第 11 章（v4.7.1）→ 「已填但 cycle_html 缺失」告警迁 _check_ch11_binding
+    # 表驱动（v5.8.2，与 price_history/cycle_stages 同骨架单源）
 
 
 def _check_prev_fields(fill: dict, warns: list) -> None:
@@ -1668,8 +1744,13 @@ def _check_prev_charts(fill: dict, warns: list) -> None:
                      f"（字段缺失或 hist_lo/hist_hi/pe_ttm/pe_band 键不齐）{why}")
 
 
-def _check_misc_required(fill: dict, warns: list) -> None:
-    """其余 fill-schema 标 ✓ 但渲染器零校验的必填字段。"""
+def _check_required_fields(fill: dict, warns: list) -> None:
+    """fill-schema 标 ✓ 但渲染器原零校验的必填字段缺失告警（v5.8.2 合并 _check_missing_required_warns：
+    thesis_html 与 misc 各字段单源）。全部软告警不拒——缺失只会让对应章节标题/指标卡
+    显示空白或占位符（timing_scores/yellow_deductions 缺项由 compute_scores 硬拒，不在此列）。"""
+    th = fill.get("thesis_html", "")
+    if not th.strip():
+        warns.append("thesis_html 缺失：Hero 一句话结论为空")
     for name in ("valuation_method", "stock_type", "gap_tier", "peers_meta", "next_review"):
         if not str(fill.get(name) or "").strip() or fill.get(name) == "—":
             warns.append(f"{name} 缺失或为占位符：对应章节标题/meta 将为空白")
@@ -1711,8 +1792,9 @@ def _check_quote_present(fill: dict, warns: list) -> None:
 
 
 def _check_optional_charts(fill: dict, warns: list) -> None:
-    """v4.8 可选图字段纪律：业务构成占比和 / 产业链两端 / 发丝图与第 11 章绑定 / 户数期数。
-    v5.4.1：pe_history 禁填（成长型·高速层 / 未盈利·管线 → 软告警，fill-schema 填写条件）。"""
+    """v4.8 可选图字段纪律：业务构成占比和 / 产业链两端 / 户数期数。
+    v5.4.1：pe_history 禁填（成长型·高速层 / 未盈利·管线 → 软告警，fill-schema 填写条件）。
+    （发丝图/pe_history/阶段卡的第 11 章绑定告警迁 _check_ch11_binding 表驱动，v5.8.2）"""
     seg = fill.get("segments") or {}
     items = seg.get("items") or []
     if items:
@@ -1739,15 +1821,13 @@ def _check_optional_charts(fill: dict, warns: list) -> None:
     ch = fill.get("industry_chain") or {}
     if ch and (not ch.get("upstream") or not ch.get("downstream")):
         warns.append("industry_chain 上游/下游缺一：链条图需两端各至少 1 个行业，缺端图不生成")
-    if (fill.get("price_history") or {}).get("series") and not (fill.get("cycle_html") or "").strip():
-        warns.append("price_history 已填但 cycle_html 缺失：股价/PE 发丝图挂第 11 章，整章被删后图不显示"
-                     "——与 pe_history 同规则（v4.7.1 绑定关系）")
+    # price_history 发丝图与第 11 章绑定 → 迁 _check_ch11_binding 表驱动（v5.8.2）
     # v5.4.1：pe_history 禁填告警（fill-schema 填写条件长期只写在文档里、零校验）——
     # 成长型·高速层（含旧名「快速成长」）与 未盈利/管线：历史区间锚不住合理带，禁填本字段
     if fill.get("pe_history"):
-        std_ph, legacy_tier_ph, _leg_ph = _normalize_stock_type(fill.get("stock_type"))
-        gt_ph = str(fill.get("growth_tier") or "").strip().lower()
-        tier_ph = gt_ph if gt_ph in ("high", "mid") else legacy_tier_ph
+        # v5.8.2：分型+生效层解析收敛 _resolve_type_tier 单源（本处静默口径：缺 tier 按 mid 兜底，
+        # 「== high」判定与原 None 等价）
+        std_ph, tier_ph, _leg_ph = _resolve_type_tier(fill)
         if (std_ph == "成长型" and tier_ph == "high") or std_ph == "未盈利/管线":
             shows = f"{std_ph}·高速层" if std_ph == "成长型" else std_ph
             warns.append(f"pe_history 已填但本分型（{shows}）禁填：历史区间锚不住合理带"
@@ -1911,13 +1991,14 @@ def _check_peers_bestworst(fill: dict, warns: list) -> None:
         return
     # 审计 P1-6：matrix-table 兜底只跳过它自己那张表（旧逻辑「peers 含 matrix-table 即整段跳过」
     # 会让当前指标表的逐列检查失效——多表并存实证）
-    tbl = next((t for t in re.finditer(r"(<table\b[^>]*>.*?</table>)", peers, flags=re.I | re.S)
-                if "matrix-table" not in t.group(0)), None)
+    # v5.8.2：切分收敛 _iter_tables 单源（旧捕获组 group(0)==group(1)，整表文本等价承载）
+    tbl = next((t for t in _iter_tables(peers) if "matrix-table" not in t), None)
     if not tbl:
         return
-    rows = re.findall(r"<tr\b[^>]*>(.*?)</tr>", tbl.group(1), flags=re.I | re.S)
+    rows = list(_iter_rows(tbl))
     if len(rows) < 2:
         return
+    # 格属性+内容双捕获：全仓唯一消费 attrs（cell-best/cell-worst 判定）处，保留不并入 _row_cells
     cells_of = [re.findall(r"<t[hd]\b([^>]*)>(.*?)</t[hd]>", r, flags=re.I | re.S) for r in rows]
     headers = [re.sub(r"<[^>]+>", "", c).strip() for _, c in cells_of[0]]
     marked, numeric = set(), set()
@@ -1949,15 +2030,14 @@ def _check_peers_column_support(fill: dict, warns: list) -> None:
         return
     boxes = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff]", "", " ".join(
         re.findall(r'<div class="conclusion-box".*?</div>', peers, flags=re.I | re.S)))
-    for ti, tbl in enumerate(re.findall(r'<table\b[^>]*>.*?</table>', peers, flags=re.I | re.S), 1):
-        trs = re.findall(r'<tr\b[^>]*>(.*?)</tr>', tbl, flags=re.I | re.S)
+    for ti, tbl in enumerate(_iter_tables(peers), 1):
+        trs = list(_iter_rows(tbl))
         if len(trs) < 2:
             continue
-        heads = [_plain_text(h).strip() for h in
-                 re.findall(r'<t[hd]\b[^>]*>(.*?)</t[hd]>', trs[0], flags=re.I | re.S)]
+        heads = [_plain_text(h).strip() for h in _row_cells(trs[0])]
         if len(heads) < 2:
             continue
-        rows = [re.findall(r'<t[hd]\b[^>]*>(.*?)</t[hd]>', tr, flags=re.I | re.S) for tr in trs[1:]]
+        rows = [list(_row_cells(tr)) for tr in trs[1:]]
         for j in range(1, len(heads)):   # 首列=公司名，不查
             vals = [(_plain_text(r[j]).strip() if j < len(r) else "") for r in rows]
             if not vals:
@@ -2085,7 +2165,6 @@ def _validate_content_impl(fill: dict, calc: dict, warns: list) -> None:
     _check_l4_form(fill, warns)
     _check_cn_placeholder(fill)
 
-    _check_missing_required_warns(fill, warns)
     _check_typing_v2(fill, warns)
     _check_thesis_price_tags(fill, warns)
     _check_thesis_info_floor(fill, warns)
@@ -2097,6 +2176,7 @@ def _validate_content_impl(fill: dict, calc: dict, warns: list) -> None:
     _check_timing_table_cells(fill, warns)
     _check_dim_blocks(fill, warns)
     _check_internal_codes(fill, warns)
+    _check_ch11_binding(fill, warns)      # v5.8.2 表驱动：pe_history/price_history/cycle_stages 挂第 11 章
     _check_writing_discipline(fill, warns)
     _check_conclusion_structure(fill, warns)
     _check_governance_strip(fill, warns)
@@ -2107,7 +2187,7 @@ def _validate_content_impl(fill: dict, calc: dict, warns: list) -> None:
     _check_prev_fields(fill, warns)
     _check_prev_charts(fill, warns)   # v5.5.1 F3：复盘「旧有新无」结构对照（软告警）
     _check_review_miss_diagnostics(fill, warns)
-    _check_misc_required(fill, warns)
+    _check_required_fields(fill, warns)
     _check_optional_charts(fill, warns)
     _check_driver_cards(fill, warns)      # v4.11.3：P0 驱动卡字段（drivers/driver_verdict）
     _check_sensitivity_units(fill, warns)  # v5.1.1：sensitivity.delta 量纲规范
@@ -2181,8 +2261,8 @@ def _check_handwritten_dupes(fill: dict, warns: list) -> None:
                      "请删除手写卡")
     l1 = fill.get("l1_html") or ""
     if fill.get("fin_trend") and "<table" in l1:
-        for tm in re.finditer(r"<table\b[^>]*>.*?</table>", l1, re.I | re.S):
-            if len(set(re.findall(r"20\d{2}", tm.group(0)))) >= 4 and tm.group(0).count("<tr") >= 3:
+        for tbl in _iter_tables(l1):
+            if len(set(re.findall(r"20\d{2}", tbl))) >= 4 and tbl.count("<tr") >= 3:
                 warns.append("l1_html 含多年年表（≥4 个年份列）：fin_trend 图墙已替代表"
                              "（v4.9 起禁写手写年表），请删除")
                 break
@@ -2441,8 +2521,8 @@ def _check_cycle_stages(fill: dict, warns: list) -> None:
     v5.1.2：条数/本轮判定与渲染同源——渲染跳过缺 name/period 的项
     （charts_misc.build_cycle_stages），被跳过的项单独告警不落图；
     current 恰 1 个升级为拒渲染（0 或 ≥2 个「本轮」徽章同屏即事实矛盾；
-    本轮由分析师划段标注，脚本不加冕）；字段已填而 cycle_html 缺失 → 告警
-    （阶段卡挂第 11 章条件块内，整章消失则卡无处显示，同 pe_history 绑定规则）；
+    本轮由分析师划段标注，脚本不加冕）；字段已填而 cycle_html 缺失的绑定告警与 pe_history
+    同款，已迁 _check_ch11_binding 表驱动（v5.8.2）；
     cycle_html 手写阶段表与字段的关系：字段未填 → 迁移告警；并存 → 重复告警；
     v5.1.3：period 格式校验——解析不出起止月份软告警「季K图阶段分界不落该段」
     （格式 YYYY/MM–YYYY/MM；与渲染同源 parse_stage_period，单源防漂移）；
@@ -2491,9 +2571,7 @@ def _check_cycle_stages(fill: dict, warns: list) -> None:
         if driver_w > 48:
             warns.append(f"cycle_stages[{short}] driver 显示宽 {driver_w} > 48（槽位契约：超长必孤字折行，"
                          "压缩表述——demo 阶段 02「杀」字独占行实证；宽度口径：CJK 计 2、ASCII 计 1）")
-    if not str(fill.get("cycle_html") or "").strip():
-        warns.append("cycle_stages 已填但 cycle_html 缺失：阶段卡挂第 11 章条件块内，"
-                     "整章不渲染则卡无处显示（同 pe_history/price_history 绑定规则）")
+    # cycle_stages 与第 11 章绑定 → 迁 _check_ch11_binding 表驱动（v5.8.2）
     if hand_table:
         warns.append("cycle_html 手写阶段表与 cycle_stages 字段并存（内容重复）：请删除手写表格")
     # v5.4.0 校准锚（calib）三校验（全部软告警；非四型 / 无有效项不受影响）
@@ -2664,9 +2742,9 @@ def _check_dcf(fill: dict, warns: list) -> None:
     d = fill.get("dcf")
     if not isinstance(d, dict) or not d:
         st = str(fill.get("stock_type") or "")
-        std, legacy_tier, _legacy = _normalize_stock_type(st)
-        gt = str(fill.get("growth_tier") or "").strip().lower()
-        tier = gt if gt in ("high", "mid") else legacy_tier
+        # v5.8.2：分型+生效层解析收敛 _resolve_type_tier 单源（本处静默口径：缺 tier 按 mid 兜底，
+        # 「!= high」判定与原 None 等价）
+        std, tier, _legacy = _resolve_type_tier(fill)
         if std == "成长型" and tier != "high":
             warns.append("dcf 字段未填：成长型（中速层 / 未声明 high）分型 DCF 强制三行由 dcf 字段"
                          "承载（v4.11.3 起；原「稳健成长」改名后于 v5.4.1 重新对齐；"

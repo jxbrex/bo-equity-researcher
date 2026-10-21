@@ -294,7 +294,7 @@ def full_fill(**over):
                    "目标价": "14.3-16.5 元", "较现价": "+54.0%（中值15.4）"}],
               # v5.5.1 F3：prev.charts 照抄上版 fill 的图字段事实——本夹具按「上版与本版齐平」
               # 填（gap_plot 本版未填 → 上版也未填；fin_trend 4 面板；fcst 1 年；pe_history 有）
-              # 走「无减配」合规路径，减配告警用例见 test_render_gate.py
+              # 走「无减配」合规路径，减配告警用例见 test_render_gate_source.py
               "charts": {"gap_plot": False, "fin_trend_panels": 4,
                          "growth_fcst_years": 1, "pe_history": True}},
         review_html=('<table><tr><td>假设变更对比</td></tr></table>'
@@ -302,7 +302,7 @@ def full_fill(**over):
                      '<span class="rev">甲</span><span class="rev">乙</span><span class="rev">丙</span>'),
     )
     # v5.1.0 锚纪律一：PE 带跨版移动（11-13x → 10-12x）必填增量证据且含基本面类——
-    # 本夹具走合规路径（门禁通过），违规拦截用例见 test_render_gate.py
+    # 本夹具走合规路径（门禁通过），违规拦截用例见 test_render_gate_position.py
     fill["valuation"]["pe_band_evidence"] = [
         {"type": "基本面", "note": "上版至今煤价中枢下移 15%，2026E 盈利预测随之下修（新增证据）"},
         {"type": "市场参数", "note": "无风险利率 1.7%→1.6%（折现率环境变化）"}]

@@ -181,23 +181,18 @@ def build_period_bullets(pt: dict) -> str:
     H = TOP + ROW_H * (len(rows) - 1) + 50
     parts = ['<span class="section-tag">报告期累计进度：仅列有全年参照的指标</span>',
              _svg_open(W, H, "报告期进度子弹图")]
-    # 共用图例行（缺席形态不出图例项——与「无线不出图例」同纪律）
-    lx = L
-    parts.append(f'<rect x="{lx}" y="6" width="13" height="9" rx="2.5" fill="{_C_BLUE}"/>')
-    parts.append(f'<text x="{lx + 18}" y="14" font-size="11" fill="{_C_LABEL}">本期累计</text>')
-    lx += 18 + _text_w("本期累计", 11) + 26
+    # 共用图例行（缺席形态不出图例项——与「无线不出图例」同纪律；v5.8.2 收敛为
+    # _legend_row glyph 数据列表：琥珀/深墨粗刻=vline 竖线 glyph，间距按手写值 26）
+    _pitems = [("本期累计", {"fill": _C_BLUE, "gy": 6, "dx": 18, "gap": 26})]
     if any(r["goal"] is not None for r in rows):
-        parts.append(f'<line x1="{lx + 5}" y1="3" x2="{lx + 5}" y2="16" stroke="{_C_ORANGE}" stroke-width="3"/>')
-        parts.append(f'<text x="{lx + 14}" y="14" font-size="11" fill="{_C_LABEL}">经营目标</text>')
-        lx += 14 + _text_w("经营目标", 11) + 26
+        _pitems.append(("经营目标", {"k": "vline", "ox": 5, "y1": 3, "y2": 16,
+                                     "stroke": _C_ORANGE, "lw": 3, "dx": 14, "gap": 26}))
     if any(r["cons"] is not None for r in rows):
-        parts.append(f'<line x1="{lx + 5}" y1="3" x2="{lx + 5}" y2="16" stroke="{_C_BLACK}" stroke-width="3"/>')
-        parts.append(f'<text x="{lx + 14}" y="14" font-size="11" fill="{_C_LABEL}">一致预期</text>')
-        lx += 14 + _text_w("一致预期", 11) + 26
+        _pitems.append(("一致预期", {"k": "vline", "ox": 5, "y1": 3, "y2": 16,
+                                     "stroke": _C_BLACK, "lw": 3, "dx": 14, "gap": 26}))
     if any(r["band"] for r in rows):
-        parts.append(f'<rect x="{lx}" y="6" width="13" height="9" rx="2.5" fill="{_C_SAND_LT}"/>')
-        parts.append(f'<text x="{lx + 18}" y="14" font-size="11" fill="{_C_LABEL}">'
-                     f'历史节奏带（近三年同期占比×分母）</text>')
+        _pitems.append(("历史节奏带（近三年同期占比×分母）", {"fill": _C_SAND_LT, "gy": 6, "dx": 18}))
+    _legend_row(parts, _pitems, L, ty=14)
     for i, r in enumerate(rows):
         cy = TOP + i * ROW_H
         # 金额域放开负值（亏损期累计为负是合法输入）：下限含 0/累计/双分母/带下限，

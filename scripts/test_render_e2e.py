@@ -24,7 +24,6 @@ def test_fmt_thousands():
     assert R._fmt_thousands("188153") == "188,153"
     assert R._fmt_thousands("—") == "—"
     assert R._fmt_thousands("23.34万") == "23.34万"  # 带单位不归一
-    print("OK 千位符归一（补逗号 / 幂等 / <1000 不动 / 非数字不动）")
 
 
 def test_bom_fill_loads():
@@ -69,7 +68,6 @@ def test_fill_literal_mustache_survives():
     html = render_fill(f)
     assert "{{DATE}}" not in html, "字面 {{DATE}} 不应被替换为实际日期（误吞）"
     assert "&#123;&#123;DATE}}" in html and "&#123;&#123;COMPANY}}" in html, "字面 {{}} 应实体化原样显示"
-    print("OK fill 字面 {{KEY}} 实体化（不误吞、不残留报错）")
 
 
 def test_low_price_precision():
@@ -94,7 +92,6 @@ def test_low_price_precision():
     assert "5.89-6.48 元" in html, "悲观目标价应为两位小数区间"
     assert "7.56-7.99" in html, "Hero 目标价区间卡应为 base 两位小数区间"
     assert ">6-6 元<" not in html and ">8-8 元<" not in html, "整数压没区间的旧形态不得复现"
-    print("OK 低价股目标价两位小数（区间不再被整数格式化压没）")
 
 
 def test_archive_after_render():
@@ -118,7 +115,6 @@ def test_archive_after_render():
         assert os.path.exists(p2), "非 _fill_ 前缀 fill 不得被移动"
         n = len(open(os.path.join(arch, "_index.jsonl"), encoding="utf-8").read().strip().splitlines())
         assert n == 2, "每次渲染追加一行索引"
-    print("OK 渲染后归档（fill+quote 移入 _archive、索引追加、非 _fill_ 不动）")
 
 
 def test_if_block_guardrails():
@@ -133,11 +129,9 @@ def test_if_block_guardrails():
         raise AssertionError("残留 <!--IF:--> 应拒渲染但未拒")
     except ValueError as e:
         assert "条件块" in str(e) and "残留" in str(e), f"实际: {e}"
-    print("OK IF 条件块护栏（缺键告警 / 残留拒渲染）")
 
 
 def test_scalar_placeholders_escaped():
     """P0-3：15 个标量占位键统一 _esc——next_review 带 < 渲染后 HTML 含 &lt; 不含裸 <。"""
     html = render_fill(minimal_fill(next_review="2026-11-27<"))
     assert "2026-11-27&lt;" in html and "2026-11-27<" not in html
-    print("OK 标量键转义（next_review 裸 < → &lt;）")

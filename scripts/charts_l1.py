@@ -51,12 +51,14 @@ def build_segments_plot(fill: dict) -> str:
     H = T + sum(row_hs) + 30
     parts = [f'<span class="section-tag">{tag}</span>',
              _svg_open(W, H, "业务构成")]
-    # 图例（左上）
-    lx2 = _legend_row(parts, [("收入占比", _C_SAND)], ML, sw=14, sh=10, rx=3, dx=20, gap=24,
-                      tcolor=_C_STONE)
+    # 图例（左上；v5.8.2 收敛为 _legend_row glyph 数据列表——毛利率圆点项随行内条件追加，
+    # xround=True 复刻原 :.0f 口径，文字色经 tc 项级覆盖）
+    _sitems = [("收入占比", _C_SAND)]
     if has_gm:
-        parts.append(f'<circle cx="{lx2 + 5:.0f}" cy="13" r="4.5" fill="{_C_BLUE}"/>')
-        parts.append(f'<text x="{lx2 + 14:.0f}" y="17" font-size="11" fill="{_C_BLUE}">毛利率（同一 % 轴）</text>')
+        _sitems.append(("毛利率（同一 % 轴）", {"k": "dot", "r": 4.5, "cx": 5, "fill": _C_BLUE,
+                                               "dx": 14, "tc": _C_BLUE}))
+    _legend_row(parts, _sitems, ML, sw=14, sh=10, rx=3, dx=20, gap=24,
+                tcolor=_C_STONE, xround=True, ty=17)
     # % 轴网格（0-100 定域）+ 顶部刻度 + 右列「毛利率」列头
     _vgrid_ticks(parts, X, _ticks(0, 100, 5), T - 14, H - 24, T - 22, "%")
     if has_gm:
@@ -287,18 +289,19 @@ def build_fin_trend(fill: dict) -> str:
             for t in _ticks(llo, lhi, 3):
                 svg.append(f'<text x="{W - R + 4}" y="{YL(t) + 3:.1f}" font-size="8" fill="{_C_LABEL}">{_fmt(t)}</text>')
         svg.append(f'<line x1="{L}" y1="{y0:.1f}" x2="{W - R}" y2="{y0:.1f}" stroke="{_C_AXIS}" stroke-width="1.2"/>')
-        # 图例（顶部单行）
+        # 图例（顶部单行；v5.8.2 收敛为 _legend_row glyph 数据列表——柱项沿用矩形色块旧契约，
+        # 线项 line glyph 的 cy=10 为本图版式专属（文字基线 13 上 3px，非默认 -4），
+        # 虚线经 dash 传入；柱项推进 15/14、线项 18/14 原样保留）
         bar_colors = [_C_SAND, _C_BLUE]   # 柱色只表系列归属：第一条沙、第二条钢蓝
-        lx = _legend_row(svg, [(f'{b["name"]}（{b["unit"]}，左轴）', bar_colors[bi])
-                               for bi, b in enumerate(p["bars"])], L,
-                         y=6, fs=9, sw=11, sh=8, rx=2, dx=15, gap=14)
+        _fitems = [(f'{b["name"]}（{b["unit"]}，左轴）', bar_colors[bi])
+                   for bi, b in enumerate(p["bars"])]
         for li, ln in enumerate(p["lines"]):
             c = line_colors[li]
-            dash = ' stroke-dasharray="3 2"' if li == 1 else ""
-            lab = ln["name"] + ("（%，右轴）" if ln["pct"] else "（右轴）")
-            svg.append(f'<line x1="{lx}" y1="10" x2="{lx + 14}" y2="10" stroke="{c}" stroke-width="2"{dash}/>')
-            svg.append(f'<text x="{lx + 18}" y="13" font-size="9" fill="{_C_LABEL}">{_esc(lab)}</text>')
-            lx += 18 + _text_w(lab, 9) + 14
+            _fspec = {"k": "line", "stroke": c, "len": 14, "lw": 2, "cy": 10, "dx": 18, "gap": 14}
+            if li == 1:
+                _fspec["dash"] = "3 2"
+            _fitems.append((ln["name"] + ("（%，右轴）" if ln["pct"] else "（右轴）"), _fspec))
+        _legend_row(svg, _fitems, L, y=6, fs=9, sw=11, sh=8, rx=2, dx=15, gap=14)
         # 阈值红虚线
         for ln in p["lines"]:
             if ln["threshold"] is not None:

@@ -240,7 +240,6 @@ def test_holders_label_collision():
     html2 = render_fill(minimal_fill())
     seg2 = html2.split('aria-label="股东户数趋势"', 1)[1].split('</svg>', 1)[0]
     assert "25-03" in seg2, "无碰撞时应保持 YY-MM"
-    print("OK 户数图横标碰撞降精度与重复截止日去重")
 
 
 def test_price_history_quarterly_kline():
@@ -288,7 +287,6 @@ def test_price_history_quarterly_kline():
     assert "12 月均线" in html3, "发丝回退模式应有 12 月均线图例"
     ma3 = re.findall(r'<path d="M([\d., L]+)" fill="none" stroke="#57524a"', seg3)
     assert len(ma3) == 1 and ma3[0].count(" L") == 24, "36 个月 → MA12 从第 12 月起共 25 点"
-    print("OK 季K蜡烛 / 亏损期底纹 / PE 截断 / 发丝线回退 / 趋势均线")
 
 
 def test_consensus_band_and_pe_iqr():
@@ -401,97 +399,6 @@ def test_triggers_strip_all_pending_hidden():
     html = R.build_triggers_strip(minimal_fill(triggers=[
         {"cond": "提价兑现", "status": "hit"}, {"cond": "销量转正", "status": "pending"}]))
     assert 'trig-dot hit' in html and 'trig-dot pending' in html, "含 hit 应原样渲染"
-
-
-def test_table_alignment_keeps_highlight_class():
-    """v4.9.1：fix_table_alignment 只动 num/center，td 上的 cell-best/cell-worst 高亮类存活。"""
-    html = R.fix_table_alignment(
-        '<table><tr><th>公司</th><th>PE(TTM)</th><th>ROE</th></tr>'
-        '<tr><td style="color:#4a6fa5;font-weight:700;">测试股份</td><td class="cell-best">11</td>'
-        '<td>14%</td></tr>'
-        '<tr><td>同业甲</td><td class="cell-worst">25</td><td>9%</td></tr></table>')
-    assert "cell-best num" in html, "数字列应追加 num 且保留 cell-best"
-    assert "cell-worst num" in html, "数字列应追加 num 且保留 cell-worst"
-
-
-def test_scenario_table_alignment_fixed():
-    """v4.10：三情景表触发条件行随列右对齐（工行触发行不一致实证）——表头/时间维度/触发条件
-    全部 num 类；scenario-table 豁免 fix_table_alignment（长文本触发的长文剥类不再介入）。"""
-    html = render_fill(minimal_fill())
-    assert '<th class="num">悲观情景</th>' in html, "情景列表头应 num 右对齐"
-    assert '<td class="num">下行</td>' in html, "触发条件行应随列 num"
-    assert '<td class="num">12个月</td>' in html, "时间维度行应随列 num"
-    long_trig = "NIM 降至 1.22%、信用成本升至 0.65% 的长触发条件文本"
-    html2 = R.fix_table_alignment(
-        f'<table class="scenario-table"><tr><th>指标</th><th class="num">悲观情景</th></tr>'
-        f'<tr><td>触发条件</td><td class="num">{long_trig}</td></tr></table>')
-    assert f'<td class="num">{long_trig}</td>' in html2, "scenario-table 应豁免长文剥类"
-    print("OK 三情景表全列右对齐 + scenario-table 豁免对齐修正")
-
-
-def test_fix_alignment_tie_goes_left():
-    """v4.10：fix_table_alignment 平票判左——文本为主的表整表左对齐不再锯齿
-    （工行 09-11 预期差表「净息差判断」行实证）；数字占多数的列仍右对齐。"""
-    tbl = ('<table><thead><tr><th>维度</th><th>中金</th><th>光大</th></tr></thead><tbody>'
-           '<tr><td>净利</td><td>基本不变</td><td>3,757 亿</td></tr>'
-           '<tr><td>息差判断</td><td>息差企稳</td><td>负债成本降幅趋缓</td></tr>'
-           '<tr><td>评级</td><td>跑赢行业</td><td>买入</td></tr></tbody></table>')
-    html = R.fix_table_alignment(tbl)
-    assert 'class="num"' not in html, "文本为主应整表左对齐"
-    tbl3 = ('<table><thead><tr><th>维度</th><th>卖方</th></tr></thead><tbody>'
-            '<tr><td>2026E 净利</td><td>3,757 亿</td></tr>'
-            '<tr><td>增速</td><td>+2.7%</td></tr>'
-            '<tr><td>息差判断</td><td>负债成本降幅趋缓</td></tr>'
-            '<tr><td>评级</td><td>买入</td></tr></tbody></table>')
-    html3 = R.fix_table_alignment(tbl3)
-    assert '<th class="num">卖方</th>' not in html3, "平票列应判左（表头不加 num）"
-    assert '>买入</td>' in html3, "平票列文字格不加 num"
-    tbl2 = ('<table><thead><tr><th>公司</th><th>PE</th></tr></thead><tbody>'
-            '<tr><td>甲</td><td>11</td></tr><tr><td>乙</td><td>25</td></tr>'
-            '<tr><td>丙</td><td>—</td></tr></tbody></table>')
-    html2 = R.fix_table_alignment(tbl2)
-    assert '<th class="num">PE</th>' in html2, "数字占多数的列仍应右对齐"
-    print("OK 对齐平票判左（文本表整表左 / 平票列左 / 数字列右不变）")
-
-
-def test_fix_alignment_prose_column_goes_left():
-    """v4.10.3：列内出现说明文格（_is_prose_cell）→ 整列判左，不再「数字多数决 → 逐格剥类」
-    （同列 3 数字右 + 1 长文左的锯齿；香农芯创时机表实证）。无长文格时数字多数仍判右。"""
-    tbl = ('<table><thead><tr><th>维度</th><th>说明</th></tr></thead><tbody>'
-           '<tr><td>甲</td><td class="num">11</td></tr>'
-           '<tr><td>乙</td><td class="num">25</td></tr>'
-           '<tr><td>丙</td><td class="num">3,757 亿</td></tr>'
-           '<tr><td>丁</td><td>负债成本降幅趋缓，息差企稳</td></tr>'
-           '<tr><td>戊</td><td>买入</td></tr></tbody></table>')
-    html = R.fix_table_alignment(tbl)
-    assert '<th class="num">说明</th>' not in html, "含长文格的列应整列判左"
-    assert 'class="num"' not in html, "整列判左后数字格也不再右对齐"
-    tbl_num = tbl.replace('<tr><td>丁</td><td>负债成本降幅趋缓，息差企稳</td></tr>', '')
-    assert '<th class="num">说明</th>' in R.fix_table_alignment(tbl_num), \
-        "无长文格时数字多数仍判右（对照支）"
-    print("OK 列含 prose 格整列判左（对照：无长文格仍数字多数决）")
-
-
-def test_fix_alignment_short_placeholder_stays_num():
-    """v4.10.3 审计收窄：短占位格（未披露/未获取到/不适用/—（上年亏损））不触发整列翻左——
-    数字多数列仍判 num（原「超 2 字纯文字」阈值会让存量 66 份报告里 54 份的表被动过）。"""
-    tbl = ('<table><thead><tr><th>公司</th><th>PE(TTM)</th></tr></thead><tbody>'
-           '<tr><td>甲</td><td>11</td></tr><tr><td>乙</td><td>25</td></tr>'
-           '<tr><td>丙</td><td>16</td></tr><tr><td>丁</td><td>18</td></tr>'
-           '<tr><td>戊</td><td>21</td></tr>'
-           '<tr><td>己</td><td>未披露</td></tr>'
-           '<tr><td>庚</td><td>未获取到</td></tr>'
-           '<tr><td>辛</td><td>不适用</td></tr></tbody></table>')
-    html = R.fix_table_alignment(tbl)
-    assert '<th class="num">PE(TTM)</th>' in html, "短占位格不应翻转整列"
-    assert 'class="num">未披露' in html and 'class="num">不适用' in html, "占位格随列右对齐"
-    tbl2 = ('<table><thead><tr><th>公司</th><th>PE(TTM)</th></tr></thead><tbody>'
-            '<tr><td>甲</td><td>11</td></tr><tr><td>乙</td><td>25</td></tr>'
-            '<tr><td>丙</td><td>16</td></tr><tr><td>丁</td><td>18</td></tr>'
-            '<tr><td>戊</td><td>—（上年亏损）</td></tr></tbody></table>')
-    assert '<th class="num">PE(TTM)</th>' in R.fix_table_alignment(tbl2), \
-        "「—（上年亏损）」剥括号后 1 字，不翻列"
-    print("OK 短占位格不翻列（未披露/未获取到/不适用/—（上年亏损）仍 num）")
 
 
 _GAP_DIMS_A = [
@@ -655,7 +562,6 @@ def test_gap_plot():
          "street": [{"v": 1100000}]},
         {"name": "B 维度", "ours": 200, "consensus": 200, "street": [{"v": 180}, {"v": 220}]}]}})
     assert "1,234,567" in big and "e+06" not in big, "大数值应千分位、禁科学计数法"
-    print("OK 预期差图 A/B 档 / 剔除门禁 / 防叠确定性 / 锚点注入 / 热核修复")
 
 
 def test_gap_notes_renumber():
@@ -868,7 +774,6 @@ def test_anchor_ledger_render():
     bad["prev"]["scenarios"] = [{"scenario": "基础情景", "归母净利": "未知", "PE": "不详"}]
     html2 = charts_misc.build_anchor_ledger(bad, calc)
     assert "解析失败" in html2 and "降级" in html2
-    print("OK 锚移动台账（三情景对照 / 证据清单 / 非回测空串 / 解析降级）")
 
 
 def test_price_history_verdict_block():
@@ -913,7 +818,6 @@ def test_price_history_verdict_block():
     v2 = html2.split('aria-label="股价季K与PE历史走势"', 1)[1] \
               .split("<strong>判词：</strong>", 1)[1].split("</div>", 1)[0]
     assert "区间价" not in v2 and "近 4 季" not in v2 and "当前最新月收" in v2, "全窗口 PE 缺失时区间/近季归因缺席（当前句仍在）"
-    print("OK 判词独立横条与区间段扩充")
 
 
 def test_price_history_stage_seams():
@@ -949,7 +853,6 @@ def test_price_history_stage_seams():
                                      cycle_html="<p>周期</p>"))
     seg2 = html2.split('aria-label="股价季K与PE历史走势"', 1)[1].split("</svg>", 1)[0]
     assert "左夹段" not in seg2 and "淡底/竖虚线=周期阶段" not in html2,         "无 cycle_stages 不应有阶段线与其图注说明"
-    print("OK 阶段分界竖虚线（夹取/去重/跳过/图注说明）")
 
 
 def test_price_history_zero_close_no_crash():
@@ -969,7 +872,6 @@ def test_price_history_zero_close_no_crash():
     assert "当前最新月收" in v_seg, "当前位置句应仍在"
     assert "区间价" not in v_seg, "首季收盘为 0 时区间归因句应缺席（除零守卫）"
     assert "近 4 季" not in v_seg, "近季分母季收盘为 0 时近季归因句应缺席（除零守卫）"
-    print("OK close=0 停牌脏数据不崩、归因句缺席、图与当前句照常")
 
 
 def test_holders_all_zero_no_crash():
@@ -981,23 +883,6 @@ def test_holders_all_zero_no_crash():
         {"date": "2025-09-30", "num": 0, "chg": None},
         {"date": "2025-12-31", "num": 0, "chg": None}]))
     assert 'aria-label="股东户数趋势"' in html, "全零户数图应照常渲染"
-    print("OK 全零户数不除零、图照常渲染")
-
-
-def test_fix_alignment_th_rowspan_registers():
-    """v5.5.2 审计：重建循环 rowspan 登记原先只在 td 分支——<th rowspan="2"> 不占位导致
-    其下数据行列位错位一格、num 列首格被剥右对齐；修法登记挪出 td 分支（与投票循环同口径）。"""
-    tbl = ('<table><thead>'
-           '<tr><th rowspan="2">项目</th><th class="num">本期</th><th class="num">上期</th></tr>'
-           '<tr><td class="num">12.5</td><td class="num">10.2</td></tr>'
-           '</thead><tbody>'
-           '<tr><td>说明文字</td><td class="num">7.5</td><td class="num">6.8</td></tr>'
-           '</tbody></table>')
-    html = R.fix_table_alignment(tbl)
-    assert '<td class="num">12.5</td>' in html, "跨行表头下首数据格应保住 num 右对齐"
-    assert '<td class="num">10.2</td>' in html, "次数据格应保住 num 右对齐"
-    assert '<th class="num">本期</th>' in html and '<th class="num">上期</th>' in html
-    print("OK th rowspan 重建登记（数据列不错位、数字列保右对齐）")
 
 
 def test_scenario_horizon_escaped():
@@ -1007,7 +892,6 @@ def test_scenario_horizon_escaped():
     f["valuation"]["horizon"] = "<b>12个月</b>"
     html = R.build_scenario_block(R.compute_valuation(f))
     assert "<b>12个月</b>" not in html, "horizon 不得原样注入（应转义）"
-    print("OK 三指标卡 horizon 转义")
 
 
 def test_fin_trend_unit_escaped():
@@ -1019,7 +903,6 @@ def test_fin_trend_unit_escaped():
     m_seg = html.split('class="m-val"', 1)[1].split("</span>", 1)[0]
     assert "<b>" not in m_seg, "头行单位不得原样注入（应转义）"
     assert "&lt;b&gt;" in m_seg, "头行单位应转义出现"
-    print("OK fin_trend 头行单位转义")
 
 
 def test_gap_history_chart():
@@ -1062,7 +945,6 @@ def test_gap_history_chart():
     # 端到端：经 9 章锚点注入进渲染产物
     out = render_fill(minimal_fill(gap_history={"rows": rows}))
     assert "券商态度变化图" in out and "同一券商首末两份研报对比" in out
-    print("OK gap_history 券商态度变化图（生成/计数/排序/降级/端到端）")
     # 排序回归（v5.6.0 审核 #1）：持平（0.0%）须排在下调之前——`or -9` 曾把 0.0 吞成 -9
     flat = charts_gap.build_gap_history({"gap_history": {"rows": [
         {"org": "平平", "np_from": 100, "np_to": 100},
@@ -1070,7 +952,6 @@ def test_gap_history_chart():
         {"org": "升升", "np_from": 100, "np_to": 101},
     ]}})
     assert flat.index("升升") < flat.index("平平") < flat.index("降降"),         "顺序应为 升→持平→降"
-
 
 
 def test_gap_history_tp_fallback_dots():
@@ -1108,7 +989,6 @@ def test_gap_history_tp_fallback_dots():
     html4 = charts_gap.build_gap_history({"gap_history": {"rows": rows_zj, "tp_reports": [
         {"org": "中金公司", "date": "2026-09-13", "tp": 500.0}]}})
     assert ">500</text>" in html4 and "另有目标价" not in html4, "归一化后应落共享行而非补列"
-    print("OK gap_history 目标价降级面板（单点上轴/共享行/行外补列/横条全集口径/取最新/名归一）")
 
 
 def test_dupont_chain():
@@ -1127,4 +1007,3 @@ def test_dupont_chain():
     assert build_dupont_html({"dupont": {"roe": 16.1}}) == "", "四因子缺一返空"
     only_cur = build_dupont_html({"dupont": {"roe": 16.1, "nm": 30.4, "turn": 0.313, "em": 1.70}})
     assert "dup-chain" in only_cur and "去年同期" not in only_cur
-    print("OK dupont 杜邦乘积链（生成/缺因子/无 prev）")

@@ -193,9 +193,13 @@ def _prev_track_rows(prev: dict, quality, valuation, timing) -> list:
     return rows
 
 
-def _pad_domain(lo: float, hi: float, ratio: float, floor=None):
-    """值域向两端各扩 ratio 比例（防贴边）；floor 给下限（如 ROE 不为负）。"""
-    pad = (hi - lo) * ratio or 1
+def _pad_domain(lo: float, hi: float, ratio: float, floor=None, zero=None):
+    """值域向两端各扩 ratio 比例（防贴边）；floor 给下限（如 ROE 不为负）；
+    zero 给非正跨度时的垫量（v5.8.2，_gap_axis 复用：数据齐平/倒序时按 |hi|×10% 与 1 取大；
+    判定 pad<=0 与原 _gap_axis 的「span>0 用比例垫、否则用 zero」逐步等价）。"""
+    pad = (hi - lo) * ratio
+    if pad <= 0:
+        pad = zero if zero is not None else 1
     lo -= pad
     hi += pad
     if floor is not None:
@@ -225,16 +229,35 @@ def _wrap_label(s: str, max_w: float, fs: float) -> list:
     return [s[:best], s[best:]]
 
 
-def _ticks(lo: float, hi: float, n: int = 5) -> list:
-    """nice-number 刻度：步长取 1/2/2.5/5×10^k，返回落在 [lo,hi] 内的步长整数倍刻度。
-    取代旧版「等距后取整」（会产出 19/32/44/57/69 这类间隔观感不齐的读数）。"""
+def _ticks(lo: float, hi: float, n: int = 5, mults=(1, 2, 2.5, 5, 10),
+           open_interval: bool = False, ret_step: bool = False):
+    """nice-number 刻度。步长取 mults 中首个 m×10^k：
+    默认（闭区间）：m×10^k ≥ span/(n-1) 的首档，返回落在 [lo,hi] 内的步长整数倍刻度
+    （取代旧版「等距后取整」，会产出 19/32/44/57/69 这类间隔观感不齐的读数）。
+    open_interval=True（v5.8.2 收编 charts_gap 定标体系）：候选自 10^(⌊log10(span)⌋-1) 逐档
+    试探，取开区间 (lo,hi) 内刻度数 ≤ n 的最小步长，返回开区间内倍数——原 _gap_axis 的
+    步长选择/刻度生成与此逐行等价；ret_step=True 时返回 (刻度, 步长)。"""
     span = hi - lo
     if not span > 0:
         return [lo]
+    if open_interval:
+        step = None
+        k0 = int(math.floor(math.log10(span))) - 1
+        for k in range(k0, k0 + 8):
+            for m in mults:
+                st = m * 10.0 ** k
+                cnt = math.ceil(hi / st - 1e-9) - (math.floor(lo / st + 1e-9) + 1)
+                if cnt <= n:
+                    step = st
+                    break
+            if step is not None:
+                break
+        out = _open_ticks(lo, hi, step)
+        return (out, step) if ret_step else out
     raw = span / (n - 1)
     mag = 10 ** math.floor(math.log10(raw))
     step = mag
-    for m in (1, 2, 2.5, 5, 10):
+    for m in mults:
         if m * mag >= raw:
             step = m * mag
             break
@@ -243,6 +266,16 @@ def _ticks(lo: float, hi: float, n: int = 5) -> list:
     while t <= hi + 1e-9:
         out.append(round(t, 9))
         t += step
+    return out
+
+
+def _open_ticks(lo: float, hi: float, step: float) -> list:
+    """严格落在开区间 (lo, hi) 内的 step 整数倍刻度（v5.8.2 收编 charts_gap._gap_ticks，
+    原实现逐行等价；charts_gap 侧保留 _gap_ticks 名作为本函数别名）。"""
+    out, k = [], math.floor(lo / step + 1e-9) + 1
+    while k * step < hi - 1e-9:
+        out.append(round(k * step, 9))
+        k += 1
     return out
 
 
@@ -262,59 +295,140 @@ def _svg_close() -> str:
     return '</svg></div>'
 
 
-def _vgrid_ticks(parts: list, X, vals: list, y1, y2, ty, suffix: str = "") -> None:
-    """竖向网格线 + 居中刻度文字（走廊/评分/PE带/业务构成/哑铃五图共用）。
+def _vgrid_ticks(parts: list, X, vals: list, y1, y2, ty, suffix: str = "", fs=11,
+                 xfmt=None, vfmt=None, labels: bool = True) -> None:
+    """竖向网格线 + 居中刻度文字（走廊/评分/PE带/业务构成/哑铃/B档/态度图多图共用）。
     y1/y2 为网格线纵坐标、ty 为刻度文字纵坐标，数值由调用方按各图布局给出；
-    suffix 为刻度数字后的单位（如 x / %）。"""
+    suffix 为刻度数字后的单位（如 x / %）；fs 刻度字号（v5.8.2，gap 图网格 9.5 收编）；
+    xfmt/vfmt 坐标/数值格式化函数（缺省 :.1f/_fmt；gap 图传 _px 去尾零/_gap_fmt）；
+    labels=False 只出刻度字不画网格线（v5.8.2，peers 散点横轴原即无竖网格线）。
+    vals 元素可为 (值, 预格式文本) 元组——B 档定域刻度（-10,"-10%"）等，元组跳过 vfmt/suffix。"""
+    xf = xfmt or (lambda v: f"{v:.1f}")
+    vf = vfmt or _fmt
     for v in vals:
+        if isinstance(v, tuple):
+            v, lab = v
+        else:
+            lab = f"{vf(v)}{suffix}"
         gx = X(v)
-        parts.append(f'<line x1="{gx:.1f}" y1="{y1}" x2="{gx:.1f}" y2="{y2}" stroke="{_C_GRID}" stroke-width="1"/>')
-        parts.append(f'<text x="{gx:.1f}" y="{ty}" text-anchor="middle" font-size="11" fill="{_C_LABEL}">{_fmt(v)}{suffix}</text>')
+        if labels:
+            parts.append(f'<line x1="{xf(gx)}" y1="{y1}" x2="{xf(gx)}" y2="{y2}" stroke="{_C_GRID}" stroke-width="1"/>')
+        parts.append(f'<text x="{xf(gx)}" y="{ty}" text-anchor="middle" font-size="{fs}" fill="{_C_LABEL}">{lab}</text>')
 
 
 def _hgrid_ticks(parts: list, Y, vals: list, x1, x2, tx, suffix: str = "", fs: int = 11,
-                 dy: int = 4, labels: bool = True) -> None:
+                 dy: int = 4, labels: bool = True, lines: bool = True) -> None:
     """横向网格线 + 右对齐刻度文字（股价发丝图/利润增长图/财务趋势面板三图共用）。
     x1/x2 为网格线横向范围、tx 为刻度文字右缘 x，数值由调用方按各图布局给出；
-    suffix 为刻度数字后的单位（% 等）；labels=False 只画线不出字（财务趋势纯线面板网格随线域）。"""
+    suffix 为刻度数字后的单位（% 等）；labels=False 只画线不出字（财务趋势纯线面板网格随线域）；
+    lines=False 只出字不画线（v5.8.2，peers 散点纵轴原即无横网格线）。"""
     for v in vals:
         gy = Y(v)
-        parts.append(f'<line x1="{x1}" y1="{gy:.1f}" x2="{x2}" y2="{gy:.1f}" stroke="{_C_GRID}" stroke-width="1"/>')
+        if lines:
+            parts.append(f'<line x1="{x1}" y1="{gy:.1f}" x2="{x2}" y2="{gy:.1f}" stroke="{_C_GRID}" stroke-width="1"/>')
         if labels:
             parts.append(f'<text x="{tx}" y="{gy + dy:.1f}" text-anchor="end" font-size="{fs}" fill="{_C_LABEL}">{_fmt(v)}{suffix}</text>')
 
 
-def _arrow_dumbbell(xo, xn, cy, color, fmt, dash="", hollow=False) -> str:
-    """哑铃连线+箭头+两端点（13 章回测哑铃与 9 章 B 档偏离哑铃共用几何，v5.1.5 收敛）：
-    两点距 <26 不画箭头（防叠）；连线末端回缩 19*s、箭头尖贴到新点圆缘（r=7.5+描边 2）、
-    翼展 9*s/±5.5；端点：旧值/零轴=沙灰 r=6，新值/本文=r=7.5 钢蓝白描边（hollow=空心，
-    偏离超定域的截断记号）。fmt=坐标格式化函数（调用方各持 .1f / _px 去尾零口径）。"""
+def _arrow_dumbbell(xo, xn, cy, color, fmt, dash="", hollow=False,
+                    r_old=6, r_new=7.5, sw_new=2, lw=3, setback=19,
+                    tip_off=10, wing=9, wing_half=5.5, far_min=26,
+                    base_first=False) -> str:
+    """哑铃连线+箭头+两端点（13 章回测哑铃 / 9 章 B 档偏离哑铃 / 9 章态度变化图哑铃共用几何，
+    v5.1.5 收敛；v5.8.2 参数化收编态度图内联哑铃——默认值=回测/B 档原口径不动，
+    态度图传 r_old=4/r_new=5.5/sw_new=1.5/lw=2/setback=0/tip_off=4/wing=8/wing_half=3.5/
+    far_min=0/base_first=True 逐字节复刻其手写差异）：
+    两点距 <far_min 不画箭头（防叠）；连线末端回缩 setback*s；箭头尖距新点 tip_off*s、
+    箭长 wing*s、翼半宽 wing_half；polygon 顶点序默认尖在前（回测/B 档），base_first=True
+    平底在前（态度图）；端点：旧值/零轴=沙灰 r_old，新值/本文=r_new 钢蓝白描边
+    （hollow=空心，偏离超定域的截断记号）。fmt=坐标格式化函数（调用方各持 .1f/_px 口径）。"""
     s = 1 if xn >= xo else -1
-    far = abs(xn - xo) >= 26
-    out = [f'<line x1="{fmt(xo)}" y1="{fmt(cy)}" x2="{fmt(xn - 19 * s) if far else fmt(xn)}" '
-           f'y2="{fmt(cy)}" stroke="{color}" stroke-width="3"{dash}/>']
+    far = abs(xn - xo) >= far_min
+    out = [f'<line x1="{fmt(xo)}" y1="{fmt(cy)}" x2="{fmt(xn - setback * s) if far else fmt(xn)}" '
+           f'y2="{fmt(cy)}" stroke="{color}" stroke-width="{lw}"{dash}/>']
     if far:
-        tip = xn - 10 * s
-        out.append(f'<polygon points="{fmt(tip)},{fmt(cy)} {fmt(tip - 9 * s)},{fmt(cy - 5.5)} '
-                   f'{fmt(tip - 9 * s)},{fmt(cy + 5.5)}" fill="{color}"/>')
-    out.append(f'<circle cx="{fmt(xo)}" cy="{fmt(cy)}" r="6" fill="{_C_SAND}"/>')
+        tip = xn - tip_off * s
+        back = tip - wing * s
+        if base_first:
+            pts = (f'{fmt(back)},{fmt(cy - wing_half)} {fmt(back)},{fmt(cy + wing_half)} '
+                   f'{fmt(tip)},{fmt(cy)}')
+        else:
+            pts = (f'{fmt(tip)},{fmt(cy)} {fmt(back)},{fmt(cy - wing_half)} '
+                   f'{fmt(back)},{fmt(cy + wing_half)}')
+        out.append(f'<polygon points="{pts}" fill="{color}"/>')
+    out.append(f'<circle cx="{fmt(xo)}" cy="{fmt(cy)}" r="{r_old}" fill="{_C_SAND}"/>')
     fill_c, stroke_c = (_C_PAPER, color) if hollow else (_C_BLUE, _C_PAPER)
-    out.append(f'<circle cx="{fmt(xn)}" cy="{fmt(cy)}" r="7.5" fill="{fill_c}" '
-               f'stroke="{stroke_c}" stroke-width="2"/>')
+    out.append(f'<circle cx="{fmt(xn)}" cy="{fmt(cy)}" r="{r_new}" fill="{fill_c}" '
+               f'stroke="{stroke_c}" stroke-width="{sw_new}"/>')
     return "".join(out)
 
 
 def _legend_row(parts: list, items: list, x, y: int = 8, fs: int = 11, sw: int = 13, sh: int = 9,
-                rx: float = 2.5, dx: int = 18, gap: int = 22, tcolor: str = _C_LABEL):
-    """图例横排单行：逐项画「矩形色块 + 标签文字」并水平推进，返回行末 x（下一项起点）。
-    items: [(标签, 色块 fill)] 或 [(标签, 色块 fill, 色块额外属性)]；标签由本函数转义、推进宽度按
-    未转义文本量取；文字基线取色块下缘（y + sh - 1）。色块尺寸/字号/间距随各图版式由参数给定。"""
+                rx: float = 2.5, dx: int = 18, gap: int = 22, tcolor: str = _C_LABEL,
+                xround: bool = False, ty=None):
+    """图例横排单行：逐项画「glyph + 标签文字」并水平推进，返回行末 x（下一项起点）。
+    items 元素两种形态（v5.8.2 glyph 参数化：原仅支持矩形色块，致 gap/cycle/period/l1
+    七处手写图例，本版收敛为数据列表）：
+      (标签, 色块 fill) / (标签, fill, 额外属性) —— 矩形色块旧契约，输出与 v5.8.2 前逐字节一致；
+      (标签, glyph 字典) —— k=rect(默认)/dot/line/vline/diamond/duo/ring/none 纯文字项，
+        样式 fill/stroke/sw2(描边宽)/dash/lw(线宽)/fills(duo 双色)，
+        几何 r/cx/len/ox/w/h/rx2/gy/y1/y2（glyph 锚点=行内当前 x；dot/line/diamond 的
+        cy 缺省 ty-4，rect/duo 的 gy 缺省 y），项级覆盖 dx(文字偏移)/gap(后继间距)/tc(文字色)。
+    xround=True 时 glyph 与文字的全部 x 输出取 :.0f（cycle/l1-segments 图例原手写即取整口径）。
+    ty=文字基线（缺省 y + sh - 1）；标签由本函数转义、推进宽度按未转义文本量取。"""
+    ty_ = (y + sh - 1) if ty is None else ty
+    xf = (lambda v: f"{v:.0f}") if xround else (lambda v: f"{v}")
     for it in items:
-        txt, fill = it[0], it[1]
-        extra = f' {it[2]}' if len(it) > 2 and it[2] else ""
-        parts.append(f'<rect x="{x}" y="{y}" width="{sw}" height="{sh}" rx="{rx}" fill="{fill}"{extra}/>')
-        parts.append(f'<text x="{x + dx}" y="{y + sh - 1}" font-size="{fs}" fill="{tcolor}">{_esc(txt)}</text>')
-        x += dx + _text_w(txt, fs) + gap
+        txt, spec = it[0], it[1]
+        idx, igap, tc = dx, gap, tcolor
+        if isinstance(spec, dict):
+            idx = spec.get("dx", dx)
+            igap = spec.get("gap", gap)
+            tc = spec.get("tc", tcolor)
+            k = spec.get("k", "rect")
+            cy = spec.get("cy", ty_ - 4)
+            if k == "rect":
+                parts.append(f'<rect x="{xf(x)}" y="{spec.get("gy", y)}" width="{spec.get("w", sw)}" '
+                             f'height="{spec.get("h", sh)}" rx="{spec.get("rx2", rx)}" '
+                             f'fill="{spec["fill"]}"/>')
+            elif k == "dot":
+                stroke = (f' stroke="{spec["stroke"]}" stroke-width="{spec.get("sw2", 1.5)}"'
+                          if spec.get("stroke") else "")
+                parts.append(f'<circle cx="{xf(x + spec.get("cx", spec["r"]))}" cy="{cy}" '
+                             f'r="{spec["r"]}" fill="{spec["fill"]}"{stroke}/>')
+            elif k == "line":
+                dash = f' stroke-dasharray="{spec["dash"]}"' if spec.get("dash") else ""
+                parts.append(f'<line x1="{xf(x)}" y1="{cy}" x2="{xf(x + spec.get("len", 26))}" '
+                             f'y2="{cy}" stroke="{spec["stroke"]}" '
+                             f'stroke-width="{spec.get("lw", 1.6)}"{dash}/>')
+            elif k == "vline":
+                ox = spec.get("ox", 0)
+                parts.append(f'<line x1="{xf(x + ox)}" y1="{spec["y1"]}" x2="{xf(x + ox)}" '
+                             f'y2="{spec["y2"]}" stroke="{spec["stroke"]}" '
+                             f'stroke-width="{spec.get("lw", 3)}"/>')
+            elif k == "diamond":
+                r = spec.get("r", 6)
+                cx = x + spec.get("cx", r)
+                parts.append(f'<polygon points="{xf(cx)},{cy - r} {xf(cx + r)},{cy} '
+                             f'{xf(cx)},{cy + r} {xf(cx - r)},{cy}" fill="{spec["fill"]}"/>')
+            elif k == "duo":
+                w, h = spec.get("w", 12), spec.get("h", 9)
+                g2, gy = spec.get("gap2", 2), spec.get("gy", y)
+                parts.append(f'<rect x="{xf(x)}" y="{gy}" width="{w}" height="{h}" rx="{spec.get("rx2", rx)}" '
+                             f'fill="{spec["fills"][0]}"/>'
+                             f'<rect x="{xf(x + w + g2)}" y="{gy}" width="{w}" height="{h}" '
+                             f'rx="{spec.get("rx2", rx)}" fill="{spec["fills"][1]}"/>')
+            elif k == "ring":
+                cx = x + spec.get("cx", 0)
+                parts.append(f'<circle cx="{xf(cx)}" cy="{cy}" r="{spec["r_in"]}" fill="{spec["fill_in"]}"/>'
+                             f'<circle cx="{xf(cx)}" cy="{cy}" r="{spec["r_out"]}" fill="none" '
+                             f'stroke="{spec["stroke"]}" stroke-width="{spec.get("sw2", 1.5)}"/>')
+            # k == "none"：纯文字说明项（无 glyph）
+        else:
+            extra = f' {it[2]}' if len(it) > 2 and it[2] else ""
+            parts.append(f'<rect x="{xf(x)}" y="{y}" width="{sw}" height="{sh}" rx="{rx}" fill="{spec}"{extra}/>')
+        parts.append(f'<text x="{xf(x + idx)}" y="{ty_}" font-size="{fs}" fill="{tc}">{_esc(txt)}</text>')
+        x += idx + _text_w(txt, fs) + igap
     return x
 
 
@@ -364,7 +478,7 @@ __all__ = [
     "_var_key", "_sensitivity_items", "_first_var_name", "_gap_dim_ok", "_period_ratio",
     "parse_stage_period", "_PERIOD_VERDICTS", "_arrow_dumbbell",
     "_SOURCE_BANNED_RE", "_chart_source",
-    "_pad_domain", "_lin_map", "_text_w", "_wrap_label", "_ticks",
+    "_pad_domain", "_lin_map", "_text_w", "_wrap_label", "_ticks", "_open_ticks",
     "_SVG_STYLE", "_svg_open", "_svg_close", "_vgrid_ticks", "_hgrid_ticks", "_legend_row",
     "_inject_chart_anchors", "_anchor_fit", "_anchor_clamp",
 ]

@@ -202,6 +202,58 @@
 
 ## 版本历史
 
+### V5.8.2（2026-10-21）— 全局热核审计修复：429 硬停穿透恢复 + 校验/渲染同源化收口 + 图表层脚手架收敛 + gate 测试按域拆分
+
+> 缘起：全局热核审计（五路并行子代理，覆盖 scripts/ 全部生产代码与测试基建）发现
+> 「单源纪律在新增代码里的局部破口」4 条行为级 + 一批结构债。用户拍板分档修，
+> price_history 重框架缓修。四轮修复（P0 行为 → P2 小修 → P1 结构 → charts 收敛）
+> 逐轮回归，262 用例全绿、用例数逐名比对零丢失。
+
+- **429 限流硬停穿透恢复（行为修复）**：`_sec_*` 六段段级 `except Exception` 与四处
+  数据层裸 except（_ts_annual_em_map / fetch_period_track / fetch_consensus /
+  fetch_pe_pb_band / 港股 fetch_quote 东财分支）此前把 RateLimitError 吞成降级文本，
+  429 时产出全降级报告且以退出码 0 结束（与「硬停防封禁」设计相反）；现统一前置
+  `except RateLimitError: raise` + `summarize` 线程池边界兜底。tushare 限流不抛
+  RateLimitError（走 RuntimeError/_ts_quiet 既定语义）与 hk_daily 失败哨兵均未动。
+  test_28 四层穿透断言 + generic 错误仍降级对照钉住。
+- **scenario key 大小写静默跳检封堵（行为修复）**：`_check_valuation_scenarios` 容许
+  `key: "Base"`（转小写校验），但 gap_plot ours 与 growth_consistency 两处对账用精确
+  匹配 `"base"`，大写 key 静默跳检；新增 `_scenario_by_key`（`.lower()` 比较）五处统一
+  ——不硬拒大写 key（_archive 存量 fill 兼容）。
+- **_gh_sort_key 校验/渲染同源**：validate 内联副本删除，`from charts_gap import
+  _gh_sort_key`（对齐 charts_cycle._pe_band_ok 既有先例），行 dict 改 npf/npt/tpf/tpt
+  键名与渲染端对齐——该校验（v5.8.1）的存在意义即判定同源。
+- **仓位卡估值图例修正（输出正确性修复）**：图例字面复述判词口径已漂移成「4-5.9 合理」，
+  与 `_valuation_verdict` 唯一口径「合理无安全边际」不一致；`_Q_LEGEND`/`_V_LEGEND`
+  模块常量单源化，过程卡 legend 同收编。golden 7 份各恰好 1 处文案漂移，人工核实后
+  更新基线（其余零漂移）。
+- **估值分权重三份拷贝 → `_VS_W` 单源**（总分算式/四行权重/formula 展示串同源生成，
+  formula 逐字不变实测）；**`_matrix_applies` 守卫谓词单源**（render 14 章升档行与
+  `_position_steps` 共用，消灭谓词漂移致徽章/升档行「同生共灭」破功的隐患）。
+- **render_report 结构收口**：15 散装形参收拢为 RenderContext；`{{}}` 占位符对称早检
+  （镜像 IF 键检查级别，硬拒仍归 `_check_leftover`）；`_write_html` 与 `_index.jsonl`
+  追加改 PID-tmp + os.replace 原子写；`build_position_card` 死形参 fill 删除。
+- **em 层小修**：`_CAPTURE` 随 `summarize` 入口清理（消跨股残留键的顺序脆弱依赖，
+  test_29 钉住）；em_owner 户数双函数环比/组装重复提取 `_holder_rows`/`_ratio_walk`
+  （净删 25 行，边界语义逐项抽查保全）。
+- **validate.py 五组复制骨架提取**（行为保持）：容差对账 `_tol_floor`/`_audit_pairs`
+  （5 处逐字复制收敛）、HTML 表格切分三生成器（6 处，含两处已漂移变体的等价承载）、
+  `_resolve_type_tier`（3 处分型解析单源）、`_CH11_BINDINGS` 表驱动（3 处同文案告警）、
+  必填字段检查合并。净 +78 行（helper 文档化代价）；12 组合成 fill 新旧差分验证 0 失败。
+- **charts 层脚手架收敛四项（字节级零漂移）**：`_legend_row` glyph 参数化（九种 glyph
+  收编 6 处手写图例）、`_vgrid_ticks` 字号/labels 参数（收编 4 处手写刻度循环）、
+  `_arrow_dumbbell` 11 参数化 + `_flat_ring`（收编 gap 内联哑铃与「持平」字形双份）、
+  `_ticks` open_interval/mults（收编 `_gap_axis` 第二套定标体系）。15 组 fill 变体 +
+  4007 组定域模糊前后逐字节一致；模糊测试顺手抓到并修掉 `_pad_domain` zero 判定一处
+  倒序输入真差异。净 +100 行——基座参数面增宽换取全站图例/刻度/哑铃单源。
+- **测试基建**：test_render_gate.py（3300 行，超全部生产文件）按域拆 6 文件（130 用例
+  逐名零丢失）+ align_fix 用例归位新建 test_align_fix.py（6 用例）+ 删约 100 处
+  `print("OK")` 噪音；`_GH_ROW` 常量提取、冗余局部 import 清理。
+- **回归**：262 passed（原 257 + 净增 5 用例）；golden 12 项通过（仅图例文案一处计划内
+  更新）；`RENDERER_VERSION` v5.8.1→v5.8.2（版本标记 v* 通配，快照零漂移）。
+- **缓修登记（handoff 备查）**：build_price_history 双形态重框架（先冻结快照基线再动手）；
+  validate.py 五模块拆分（骨架提取已先行）；validate.py CRLF 孤岛统一。
+
 ### V5.8.1（2026-10-21）— tp_reports 漏抄断链根治 + 降级面板取最新/机构名归一 + 散文检测误伤收窄（宁德时代 300750 复盘实证 + 双轮 ponytail-review）
 
 > 缘起：宁德时代 300750 三季报当日复盘，用户发现「券商态度变化·目标价」无内容。

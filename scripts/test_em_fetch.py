@@ -1129,3 +1129,123 @@ def test_18c_dupont_factors():
     finally:
         em_finance._em_f10 = _o
     print("18c. 杜邦四因子（本期+去年同期/缺期降级）通过")
+
+
+
+def test_28_rate_limit_passthrough():
+    """v5.8.2：段级 except / 数据层裸 except / summarize 边界不再吞 RateLimitError——
+    东财取数抛限流时穿透至 main 硬停（退 2）；generic Exception 仍走降级文本（行为不破）。"""
+    import em_finance
+    import em_market
+
+    def _boom(*a, **k):
+        raise em.RateLimitError("HTTP 429（限流/服务端错误，硬停不重试）: mock")
+
+    # ① 段级：E2 取数抛限流 → _sec_e2 不吞成 [失败: …]
+    _orig_kl = em.fetch_kline_monthly
+    em.fetch_kline_monthly = _boom
+    try:
+        try:
+            em._sec_e2("1.600989", 5, False)
+            raise AssertionError("段级 except 不应吞 RateLimitError")
+        except em.RateLimitError:
+            pass
+        # ② summarize 边界：线程池内穿透，边界兜底不吞；其余段 stub 掉避免真实网络
+        _stubs = {n: getattr(em, n) for n in ("_sec_e1", "_sec_e3", "_sec_quality",
+                                              "_sec_e4", "_sec_forecast", "_sec_gov",
+                                              "_sec_e5", "_sec_e6")}
+        for n in _stubs:
+            setattr(em, n, lambda *a, **k: [])
+        em._sec_e3 = lambda *a, **k: ([], None)   # 真返回结构：(e3_out, annual) 元组
+        try:
+            try:
+                em.summarize("600989", 5)
+                raise AssertionError("summarize 边界不应吞 RateLimitError")
+            except em.RateLimitError:
+                pass
+        finally:
+            for n, fn in _stubs.items():
+                setattr(em, n, fn)
+    finally:
+        em.fetch_kline_monthly = _orig_kl
+
+    # ③ generic Exception 仍降级成 [失败: …]（既有行为不破：只有限流穿透）
+    def _net_err(*a, **k):
+        raise ConnectionError("mock 网络失败")
+    em.fetch_kline_monthly = _net_err
+    try:
+        out = em._sec_e2("1.600989", 5, False)
+        assert any("[失败:" in l for l in out), "generic 错误应降级成 [失败: …] 文本"
+    finally:
+        em.fetch_kline_monthly = _orig_kl
+
+    # ④ 数据层裸 except：东财 F10 限流穿透 _ts_annual_em_map
+    _orig_get = em_core.get
+    em_finance._EM_F10_CACHE.pop("600989.SH", None)   # memo 命中即不调 loader，先清同 secucode 缓存
+    em_core.get = _boom
+    try:
+        try:
+            em_finance._ts_annual_em_map("600989.SH", 5)
+            raise AssertionError("数据层裸 except 不应吞 RateLimitError")
+        except em.RateLimitError:
+            pass
+    finally:
+        em_core.get = _orig_get
+
+    # ⑤ 港股 fetch_quote：东财行情侧限流穿透，hk_daily 哨兵侧（既定降级）不动
+    _orig_ts = em_core.ts_call
+    _orig_hk = dict(em_market._HK_DAILY_CACHE)
+    em_core.ts_call = lambda *a, **k: []    # hk_daily 空 → 哨兵 RuntimeError，缓存读取侧照旧吞
+    em_core.get = _boom                      # 东财行情限流
+    try:
+        try:
+            em_market.fetch_quote("116.00700", True)
+            raise AssertionError("港股 fetch_quote 东财分支不应吞 RateLimitError")
+        except em.RateLimitError:
+            pass
+    finally:
+        em_core.ts_call = _orig_ts
+        em_core.get = _orig_get
+        em_market._HK_DAILY_CACHE.clear()
+        em_market._HK_DAILY_CACHE.update(_orig_hk)
+    print("28. 限流穿透（段级/summarize 边界/数据层/港股东财分支）通过")
+
+
+
+def test_29_summarize_clears_capture():
+    """29. summarize 入口 _CAPTURE.clear()（v5.8.2 审计修复，无网络段级 stub）：第一次调用
+    写入的 consensus_eps 残留键不得污染第二次输出——原 _sec_e5 东财降级路径先捕获存根、
+    再按 "consensus_eps" in _CAPTURE 决定是否标注「已换算落盘」行；stub 镜像该条件行为。"""
+    _orig = {n: getattr(em, n) for n in ("_sec_e1", "_sec_e3", "_sec_quality", "_sec_e2",
+                                         "_sec_e4", "_sec_forecast", "_sec_gov", "_sec_e6")}
+    _orig_e5, _orig_cap = em._sec_e5, dict(em._CAPTURE)
+    _note = "（当年 EPS 均值已按 ×总股本 换算落盘 consensus_np——第 3 章完成度分母照抄源）"
+
+    def _fake_e5(*a, **k):
+        if _fake_e5.calls == 0:   # 仅第一次调用写入捕获键（模拟东财降级路径落存根）
+            em._CAPTURE["consensus_eps"] = {"year": 2026, "eps": 1.5, "orgs": 8}
+        _fake_e5.calls += 1
+        return ["## E5 一致预期\n" + (_note if "consensus_eps" in em._CAPTURE else "")]
+
+    _fake_e5.calls = 0
+    try:
+        for n in _orig:
+            setattr(em, n, lambda *a, **k: [])
+        em._sec_e3 = lambda *a, **k: ([], None)   # 真返回结构：(e3_out, annual) 元组
+        em._sec_e5 = _fake_e5
+        em._CAPTURE.clear()
+
+        out1 = em.summarize("600989", 5)
+        assert _note in out1, "第一次调用 stub 写入捕获键后应出现换算标注"
+        assert "consensus_eps" in em._CAPTURE, "第一次调用后残留键应留在 _CAPTURE"
+
+        out2 = em.summarize("600989", 5)   # 第二次 stub 不再写键：残留即误标注
+        assert _note not in out2, f"第二次输出被第一次残留键污染:\n{out2}"
+        assert "consensus_eps" not in em._CAPTURE, "入口清空后不得残留上一次捕获键"
+    finally:
+        for n, fn in _orig.items():
+            setattr(em, n, fn)
+        em._sec_e5 = _orig_e5
+        em._CAPTURE.clear()
+        em._CAPTURE.update(_orig_cap)
+    print("29. summarize 清 _CAPTURE（二次调用无残留污染）通过")

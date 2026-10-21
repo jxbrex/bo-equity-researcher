@@ -210,6 +210,8 @@ def _sec_e1(secid: str, is_hk: bool, pure: str) -> list:
         else:
             out.append("时机素材: [未获取到（日线序列失败或不足60个交易日），"
                        "技术面信号须注明手工口径与来源；月收序列仍以 E2 月线输出为准]\n")
+    except RateLimitError:
+        raise  # v5.8.2 硬停纪律：段级 except 不再把限流吞成 [失败: …]，穿透至 main 退 2
     except Exception as e:
         out.append(f"## E1 行情估值\n[失败: {e}]\n")
     return out
@@ -253,6 +255,8 @@ def _sec_e3_hk(pure: str) -> list:
         else:
             out.append("报告期进度: [港股季报口径未获取（tushare hk_income 无数据），"
                        "请降级：妙想 MCP mx_hk_finance_data 直查并标注路径；第 3 章不得编造]\n")
+    except RateLimitError:
+        raise  # v5.8.2 硬停纪律：段级 except 不再把限流吞成 [未获取到…]，穿透至 main 退 2
     except Exception as e:
         out.append(f"## E3 财务年表\n[未获取到港股财务年表（tushare 无 hk_income 权限: {e}），"
                    f"请降级：**优先妙想 MCP mx_hk_finance_data 直查**（模型直调，实测可用）；"
@@ -417,6 +421,8 @@ def _sec_e2(secid: str, years: int, is_hk: bool) -> list:
                        f"（全序列格式=开,高,低,收[/月末PE(TTM)]；四值为 ? = 该月 OHLC 缺失，"
                        f"照抄时该月只写 close/pe（图自动退化为收盘一字线）；price_history 的 "
                        f"open/high/low/close/pe 字段照抄全序列（m=YYYY-MM），不再手工推算）\n")
+    except RateLimitError:
+        raise  # v5.8.2 硬停纪律：段级 except 不再把限流吞成 [失败: …]，穿透至 main 退 2
     except Exception as e:
         out.append(f"## E2 月线\n[失败: {e}]\n")
     return out
@@ -458,6 +464,8 @@ def _sec_e4(pure: str, is_hk: bool) -> list:
                 # 季度序列不足 3 期（户数主序列有数据时才有提示意义，全空已在上行提示）
                 out.append(f"[季度序列不足 3 期（仅 {len(q)} 期），holders 图不会生成；"
                            f"请降级：妙想 MCP 直查历史季末户数补齐，或 12 章注明户数图缺席]\n")
+    except RateLimitError:
+        raise  # v5.8.2 硬停纪律：段级 except 不再把限流吞成 [失败: …]，穿透至 main 退 2
     except Exception as e:
         out.append(f"## E4 股东户数\n[失败: {e}]\n")
     return out
@@ -636,6 +644,8 @@ def _sec_e5(pure: str, is_hk: bool) -> list:
                        + f"行业: {c.get('INDUSTRY_BOARD')} | 概念: {(c.get('CONCEPTINDEX_BOARD') or '')[:80]}\n")
         elif is_hk:
             out.append("## E5 一致预期\n[港股无覆盖（tushare report_rc/东财均空），预期差按档位C处理]\n")
+    except RateLimitError:
+        raise  # v5.8.2 硬停纪律：段级 except 不再把限流吞成 [失败: …]，穿透至 main 退 2
     except Exception as e:
         out.append(f"## E5 一致预期\n[失败: {e}]\n")
     return out
@@ -681,6 +691,8 @@ def _sec_e6(secucode: str, is_hk: bool) -> list:
         else:
             out.append("## E6 主营构成\n[未获取到主营构成数据，请降级：妙想 MCP 直查或年报定性搜索；"
                        "1B/1C 评分缺核心输入]\n")
+    except RateLimitError:
+        raise  # v5.8.2 硬停纪律：段级 except 不再把限流吞成 [失败: …]，穿透至 main 退 2
     except Exception as e:
         if not any(l.startswith("## E6") for l in out):
             out.append("## E6 主营构成")
@@ -715,6 +727,10 @@ def _sec_e7(searches: list) -> list:
 
 
 def summarize(code: str, years: int, searches: list = None) -> str:
+    # v5.8.2（审计修复）：_CAPTURE 只写不清，同进程第二次调用会读到上一次残留键——
+    # _sec_e5 的 "consensus_eps" in _CAPTURE 判断即因此被误标注（现有 main 单次调用恰好
+    # 规避，属顺序脆弱依赖）；入口清空，每次 summarize 的捕获独立成集
+    _CAPTURE.clear()
     secid, secucode, is_hk = secid_of(code)
     pure = secucode.split(".")[0]
     mkt = "港股" if is_hk else "A股"
@@ -745,9 +761,12 @@ def summarize(code: str, years: int, searches: list = None) -> str:
     if searches:
         jobs.append(lambda: _sec_e7(searches))
 
-    with ThreadPoolExecutor(max_workers=4) as ex:
-        for res in ex.map(lambda f: f(), jobs):  # map 保序：输出章节顺序与串行版一致
-            out.extend(res)
+    try:
+        with ThreadPoolExecutor(max_workers=4) as ex:
+            for res in ex.map(lambda f: f(), jobs):  # map 保序：输出章节顺序与串行版一致
+                out.extend(res)
+    except RateLimitError:
+        raise  # v5.8.2 兜底：任何漏网的限流穿透都在 summarize 边界抛给 main 硬停（退 2）
 
     return "\n".join(out)
 

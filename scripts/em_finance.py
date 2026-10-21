@@ -19,7 +19,8 @@ import statistics
 
 import em_core as _C
 from em_core import (to_ts_code, yi, pct, memo, _yoy, _ts_quiet, _ttm_cutoff,
-                     _daily_basic_latest, _em_dc, _fin_rng, _win_years)
+                     _daily_basic_latest, _em_dc, _fin_rng, _win_years,
+                     RateLimitError)
 
 
 def _growth_sigma(vals):
@@ -135,6 +136,8 @@ def _ts_annual_em_map(secucode: str, n_years: int) -> dict:
             key = (r.get("REPORT_DATE_NAME") or r.get("REPORT_DATE") or "")[:4]
             if key.isdigit():
                 em_map[key] = r
+    except RateLimitError:
+        raise  # v5.8.2 硬停纪律：东财 F10 限流不吞成「无补齐」，穿透至 main 退 2
     except Exception:
         pass
     return em_map
@@ -359,7 +362,7 @@ def fetch_latest_quarter(code: str, secucode: str) -> dict:
 
 # fetch_period_track/_period_track_calc 产出键全集（v5.1.5 键集漂移守卫锚点：生产端/校验端
 # （validate 四组键）/落盘参照（conftest._PERIOD_REF_KEYS）三处加键忘同步即红——
-# test_render_gate.test_period_track_key_drift；end_date/gm 为生产端内部键，不入参照）
+# test_render_gate_period.test_period_track_key_drift；end_date/gm 为生产端内部键，不入参照）
 _PERIOD_TRACK_KEYS = ("period", "end_date", "is_annual", "rev", "np", "np_dedt", "ocf", "gm",
                       "rev_yoy", "np_yoy", "np_dedt_yoy", "ocf_yoy",
                       "sq_label", "sq_rev", "sq_np", "sq_prev_label", "sq_prev_rev", "sq_prev_np",
@@ -510,10 +513,14 @@ def fetch_period_track(code: str, secucode: str = None) -> dict:
                         t["gm"] = round(em["XSMLL"], 1)
         if t:
             return t
+    except RateLimitError:
+        raise  # v5.8.2 硬停纪律：tushare 分支内的东财补齐调用限流不吞成「无进度」，穿透至 main 退 2
     except Exception:
         pass
     try:  # 东财 F10 兜底：混合报告期 20 行（与年表/最新季度共享 _EM_F10_CACHE）
         return _period_track_calc(_f10_period_rows(_em_f10(secucode, size=_EM_F10_PAGE)))
+    except RateLimitError:
+        raise  # v5.8.2 硬停纪律：F10 兜底限流不吞成「无进度」，穿透至 main 退 2
     except Exception:
         return {}
 

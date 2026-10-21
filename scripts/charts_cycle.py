@@ -343,27 +343,24 @@ def build_price_history(fill: dict) -> str:
                          f'font-weight="{"700" if is_cur else "400"}" fill="{_C_INK if is_cur else _C_STONE}" '
                          f'stroke="{_C_PAPER_CELL}" stroke-width="3" '
                          f'paint-order="stroke">{_esc(txt)}</text>')
-    # 图例（左上）
+    # 图例（左上；v5.8.2 收敛为 _legend_row glyph 数据列表：季K=duo 红绿双块/发丝=line 线段，
+    # 均线/PE 条件项同原「无线不出图例」分支；xround=True 复刻原 :.0f 取整推进）
     _leg1 = f"股价季K（左轴，{cur}；红涨绿跌）" if has_ohlc else f"股价（左轴，{cur}）"
-    if has_ohlc:
-        parts.append(f'<rect x="{L}" y="{T - 17}" width="12" height="9" rx="2" fill="{_C_RED}"/>')
-        parts.append(f'<rect x="{L + 14}" y="{T - 17}" width="12" height="9" rx="2" fill="{_C_GREEN}"/>')
-    else:
-        parts.append(f'<line x1="{L}" y1="{T - 12}" x2="{L + 26}" y2="{T - 12}" stroke="{_C_INK}" stroke-width="1.6"/>')
-    parts.append(f'<text x="{L + 32}" y="{T - 8}" font-size="11" fill="{_C_INK}">{_esc(_leg1)}</text>')
     # v4.11.1（海油反馈）：叠加趋势均线——季K 模式=季度收盘 MA4，发丝模式=月收盘 MA12；
     # 中性暖灰细线，不抢蜡烛/PE 线视觉层级
     _ma_leg = "4 季均线" if has_ohlc else "12 月均线"
     _pe_freq = "季度" if has_ohlc else "月频"   # v5.0（F）：季K 分支 PE 已季频聚合
-    lx2 = L + 32 + _text_w(_leg1, 11) + 24
+    _items = [(_leg1, {"k": "duo", "fills": (_C_RED, _C_GREEN), "w": 12, "h": 9, "rx2": 2,
+                       "gy": T - 17, "dx": 32, "gap": 24, "tc": _C_INK} if has_ohlc
+                else {"k": "line", "stroke": _C_INK, "len": 26, "lw": 1.6,
+                      "dx": 32, "gap": 24, "tc": _C_INK})]
     if ma_pts:   # 图例与折线同门槛（无线不出图例）
-        parts.append(f'<line x1="{lx2:.0f}" y1="{T - 12}" x2="{lx2 + 26:.0f}" y2="{T - 12}" '
-                     f'stroke="{_C_STONE}" stroke-width="1.6"/>')
-        parts.append(f'<text x="{lx2 + 32:.0f}" y="{T - 8}" font-size="11" fill="{_C_STONE}">{_ma_leg}</text>')
-        lx2 += 32 + _text_w(_ma_leg, 11) + 24
+        _items.append((_ma_leg, {"k": "line", "stroke": _C_STONE, "len": 26, "lw": 1.6,
+                                 "dx": 32, "gap": 24, "tc": _C_STONE}))
     if has_pe:
-        parts.append(f'<line x1="{lx2:.0f}" y1="{T - 12}" x2="{lx2 + 26:.0f}" y2="{T - 12}" stroke="{_C_BLUE}" stroke-width="1.6"/>')
-        parts.append(f'<text x="{lx2 + 32:.0f}" y="{T - 8}" font-size="11" fill="{_C_BLUE}">PE(TTM)（右轴，{_pe_freq}）</text>')
+        _items.append((f"PE(TTM)（右轴，{_pe_freq}）", {"k": "line", "stroke": _C_BLUE,
+                         "len": 26, "lw": 1.6, "dx": 32, "tc": _C_BLUE}))
+    _legend_row(parts, _items, L, xround=True, ty=T - 8)
     # 左轴（股价）网格与刻度
     _hgrid_ticks(parts, Yc, _ticks(lo_c, hi_c, 5), L, W - R, L - 8)
     # 右轴（PE）刻度 + 截断标注

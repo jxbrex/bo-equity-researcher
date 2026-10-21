@@ -19,6 +19,7 @@ import json
 import os
 import re
 import sys
+from collections import namedtuple
 from html import unescape as _html_unescape
 
 # Windows GBK 控制台打印 ⚠️/−/🔴 等字符会 UnicodeEncodeError，统一强制 UTF-8 + replace
@@ -37,7 +38,7 @@ from scoring import (
     build_score_summary, build_valuation_process_card, build_position_card,
     _quality_verdict, _valuation_verdict,
     compute_valuation, compute_valuation_score, build_dcf_cards, build_regime_note,
-    _edge_info, build_edge_upgrade_rows,
+    _edge_info, build_edge_upgrade_rows, _matrix_applies,
 )
 from charts_base import _fmt_px, _prev_track_rows, _SOURCE_BANNED_RE
 from charts_scenario import (
@@ -60,7 +61,7 @@ from validate import validate_content
 
 # 渲染器版本：嵌入输出 HTML 尾部注释，事后可 grep 验证报告确由本脚本渲染
 # （防"render 报错后手写全文 HTML 绕行"，巨石 2026-08-23 实证）
-RENDERER_VERSION = "v5.8.1"
+RENDERER_VERSION = "v5.8.2"
 
 # Windows 文件名非法字符：\ / : * ? " < > | 及 ASCII 控制字符（\x00-\x1f）
 _WIN_ILLEGAL = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
@@ -288,11 +289,23 @@ def _build_context(fill: dict, calc: dict):
     return date, subtitle, target_range
 
 
-def _build_repl_map(fill: dict, cur: str, calc: dict, sc: dict, valuation: float,
-                    valuation_calc: dict, prev: dict, review_html: str, date: str,
-                    subtitle: str, target_range: str, peers_html: str, spectrum_html: str,
-                    scenario_block_html: str, peers_plot_html: str) -> dict:
-    """组装模板占位符映射（repl）：全部字段值在此定稿，条件块/替换/渲染后校验都消费它。"""
+# v5.8.2：_build_repl_map 的 15 个散装形参收拢为 RenderContext（render 组装一次传入）——
+# 形参每加一项要同步改两处签名，上下文对象随 render 流水线天然同生共灭
+RenderContext = namedtuple("RenderContext", [
+    "fill", "cur", "calc", "sc", "valuation", "valuation_calc", "prev", "review_html",
+    "date", "subtitle", "target_range", "peers_html", "spectrum_html",
+    "scenario_block_html", "peers_plot_html",
+])
+
+
+def _build_repl_map(ctx: "RenderContext") -> dict:
+    """组装模板占位符映射（repl）：全部字段值在此定稿，条件块/替换/渲染后校验都消费它。
+    v5.8.2：15 个散装形参收为 RenderContext（render 组装一次传入）。"""
+    fill, cur, calc, sc, valuation = ctx.fill, ctx.cur, ctx.calc, ctx.sc, ctx.valuation
+    valuation_calc, prev, review_html = ctx.valuation_calc, ctx.prev, ctx.review_html
+    date, subtitle, target_range = ctx.date, ctx.subtitle, ctx.target_range
+    peers_html, spectrum_html = ctx.peers_html, ctx.spectrum_html
+    scenario_block_html, peers_plot_html = ctx.scenario_block_html, ctx.peers_plot_html
     layer_scores = sc["layer_scores"]
     layer_share = sc["layer_share"]
     quality = sc["quality"]
@@ -315,7 +328,9 @@ def _build_repl_map(fill: dict, cur: str, calc: dict, sc: dict, valuation: float
     # v5.0 机制一：档位临界升档路径行（每条临界轨一条 pending trig）。
     # 红灯熔断或中枢为负拦截命中时仓位根本没走矩阵，不挂临界升档触发
     edge_crit = []
-    if not red_flag and not (calc and calc["central_raw"] < 0):
+    # v5.8.2：守卫谓词单源在 scoring._matrix_applies，与仓位卡 _position_steps 同一份
+    # （原此处与 scoring 各持一份同款判断，谓词漂移会让徽章与升档行脱节）
+    if _matrix_applies(red_flag, calc):
         # F3：与仓位卡同口径传 floor_uplift（net_cash 硬地板上浮恰落 8.0 豁免临界）——
         # 徽章与 14 章升档行同生共灭
         edge_crit, _q_eff, _v_eff = _edge_info(quality, valuation,
@@ -404,7 +419,7 @@ def _build_repl_map(fill: dict, cur: str, calc: dict, sc: dict, valuation: float
         "VALUATION_PROCESS_HTML": build_valuation_process_card(calc, valuation_calc,
                                                                fill.get("valuation_inputs") or {})
                                   + build_regime_note(fill),
-        "POSITION_CARD_HTML": build_position_card(fill, quality, valuation, timing, calc, red_flag,
+        "POSITION_CARD_HTML": build_position_card(quality, valuation, timing, calc, red_flag,
                                                   floor_uplift=valuation_calc.get("floor_uplift")),
 
         # 回测模式（prev 存在时生效，否则条件块自动删除）
@@ -454,6 +469,14 @@ def _fill_template(repl: dict) -> str:
     if missing_if:
         print(f"⚠️ 模板 IF 键 {missing_if} 不在 repl map——对应条件块被静默删除，"
               f"请核对键名或在 _build_repl_map 补键", file=sys.stderr)
+    # v5.8.2（与上方 IF 键检查对称）：{{}} 占位符键不在 repl map——此前只到末端
+    # _check_leftover 才硬炸（报错离原因远），先点名告警；硬拒仍由 _check_leftover 兜底
+    ph_keys = set(re.findall(r"\{\{([A-Z_0-9]+)\}\}", html))
+    missing_ph = sorted(ph_keys - set(repl))
+    if missing_ph:
+        print(f"⚠️ 模板 {{{{}}}} 占位符键 {missing_ph} 不在 repl map——将原样残留并被残留校验拒渲染，"
+              f"请核对键名或在 _build_repl_map 补键", file=sys.stderr)
+
     html = re.sub(r"<!--IF:([A-Z_]+)-->(.*?)<!--ENDIF-->", handle_conditional, html, flags=re.S)
 
     html = re.sub(r"\{\{([A-Z_0-9]+)\}\}", lambda m: repl.get(m.group(1), m.group(0)), html)
@@ -544,12 +567,17 @@ def _make_output_path(fill_path: str, fill: dict, date: str, quality: float,
 
 
 def _write_html(html: str, out_path: str) -> None:
-    """写输出文件：覆盖告警 + 注入 RENDERER_VERSION 尾部注释。"""
+    """写输出文件：覆盖告警 + 注入 RENDERER_VERSION 尾部注释。
+    v5.8.2：同目录 PID-tmp + os.replace 原子落盘（照抄 em_cache.dc_write / em_fetch --out
+    模式）——磁盘满/中断不留半个 HTML。"""
     if os.path.exists(out_path):
         print(f"⚠️ 输出文件已存在，将被覆盖: {out_path}", file=sys.stderr)
-    with open(out_path, "w", encoding="utf-8") as f:
-        f.write(html.replace("</body>",
-                             f"<!-- generated by render_report.py {RENDERER_VERSION} -->\n</body>"))
+    content = html.replace("</body>",
+                           f"<!-- generated by render_report.py {RENDERER_VERSION} -->\n</body>")
+    tmp = f"{out_path}.{os.getpid()}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(content)
+    os.replace(tmp, out_path)
 
 
 def _archive_artifacts(fill: dict, fill_path: str, out_path: str, date: str,
@@ -587,8 +615,14 @@ def _archive_artifacts(fill: dict, fill_path: str, out_path: str, date: str,
             "target_range": target_range, "red_flag": red_flag or "", "backtest": backtest,
             "renderer": RENDERER_VERSION,
         }
-        with open(os.path.join(arch_dir, "_index.jsonl"), "a", encoding="utf-8") as f:
-            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        idx_path = os.path.join(arch_dir, "_index.jsonl")
+        # v5.8.2：追加改「读旧 + 拼新 + PID-tmp + os.replace」原子写（照抄 em_cache.dc_write
+        # 模式）——中断不留半行 JSONL
+        old_idx = open(idx_path, encoding="utf-8").read() if os.path.exists(idx_path) else ""
+        tmp_idx = f"{idx_path}.{os.getpid()}.tmp"
+        with open(tmp_idx, "w", encoding="utf-8") as f:
+            f.write(old_idx + json.dumps(row, ensure_ascii=False) + "\n")
+        os.replace(tmp_idx, idx_path)
         print(f"归档 → {arch_dir}" + (f"（{'、'.join(moved)} + _index.jsonl）" if moved else "（_index.jsonl）"))
     except OSError as e:
         print(f"⚠️ 归档失败（报告本身已完成，不受影响）: {e}", file=sys.stderr)
@@ -662,9 +696,12 @@ def render(fill_path: str, out_path: str = None) -> str:
     prev, review_html = _check_backtest_flags(fill)
 
     date, subtitle, target_range = _build_context(fill, calc)
-    repl = _build_repl_map(fill, cur, calc, sc, valuation, valuation_calc, prev, review_html,
-                           date, subtitle, target_range, peers_html, spectrum_html,
-                           scenario_block_html, peers_plot_html)
+    ctx = RenderContext(fill=fill, cur=cur, calc=calc, sc=sc, valuation=valuation,
+                        valuation_calc=valuation_calc, prev=prev, review_html=review_html,
+                        date=date, subtitle=subtitle, target_range=target_range,
+                        peers_html=peers_html, spectrum_html=spectrum_html,
+                        scenario_block_html=scenario_block_html, peers_plot_html=peers_plot_html)
+    repl = _build_repl_map(ctx)
 
     html = _fill_template(repl)
     _check_leftover(html)

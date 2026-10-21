@@ -201,10 +201,10 @@ def build_peers_plot(fill: dict) -> str:
     # 坐标轴 + 刻度
     parts.append(f'<line x1="{L}" y1="{H - B}" x2="{W - R}" y2="{H - B}" stroke="{_C_AXIS}" stroke-width="1.2"/>')
     parts.append(f'<line x1="{L}" y1="{T}" x2="{L}" y2="{H - B}" stroke="{_C_AXIS}" stroke-width="1.2"/>')
-    for v in _ticks(pe_lo, pe_hi):
-        parts.append(f'<text x="{X(v):.1f}" y="{H - B + 18}" text-anchor="middle" font-size="11" fill="{_C_LABEL}">{_fmt(v)}x</text>')
-    for v2 in _ticks(roe_lo, roe_hi):
-        parts.append(f'<text x="{L - 8}" y="{Y(v2) + 4:.1f}" text-anchor="end" font-size="11" fill="{_C_LABEL}">{_fmt(v2)}%</text>')
+    # 双轴刻度（v5.8.2 收编 _vgrid_ticks/_hgrid_ticks：散点图故意无网格线——labels=False /
+    # lines=False 只出刻度字，与原手写输出逐字节一致）
+    _vgrid_ticks(parts, X, _ticks(pe_lo, pe_hi), T, H - B, H - B + 18, suffix="x", labels=False)
+    _hgrid_ticks(parts, Y, _ticks(roe_lo, roe_hi), L, W - R, L - 8, suffix="%", lines=False)
     parts.append(f'<text x="{W - R}" y="{H - 8}" text-anchor="end" font-size="11" fill="{_C_LABEL}">PE(TTM)</text>')
     parts.append(f'<text x="{L}" y="{T - 12}" font-size="11" fill="{_C_LABEL}">ROE</text>')
     # 数据点（直接标注，免图例；可选 size 字段编码市值——面积 ∝ 市值，sqrt 换算半径；

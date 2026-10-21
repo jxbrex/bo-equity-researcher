@@ -18,7 +18,8 @@ from bisect import bisect_right
 from datetime import date
 
 import em_core as _C
-from em_core import (to_ts_code, memo, _r2, _fmt_date, _daily_basic_latest, _win_days, _win_years)
+from em_core import (to_ts_code, memo, _r2, _fmt_date, _daily_basic_latest, _win_days, _win_years,
+                     RateLimitError)
 
 
 _HK_DAILY_CACHE = {}
@@ -123,6 +124,8 @@ def fetch_pe_pb_band(code: str) -> dict:
                 "pe_min": pes[0], "pe_max": pes[-1], "pe_cur": latest_pe, "pe_pct": pctile(pes, latest_pe),
                 "pe_p25": pe_p25, "pe_p75": pe_p75,
                 "pb_min": pbs[0], "pb_max": pbs[-1], "pb_cur": latest_pb, "pb_pct": pctile(pbs, latest_pb)}
+    except RateLimitError:
+        raise  # v5.8.2 硬停纪律：限流不吞成「无分位带」降级，穿透至 main 退 2
     except Exception:
         return None
 
@@ -142,6 +145,8 @@ def fetch_quote(secid: str, is_hk: bool = False) -> dict:
             pass
         try:
             base = _em_quote(secid, True)
+        except RateLimitError:
+            raise  # v5.8.2 硬停纪律：东财行情限流穿透；hk_daily 缓存读取侧哨兵语义不动（下例外）
         except Exception:
             base = {"名称": code, "代码": code, "最新价": None, "涨跌幅%": None,
                     "总市值亿": None, "PE_TTM": None, "PB": None, "换手率%": None}

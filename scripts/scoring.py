@@ -94,6 +94,13 @@ def _valuation_verdict(v: float) -> str:
     return "贵"
 
 
+# v5.8.2：分档图例单源常量——原 build_position_card 与 build_valuation_process_card 各持一份
+# 字面拷贝，仓位卡估值档曾误写「4-5.9 合理」与判词口径 _valuation_verdict「合理无安全边际」
+# 不一致（用户报告实际展示文案错误）。档位边界以 _quality_verdict / _valuation_verdict 为准。
+_Q_LEGEND = '≥7 好公司 / 5.5-6.9 中上 / 4-5.4 一般 / &lt;4 回避'
+_V_LEGEND = '≥8 深度安全边际 / 6-7.9 合理偏便宜 / 4-5.9 合理无安全边际 / &lt;4 贵'
+
+
 def _timing_verdict(t: float) -> str:
     """时机分判词：≥6 好时机 / 4-5.9 中性 / <4 差时机。"""
     if t >= 6.0:
@@ -311,6 +318,13 @@ def _map_div(div_yield: float, risk_free: float) -> float:
     return _lookup(div_yield - risk_free, _DIV_TABLE, 4.0)
 
 
+# v5.8.2：估值分四件套权重单源——原总分算式 / _valuation_four_rows 行权重 / formula
+# 展示串三处各持一份字面拷贝（0.4/0.25/0.25/0.1 与 40/25/25/10），规则数字改动需同步
+# 三处的漂移隐患收拢为此常量：行权重取 int(w×100)，formula 串由权重 :g 格式化生成，
+# 两处消费点输出与原先逐字一致（golden 零漂移验证）。
+_VS_W = {"central": 0.4, "odds": 0.25, "warranted": 0.25, "div": 0.1}
+
+
 def compute_valuation_score(calc: dict, inputs: dict, gap_tier=None):
     """估值分四件套量化 = 中枢×0.4 + 赔率×0.25 + 合理倍数×0.25 + 股息×0.1。
     inputs: {"pe_ttm": 13.5, "pe_band": [14.5, 15.5], "div_yield": 1.6, "risk_free": 1.7,
@@ -354,7 +368,8 @@ def compute_valuation_score(calc: dict, inputs: dict, gap_tier=None):
     div_yield = _num(inputs.get("div_yield"))
     risk_free = _num(inputs.get("risk_free"))
     div_s = _map_div(div_yield, risk_free) if (div_yield is not None and risk_free is not None) else 5.0
-    total = round(central_s * 0.4 + odds_s * 0.25 + warranted_s * 0.25 + div_s * 0.1, 1)
+    total = round(central_s * _VS_W["central"] + odds_s * _VS_W["odds"]
+                  + warranted_s * _VS_W["warranted"] + div_s * _VS_W["div"], 1)
     # 赔率 ∞ 地板分级上浮（总分层面；调节链一侧在 _position_steps）
     floor_uplift = None
     if calc.get("odds") is None:
@@ -373,8 +388,8 @@ def compute_valuation_score(calc: dict, inputs: dict, gap_tier=None):
         "central_s": central_s, "odds_s": odds_s,
         "warranted_s": warranted_s, "div_s": div_s,
         "tax": tax, "floor_uplift": floor_uplift,
-        "formula": (f"中枢 {central_s:g}×0.4 + 赔率 {odds_s:g}×0.25 + "
-                    f"合理倍数 {warranted_s:g}×0.25 + 股息 {div_s:g}×0.1"),
+        "formula": (f"中枢 {central_s:g}×{_VS_W['central']:g} + 赔率 {odds_s:g}×{_VS_W['odds']:g} + "
+                    f"合理倍数 {warranted_s:g}×{_VS_W['warranted']:g} + 股息 {div_s:g}×{_VS_W['div']:g}"),
     }
 
 
@@ -545,10 +560,11 @@ def _valuation_four_rows(calc: dict, vc: dict, inputs: dict):
     elif tax and tax.get("exempt") and tax.get("ratio", 0) > 1.15:
         central_inp += f"（乐观税已检：比值 {tax['ratio']:.2f} > 1.15，9 章预期差 A 档解封）"
     return [
-        ("中枢分", central_inp, vc["central_s"], 40),
-        ("赔率分", f"赔率 {odds_txt}", vc["odds_s"], 25),
-        ("合理倍数分", f"{mlabel} {pe_ttm:g}x vs 合理带 {band_lo:g}-{band_hi:g}x", vc["warranted_s"], 25),
-        ("股息分", div_txt, vc["div_s"], 10),
+        ("中枢分", central_inp, vc["central_s"], int(_VS_W["central"] * 100)),
+        ("赔率分", f"赔率 {odds_txt}", vc["odds_s"], int(_VS_W["odds"] * 100)),
+        ("合理倍数分", f"{mlabel} {pe_ttm:g}x vs 合理带 {band_lo:g}-{band_hi:g}x",
+         vc["warranted_s"], int(_VS_W["warranted"] * 100)),
+        ("股息分", div_txt, vc["div_s"], int(_VS_W["div"] * 100)),
     ]
 
 
@@ -712,8 +728,7 @@ def build_valuation_process_card(calc: dict, vc: dict, inputs: dict) -> str:
     table = ('<div class="table-scroll"><table><thead><tr><th>套件</th><th>输入值</th>'
              '<th class="center">映射得分</th><th class="num">权重</th><th class="num">加权</th></tr></thead>'
              '<tbody>' + "".join(rows) + '</tbody></table></div>')
-    legend_txt = ('估值分档位：≥8 深度安全边际 / 6-7.9 合理偏便宜 / '
-                  '4-5.9 合理无安全边际 / &lt;4 贵')
+    legend_txt = f'估值分档位：{_V_LEGEND}'
     # v5.0 机制二：乐观税未检说明（tax=None：缺一致预期 / 一致预期 ≤0 / mcap 口径无净利可比）
     if not vc.get("tax"):
         cons_np = _num(inputs.get("consensus_np"))
@@ -871,6 +886,15 @@ def build_edge_upgrade_rows(crit: list) -> str:
             '<div class="trig-strip">' + "".join(rows) + '</div>')
 
 
+def _matrix_applies(red_flag: str, calc: dict) -> bool:
+    """v5.8.2：矩阵适用守卫谓词单源——非红灯熔断 且 中枢非负 时仓位才走矩阵落位。
+    原 render 层 14 章升档行与 _position_steps 各写一份同款判断，两侧输入同源
+    （red_flag 同取 sc["red_flag"]、calc 同取估值 calc），谓词漂移会让临界徽章与升档行
+    同生共灭失效；抽此单源两侧共用。calc 为 None/空 dict 视为适用、calc 缺 central_raw
+    的 KeyError 行为均与原内联式逐字一致。"""
+    return not red_flag and not (calc and calc["central_raw"] < 0)
+
+
 def _position_steps(quality: float, valuation: float, timing, calc: dict, red_flag: str,
                     floor_uplift: dict = None):
     """仓位决策链纯函数（12 卡逻辑体，v4.9 从 build_position_card 抽出便于直接单测；
@@ -895,13 +919,14 @@ def _position_steps(quality: float, valuation: float, timing, calc: dict, red_fl
     steps = []
     slot_txt = None
     crit = []
-    if red_flag:
-        final_label = _LABEL_REFUSE
-        steps.append(f"红灯熔断：命中「{_esc(red_flag)}」→ 不建议参与（后续调节不再适用）")
-    elif calc and calc["central_raw"] < 0:
-        final_label = "回避（中枢为负，等价格）"
-        steps.append(f"中枢为负拦截器：年化中枢 {calc['central'] * 100:+.1f}% < 0 → 直接回避"
-                     f"（后续调节不再适用）")
+    if not _matrix_applies(red_flag, calc):
+        if red_flag:
+            final_label = _LABEL_REFUSE
+            steps.append(f"红灯熔断：命中「{_esc(red_flag)}」→ 不建议参与（后续调节不再适用）")
+        else:
+            final_label = "回避（中枢为负，等价格）"
+            steps.append(f"中枢为负拦截器：年化中枢 {calc['central'] * 100:+.1f}% < 0 → 直接回避"
+                         f"（后续调节不再适用）")
     else:
         crit, q_eff, v_eff = _edge_info(quality, valuation, floor_uplift)
         # 孰低要真比较两侧落位而非只算压边界一侧：矩阵在质量 5.5 行非单调
@@ -990,7 +1015,7 @@ def _position_steps(quality: float, valuation: float, timing, calc: dict, red_fl
     return final_label, steps, slot_txt, crit
 
 
-def build_position_card(fill: dict, quality: float, valuation: float, timing,
+def build_position_card(quality: float, valuation: float, timing,
                         calc: dict, red_flag: str, floor_uplift: dict = None) -> str:
     """12 仓位与时机决策章末尾三轨判定卡（脚本生成，置于 position_html 之后）：
     ① 三轨判定行（质量/估值/时机各带落档判词）→ ② 调节轨迹（只列实际触发条目）
@@ -998,7 +1023,8 @@ def build_position_card(fill: dict, quality: float, valuation: float, timing,
     HTML 渲染。完整决策矩阵规则见 references/scoring.md，报告不展开。
     v5.0 机制一：临界轨的质量/估值卡 sub 追加「档位临界」橙徽章 + 距离说明。
     v5.0.0（F3）：floor_uplift 透传决策链——net_cash 硬地板上浮恰落 8.0 豁免临界
-    （调用方 render 层与 14 章升档行同传 vc["floor_uplift"]，徽章与升档行同生共灭）。"""
+    （调用方 render 层与 14 章升档行同传 vc["floor_uplift"]，徽章与升档行同生共灭）。
+    v5.8.2：删除未使用的 fill 形参（重构遗留，函数体只消费评分/估值结果）。"""
     parts = ['<span class="section-tag">三轨判定与仓位结论</span>']
 
     # 决策链先行（① 的临界徽章依赖 crit）：逻辑在 _position_steps（纯函数，规则注释见其 docstring）
@@ -1006,10 +1032,8 @@ def build_position_card(fill: dict, quality: float, valuation: float, timing,
                                                          floor_uplift)
 
     # ① 三轨判定行
-    q_sub = (f'{_quality_verdict(quality)}'
-             f'（≥7 好公司 / 5.5-6.9 中上 / 4-5.4 一般 / &lt;4 回避）')
-    v_sub = (f'{_valuation_verdict(valuation)}'
-             f'（≥8 深度安全边际 / 6-7.9 合理偏便宜 / 4-5.9 合理 / &lt;4 贵）')
+    q_sub = f'{_quality_verdict(quality)}（{_Q_LEGEND}）'
+    v_sub = f'{_valuation_verdict(valuation)}（{_V_LEGEND}）'
     for c in crit:
         note = (f' <span class="badge badge-orange">档位临界</span>'
                 f' 距 {c["bound"]} 边界 {c["dist"]:.2f}，按降档执行')

@@ -17,7 +17,7 @@ import sys
 from datetime import date
 
 import em_core as _C
-from em_core import (to_ts_code, _fmt_date, _em_dc, _win_years, yi)
+from em_core import (to_ts_code, _fmt_date, _em_dc, _win_years, yi, RateLimitError)
 
 
 # ---------------- E4 股东户数 ----------------
@@ -25,23 +25,36 @@ def _em_holders(code: str) -> list:
     return _em_dc("RPT_HOLDERNUMLATEST", f'(SECURITY_CODE="{code}")', 8)
 
 
+def _holder_rows(code: str) -> list:
+    """拉取 stk_holdernumber、滤 holder_num 缺失行、按 end_date 升序（旧→新）。
+    v5.8.2：fetch_holders / fetch_holders_quarterly 原各自重复此段，收拢为一处；
+    end_date 缺失行不在此剔除——fetch_holders 历史上保留，quarterly 自行再滤。"""
+    rows = _C.ts_call("stk_holdernumber", {"ts_code": to_ts_code(code)})
+    rows = [r for r in rows if r.get("holder_num")]
+    if not rows:
+        raise RuntimeError("stk_holdernumber 空返回")
+    rows.sort(key=lambda x: x.get("end_date") or "")
+    return rows
+
+
+def _ratio_walk(rows: list) -> list:
+    """旧→新序上自算环比（对前一期户数）并组装输出 dict——两 E4 函数原逐字重复段，
+    v5.8.2 收拢。"""
+    out = []
+    prev = None
+    for r in rows:
+        num = r.get("holder_num")
+        ratio = round((num / prev - 1) * 100, 1) if (prev and num) else None
+        out.append({"END_DATE": r.get("end_date"), "HOLDER_NUM": num,
+                    "HOLDER_NUM_RATIO": ratio})
+        prev = num
+    return out
+
+
 def fetch_holders(code: str) -> list:
     """E4 股东户数（东财键名同构）。tushare stk_holdernumber 优先（变动比自算），东财兜底。"""
     try:
-        rows = _C.ts_call("stk_holdernumber", {"ts_code": to_ts_code(code)})
-        rows = [r for r in rows if r.get("holder_num")]
-        if not rows:
-            raise RuntimeError("stk_holdernumber 空返回")
-        rows.sort(key=lambda x: x.get("end_date") or "")  # 旧→新算变动比
-        out = []
-        prev = None
-        for r in rows:
-            num = r.get("holder_num")
-            ratio = round((num / prev - 1) * 100, 1) if (prev and num) else None
-            out.append({"END_DATE": r.get("end_date"), "HOLDER_NUM": num,
-                        "HOLDER_NUM_RATIO": ratio})
-            prev = num
-        return list(reversed(out))[:8]
+        return list(reversed(_ratio_walk(_holder_rows(code))))[:8]
     except Exception:
         return _em_holders(code)
 
@@ -54,9 +67,7 @@ def fetch_holders_quarterly(code: str) -> list:
     时间轴失真——只取季末（定期报告口径）近 12 期，间隔均匀可回溯；若最新披露新于末季末
     （如 8 月互动易新披露），追加为末点。环比按保留序列自算。返回旧→新。"""
     try:
-        rows = _C.ts_call("stk_holdernumber", {"ts_code": to_ts_code(code)})
-        rows = [r for r in rows if r.get("holder_num") and r.get("end_date")]
-        rows.sort(key=lambda x: x["end_date"])  # 旧→新
+        rows = [r for r in _holder_rows(code) if r.get("end_date")]
         if not rows:
             raise RuntimeError("stk_holdernumber 空返回")
         qrows = [r for r in rows
@@ -68,14 +79,7 @@ def fetch_holders_quarterly(code: str) -> list:
         latest = rows[-1]
         if not q or latest["end_date"] > q[-1]["end_date"]:
             q = q + [latest]
-        out, prev = [], None
-        for r in q:
-            num = r["holder_num"]
-            ratio = round((num / prev - 1) * 100, 1) if (prev and num) else None
-            out.append({"END_DATE": r["end_date"], "HOLDER_NUM": num,
-                        "HOLDER_NUM_RATIO": ratio})
-            prev = num
-        return out
+        return _ratio_walk(q)
     except Exception:
         return []
 
@@ -207,6 +211,8 @@ def fetch_consensus(code: str) -> dict:
                 "tp_reports": sorted(tp_reports, key=lambda x: x["date"], reverse=True),
                 "aim": (min(p[0] for p in prices), max(p[1] for p in prices)) if prices else None,
                 "ratings": ratings}
+    except RateLimitError:
+        raise  # v5.8.2 硬停纪律：东财一致预期限流不吞成「无覆盖」，穿透至 main 退 2
     except Exception:
         d = _em_consensus(code)
         if d:

@@ -302,6 +302,17 @@ td.rev, th.rev { padding: 8px 12px; }
 /* v4.8 版式修复：段落间距（此前 p 零间距导致核心结论四段粘合）/ 侧栏目录（固定右缘，宽屏显示） */
 .section-body p + p { margin-top: 10px; }
 .section-body p + ul, .section-body ul + p { margin-top: 8px; }
+/* v5.8.4 排版微修：balance 短标题折行匀称——仅无底色文字标题，带背景的徽章/标签不加
+   （balance 只改盒内折行、不收盒宽，带盒元素会留尾白）；pretty 长段落防孤字
+   （Firefox 暂未支持，自动忽略属优雅降级） */
+.hero h1, .section-title, .concl-card .concl-head { text-wrap: balance; }
+.section-body p, .hero .thesis, .concl-card { text-wrap: pretty; }
+/* v5.8.4：首屏以下章节延迟渲染，省长报告首屏布局/绘制开销（Baseline 2025-09；@supports
+   外裹旧浏览器整体忽略）。#s1 贴首屏，排除以免拖慢关键渲染；contain-intrinsic-size
+   占位防滚动条跳动，auto 让浏览器渲染过一次后记住实测高 */
+@supports (content-visibility: auto) {
+  .section:not(#s1) { content-visibility: auto; contain-intrinsic-size: auto 600px; }
+}
 /* v4.9.1 补充修订二：1 核心结论 2×2 结论卡网格（四卡固定序：关键优势/关键弱点/当前市场认知/
    核心投资逻辑；卡尾 concl-ref「详见 X 章」锚索引，浓缩要点+章节索引替代四段长文） */
 .concl-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin: 2px 0 12px; }
@@ -315,7 +326,8 @@ td.rev, th.rev { padding: 8px 12px; }
 .concl-card ul li { font-weight: 600; color: var(--ink); padding: 2px 0; }
 .concl-card ul li::before { content: "▪ "; color: var(--accent); }
 .section { scroll-margin-top: 10px; }
-html { scroll-behavior: smooth; }
+/* v5.8.4：平滑滚动仅对未开启「减少动态效果」的用户启用（前庭敏感用户回退瞬时跳转） */
+@media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
 .toc-side { position: fixed; right: 10px; top: 50%; transform: translateY(-50%); display: flex; flex-direction: column; gap: 4px; z-index: 50; }
 .toc-side a { font-size: 11px; color: var(--muted); text-decoration: none; background: var(--paper); border: 1px solid var(--line); border-radius: 4px; padding: 2px 7px; text-align: center; opacity: 0.75; }
 .toc-side a:hover { background: var(--sand-deep); color: var(--ink); opacity: 1; }
@@ -370,6 +382,9 @@ html { scroll-behavior: smooth; }
   .section, .hero, .metric-card { border: 1px solid var(--line); }
   th { background: var(--sand-deep); }
   .toc-side { display: none; }
+  /* v5.8.4 双保险：打印全量渲染（浏览器本应自动展开 content-visibility 延迟章节，
+     显式声明防实现差异导致打印漏章）；不支持的浏览器忽略此声明，无副作用 */
+  .section { content-visibility: visible; }
 }
 </style>
 </head>

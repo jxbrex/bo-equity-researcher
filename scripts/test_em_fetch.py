@@ -621,7 +621,12 @@ def test_17_period_track():
     ind = [{"end_date": "20260630", "profit_dedt": 28e8, "grossprofit_margin": 40.0},
            {"end_date": "20250630", "profit_dedt": 23e8}]
     _orig = em_core.ts_call
+    import em_finance
+    _orig_f10 = em_finance._em_f10
     try:
+        # v5.8.4：F10 通道一并打桩返空——v5.8.0 整期前移分支在真实 F10（或磁盘缓存）期次
+        # 领先 mock 数据时会点火（三季报披露季 test_17 因此变红）；前移/补齐/兜底由 test_18 专项覆盖
+        em_finance._em_f10 = lambda *a, **k: []
         em_core.ts_call = lambda api, params=None, fields="": {
             "income": inc, "cashflow": cf, "fina_indicator": ind}.get(api, [])
         t = em.fetch_period_track("600989", "600989.SH")
@@ -667,6 +672,7 @@ def test_17_period_track():
         assert t3["band_np"] == [45.8, 46.7], f"实际 {t3['band_np']}"
     finally:
         em_core.ts_call = _orig
+        em_finance._em_f10 = _orig_f10
     print("17. 报告期进度（中报/年报期/港股）通过")
 
 

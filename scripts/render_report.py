@@ -61,7 +61,7 @@ from validate import validate_content
 
 # 渲染器版本：嵌入输出 HTML 尾部注释，事后可 grep 验证报告确由本脚本渲染
 # （防"render 报错后手写全文 HTML 绕行"，巨石 2026-08-23 实证）
-RENDERER_VERSION = "v5.8.2"
+RENDERER_VERSION = "v5.8.4"
 
 # Windows 文件名非法字符：\ / : * ? " < > | 及 ASCII 控制字符（\x00-\x1f）
 _WIN_ILLEGAL = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
@@ -451,7 +451,7 @@ def _build_repl_map(ctx: "RenderContext") -> dict:
 
 
 def _fill_template(repl: dict) -> str:
-    """读模板 → 条件块（<!--IF:-->）/占位符（{{...}}）替换 → 表格对齐自动修正。"""
+    """读模板 → 条件块（<!--IF:-->）/占位符（{{...}}）替换 → 表格对齐自动修正 + table-scroll 可达性注入。"""
     tmpl_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "assets", "report-template.html")
     html = open(tmpl_path, encoding="utf-8").read()
 
@@ -491,6 +491,12 @@ def _fill_template(repl: dict) -> str:
 
     # 表格对齐自动修正（fragment 手写表头类不齐的兜底，matrix-table 跳过）
     html = fix_table_alignment(html)
+    # v5.8.4：table-scroll 容器统一补键盘可达属性（script 生成与手写 fragment 同源生效，
+    # 写作侧约定不变——仍写裸 <div class="table-scroll">；精确字面替换天然幂等，
+    # 已带属性的容器不再匹配旧形态，重复注入不可能）
+    html = html.replace('<div class="table-scroll">',
+                        '<div class="table-scroll" tabindex="0" role="region" '
+                        'aria-label="数据表格（可横向滚动）">')
     return html
 
 

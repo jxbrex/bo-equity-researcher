@@ -302,6 +302,17 @@ td.rev, th.rev { padding: 8px 12px; }
 /* v4.8 版式修复：段落间距（此前 p 零间距导致核心结论四段粘合）/ 侧栏目录（固定右缘，宽屏显示） */
 .section-body p + p { margin-top: 10px; }
 .section-body p + ul, .section-body ul + p { margin-top: 8px; }
+/* v5.8.4 排版微修：balance 短标题折行匀称——仅无底色文字标题，带背景的徽章/标签不加
+   （balance 只改盒内折行、不收盒宽，带盒元素会留尾白）；pretty 长段落防孤字
+   （Firefox 暂未支持，自动忽略属优雅降级） */
+.hero h1, .section-title, .concl-card .concl-head { text-wrap: balance; }
+.section-body p, .hero .thesis, .concl-card { text-wrap: pretty; }
+/* v5.8.4：首屏以下章节延迟渲染，省长报告首屏布局/绘制开销（Baseline 2025-09；@supports
+   外裹旧浏览器整体忽略）。#s1 贴首屏，排除以免拖慢关键渲染；contain-intrinsic-size
+   占位防滚动条跳动，auto 让浏览器渲染过一次后记住实测高 */
+@supports (content-visibility: auto) {
+  .section:not(#s1) { content-visibility: auto; contain-intrinsic-size: auto 600px; }
+}
 /* v4.9.1 补充修订二：1 核心结论 2×2 结论卡网格（四卡固定序：关键优势/关键弱点/当前市场认知/
    核心投资逻辑；卡尾 concl-ref「详见 X 章」锚索引，浓缩要点+章节索引替代四段长文） */
 .concl-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin: 2px 0 12px; }
@@ -315,7 +326,8 @@ td.rev, th.rev { padding: 8px 12px; }
 .concl-card ul li { font-weight: 600; color: var(--ink); padding: 2px 0; }
 .concl-card ul li::before { content: "▪ "; color: var(--accent); }
 .section { scroll-margin-top: 10px; }
-html { scroll-behavior: smooth; }
+/* v5.8.4：平滑滚动仅对未开启「减少动态效果」的用户启用（前庭敏感用户回退瞬时跳转） */
+@media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
 .toc-side { position: fixed; right: 10px; top: 50%; transform: translateY(-50%); display: flex; flex-direction: column; gap: 4px; z-index: 50; }
 .toc-side a { font-size: 11px; color: var(--muted); text-decoration: none; background: var(--paper); border: 1px solid var(--line); border-radius: 4px; padding: 2px 7px; text-align: center; opacity: 0.75; }
 .toc-side a:hover { background: var(--sand-deep); color: var(--ink); opacity: 1; }
@@ -370,6 +382,9 @@ html { scroll-behavior: smooth; }
   .section, .hero, .metric-card { border: 1px solid var(--line); }
   th { background: var(--sand-deep); }
   .toc-side { display: none; }
+  /* v5.8.4 双保险：打印全量渲染（浏览器本应自动展开 content-visibility 延迟章节，
+     显式声明防实现差异导致打印漏章）；不支持的浏览器忽略此声明，无副作用 */
+  .section { content-visibility: visible; }
 }
 </style>
 </head>
@@ -521,11 +536,11 @@ html { scroll-behavior: smooth; }
     <div class="plot-wrap"><svg viewBox="0 0 1000 236" role="img" aria-label="目标价走廊" style="width:100%;min-width:760px;height:auto;display:block;font-family:inherit;"><line x1="435.5" y1="24" x2="435.5" y2="196" stroke="#ece7db" stroke-width="1"/><text x="435.5" y="213" text-anchor="middle" font-size="11" fill="#6f695e">10</text><line x1="799.5" y1="24" x2="799.5" y2="196" stroke="#ece7db" stroke-width="1"/><text x="799.5" y="213" text-anchor="middle" font-size="11" fill="#6f695e">15</text><line x1="128" y1="196" x2="976" y2="196" stroke="#e0d7c3" stroke-width="1.2"/><text x="4" y="213" font-size="11" fill="#6f695e">单位：元</text><text x="116" y="57.0" text-anchor="end" font-size="13" font-weight="600" fill="#3a362e">悲观</text><text x="116" y="71.0" text-anchor="end" font-size="10.5" fill="#6f695e">6.40–8.00</text><rect x="173.4" y="46.0" width="116.5" height="28" rx="8" fill="#c75b5b"/><line x1="231.7" y1="51.0" x2="231.7" y2="69.0" stroke="#fffdf9" stroke-width="3"/><text x="231.7" y="40.0" text-anchor="middle" font-size="12.5" font-weight="700" fill="#c75b5b">7.20（-28.0%）</text><text x="116" y="109.0" text-anchor="end" font-size="13" font-weight="600" fill="#3a362e">基础</text><text x="116" y="123.0" text-anchor="end" font-size="10.5" fill="#6f695e">10–12</text><rect x="435.5" y="98.0" width="145.6" height="28" rx="8" fill="#c08a2e"/><line x1="508.3" y1="103.0" x2="508.3" y2="121.0" stroke="#fffdf9" stroke-width="3"/><text x="508.3" y="92.0" text-anchor="middle" font-size="12.5" font-weight="700" fill="#c08a2e">11（+10.0%）</text><text x="116" y="161.0" text-anchor="end" font-size="13" font-weight="600" fill="#3a362e">乐观</text><text x="116" y="175.0" text-anchor="end" font-size="10.5" fill="#6f695e">14–17</text><rect x="755.8" y="150.0" width="174.7" height="28" rx="8" fill="#6ba86b"/><line x1="843.2" y1="155.0" x2="843.2" y2="173.0" stroke="#fffdf9" stroke-width="3"/><text x="843.2" y="144.0" text-anchor="middle" font-size="12.5" font-weight="700" fill="#6ba86b">16（+56.0%）</text><line x1="435.5" y1="22" x2="435.5" y2="196" stroke="#4a6fa5" stroke-width="1.5" stroke-dasharray="5 4"/><text x="435.5" y="16" text-anchor="middle" font-size="12" font-weight="700" fill="#4a6fa5">现价 10</text></svg></div><span class="source chart-source">目标价走廊（数据来源：本报告三情景假设（利润×PE 计算）与现价行情）：横条=情景目标价区间，白条刻=区间中枢，竖虚线=现价；条上方=中枢值与较现价涨跌幅</span>
     
     
-    <div class="table-scroll"><table class="scenario-table"><thead><tr><th>指标</th><th class="num">悲观情景</th><th class="num">基础情景</th><th class="num">乐观情景</th></tr></thead><tbody><tr><td>时间维度</td><td class="num">12个月</td><td class="num">12个月</td><td class="num">12个月</td></tr><tr><td>触发条件</td><td class="num">下行</td><td class="num">中性</td><td class="num">上行</td></tr><tr><td>归母净利</td><td class="num">80 亿</td><td class="num">100 亿</td><td class="num">120 亿</td></tr><tr><td>EPS</td><td class="num">0.80</td><td class="num">1.00</td><td class="num">1.20</td></tr><tr><td>PE</td><td class="num">8-10x</td><td class="num">10-12x</td><td class="num">12-14x</td></tr><tr><td>目标价</td><td class="num">6.40-8.00 元</td><td class="num">10-12 元</td><td class="num">14-17 元</td></tr><tr><td>较现价</td><td class="num"><span class="down">-28.0%</span>（中值7.20）</td><td class="num"><span class="up">+10.0%</span>（中值11）</td><td class="num"><span class="up">+56.0%</span>（中值16）</td></tr></tbody></table></div><div class="metric-row"><div class="metric-card"><div class="label">年化中枢期望收益</div><div class="value up">+10.0%</div><div class="sub">基础中值 11 ÷ 现价 10 − 1（12个月）</div></div><div class="metric-card"><div class="label">赔率（上行/下行）</div><div class="value bad">0.28</div><div class="sub">(基础中值−现价)÷(现价−悲观下限)；>1.5 为良好不对称</div></div><div class="metric-card"><div class="label">情景离散度</div><div class="value mid">84.0%</div><div class="sub">（乐观中值−悲观中值）÷ 现价；中不确定</div></div></div>
+    <div class="table-scroll" tabindex="0" role="region" aria-label="数据表格（可横向滚动）"><table class="scenario-table"><thead><tr><th>指标</th><th class="num">悲观情景</th><th class="num">基础情景</th><th class="num">乐观情景</th></tr></thead><tbody><tr><td>时间维度</td><td class="num">12个月</td><td class="num">12个月</td><td class="num">12个月</td></tr><tr><td>触发条件</td><td class="num">下行</td><td class="num">中性</td><td class="num">上行</td></tr><tr><td>归母净利</td><td class="num">80 亿</td><td class="num">100 亿</td><td class="num">120 亿</td></tr><tr><td>EPS</td><td class="num">0.80</td><td class="num">1.00</td><td class="num">1.20</td></tr><tr><td>PE</td><td class="num">8-10x</td><td class="num">10-12x</td><td class="num">12-14x</td></tr><tr><td>目标价</td><td class="num">6.40-8.00 元</td><td class="num">10-12 元</td><td class="num">14-17 元</td></tr><tr><td>较现价</td><td class="num"><span class="down">-28.0%</span>（中值7.20）</td><td class="num"><span class="up">+10.0%</span>（中值11）</td><td class="num"><span class="up">+56.0%</span>（中值16）</td></tr></tbody></table></div><div class="metric-row"><div class="metric-card"><div class="label">年化中枢期望收益</div><div class="value up">+10.0%</div><div class="sub">基础中值 11 ÷ 现价 10 − 1（12个月）</div></div><div class="metric-card"><div class="label">赔率（上行/下行）</div><div class="value bad">0.28</div><div class="sub">(基础中值−现价)÷(现价−悲观下限)；>1.5 为良好不对称</div></div><div class="metric-card"><div class="label">情景离散度</div><div class="value mid">84.0%</div><div class="sub">（乐观中值−悲观中值）÷ 现价；中不确定</div></div></div>
     
     <p>估值方法说明。</p>
     
-    <span class="section-tag">估值分计算</span><div class="table-scroll"><table><thead><tr><th>套件</th><th>输入值</th><th class="center">映射得分</th><th class="num">权重</th><th class="num">加权</th></tr></thead><tbody><tr><td>中枢分</td><td>年化中枢 +10.0%（12个月）</td><td class="center score-cell"><span class="badge badge-green">7.0</span></td><td class="num">×40%</td><td class="num">2.80</td></tr><tr><td>赔率分</td><td>赔率 0.28</td><td class="center score-cell"><span class="badge badge-red">3.5</span></td><td class="num">×25%</td><td class="num">0.88</td></tr><tr><td>合理倍数分</td><td>PE(TTM) 11x vs 合理带 10-12x</td><td class="center score-cell"><span class="badge badge-orange">5.0</span></td><td class="num">×25%</td><td class="num">1.25</td></tr><tr><td>股息分</td><td>股息率 2% − 无风险 1.7% = +0.3pct</td><td class="center score-cell"><span class="badge badge-orange">6.0</span></td><td class="num">×10%</td><td class="num">0.60</td></tr><tr><td colspan="2"><strong>估值分 = 2.80 + 0.88 + 1.25 + 0.60 = 5.5</strong></td><td class="center score-cell"><span class="badge badge-orange badge-lg">5.5</span></td><td colspan="2"><strong>合理无安全边际</strong></td></tr></tbody></table></div><span class="source">估值分档位：≥8 深度安全边际 / 6-7.9 合理偏便宜 / 4-5.9 合理无安全边际 / &lt;4 贵；乐观税未检：无卖方覆盖</span>
+    <span class="section-tag">估值分计算</span><div class="table-scroll" tabindex="0" role="region" aria-label="数据表格（可横向滚动）"><table><thead><tr><th>套件</th><th>输入值</th><th class="center">映射得分</th><th class="num">权重</th><th class="num">加权</th></tr></thead><tbody><tr><td>中枢分</td><td>年化中枢 +10.0%（12个月）</td><td class="center score-cell"><span class="badge badge-green">7.0</span></td><td class="num">×40%</td><td class="num">2.80</td></tr><tr><td>赔率分</td><td>赔率 0.28</td><td class="center score-cell"><span class="badge badge-red">3.5</span></td><td class="num">×25%</td><td class="num">0.88</td></tr><tr><td>合理倍数分</td><td>PE(TTM) 11x vs 合理带 10-12x</td><td class="center score-cell"><span class="badge badge-orange">5.0</span></td><td class="num">×25%</td><td class="num">1.25</td></tr><tr><td>股息分</td><td>股息率 2% − 无风险 1.7% = +0.3pct</td><td class="center score-cell"><span class="badge badge-orange">6.0</span></td><td class="num">×10%</td><td class="num">0.60</td></tr><tr><td colspan="2"><strong>估值分 = 2.80 + 0.88 + 1.25 + 0.60 = 5.5</strong></td><td class="center score-cell"><span class="badge badge-orange badge-lg">5.5</span></td><td colspan="2"><strong>合理无安全边际</strong></td></tr></tbody></table></div><span class="source">估值分档位：≥8 深度安全边际 / 6-7.9 合理偏便宜 / 4-5.9 合理无安全边际 / &lt;4 贵；乐观税未检：无卖方覆盖</span>
   </div>
 </div>
 
@@ -550,7 +565,7 @@ html { scroll-behavior: smooth; }
   </div>
   <div class="section-body">
     
-    <div class="table-scroll"><table class="freeze-first"><tr><th>公司</th><th class="num">PE(TTM)</th><th class="num">ROE</th></tr><tr><td style="color:#4a6fa5;font-weight:700;">测试股份</td><td class="cell-best num">11</td><td class="cell-best num">14%</td></tr><tr><td>同业甲</td><td class="cell-worst num">25</td><td class="num">9%</td></tr></table></div><span class="source">数据来源：测试</span>
+    <div class="table-scroll" tabindex="0" role="region" aria-label="数据表格（可横向滚动）"><table class="freeze-first"><tr><th>公司</th><th class="num">PE(TTM)</th><th class="num">ROE</th></tr><tr><td style="color:#4a6fa5;font-weight:700;">测试股份</td><td class="cell-best num">11</td><td class="cell-best num">14%</td></tr><tr><td>同业甲</td><td class="cell-worst num">25</td><td class="num">9%</td></tr></table></div><span class="source">数据来源：测试</span>
   </div>
 </div>
 
@@ -580,7 +595,7 @@ html { scroll-behavior: smooth; }
   </div>
   <div class="section-body">
     <span class="section-tag">档位临界升档路径（脚本生成）</span><div class="trig-strip"><div class="trig"><span class="trig-dot pending"></span><span class="trig-cond">档位临界升档复核：质量分 7.00（距 7.0 边界 0.00）</span><span class="trig-mt">升档路径：复核期质量分 ≥7.31（距边界 >0.3）且其余轨不恶化，恢复相邻高档位评估；复核证据：下期财报关键指标与跟踪信号核对</span><span class="trig-status pending">待验证</span></div></div>
-    <div class="table-scroll"><table class="dash-table freeze-first"><tr><th>指标</th><th class="num">当前值</th><th>触发阈值</th><th>触发后操作</th><th>数据来源</th><th>更新频率</th></tr><tr><td>毛利率</td><td class="num">34%</td><td>≥36%</td><td>加仓至标配（需要一段足够长的操作说明文字来验证长文列换行样式）</td><td>E3 年表</td><td>季度</td></tr></table></div><span class="source">数据来源：测试</span>
+    <div class="table-scroll" tabindex="0" role="region" aria-label="数据表格（可横向滚动）"><table class="dash-table freeze-first"><tr><th>指标</th><th class="num">当前值</th><th>触发阈值</th><th>触发后操作</th><th>数据来源</th><th>更新频率</th></tr><tr><td>毛利率</td><td class="num">34%</td><td>≥36%</td><td>加仓至标配（需要一段足够长的操作说明文字来验证长文列换行样式）</td><td>E3 年表</td><td>季度</td></tr></table></div><span class="source">数据来源：测试</span>
   </div>
 </div>
 

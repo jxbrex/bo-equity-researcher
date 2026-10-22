@@ -202,6 +202,33 @@
 
 ## 版本历史
 
+### V5.8.4（2026-10-22）— 排版与可达性微修：text-wrap 折行 + 晕动保护 + 章节延迟渲染 + 表格键盘可达（modern-web-guidance 审核落地）
+
+> 缘起：用户要求以 modern-web-guidance 最佳实践库审核模板排版/布局，审核产出 5 项修订；
+> 先出 before/after 对照示例（artifacts/_layout_audit_demo/）经用户确认后并入模板。
+> 审核同时登记两项不修：px→rem 全量换算（50+ 处 px 与像素级快照耦合，要么单独立项
+> token 化要么明确不遵循，半改更糟）、overflow-wrap: break-word（table-scroll 横滚已兜底）。
+
+- **模板 CSS 四处**（assets/report-template.html）：① 无底色短标题 `text-wrap: balance`
+  （.hero h1/.section-title/.concl-head——带背景的徽章/标签不加，balance 不收盒宽会留尾白）；
+  ② 长段落 `text-wrap: pretty`（.section-body p/.thesis/.concl-card，Firefox 未支持自动忽略）；
+  ③ `scroll-behavior: smooth` 收进 `@media (prefers-reduced-motion: no-preference)`——
+  前庭敏感用户回退瞬时跳转；④ 首屏以下章节 `content-visibility: auto` +
+  `contain-intrinsic-size: auto 600px`（@supports 外裹旧浏览器忽略；#s1 贴首屏排除；
+  @media print 显式 `content-visibility: visible` 双保险防打印漏章）。
+- **table-scroll 键盘可达渲染器统一注入**（render_report._fill_template 末道工序）：
+  裸 `<div class="table-scroll">` 一律补 `tabindex="0" role="region" aria-label`——
+  不在 4 处生成点分散改（charts_misc/charts_scenario/scoring + 手写约定），精确字面替换
+  天然幂等；fill-schema.md 表格节补一句契约说明（写作侧不变）。
+- **test_17_period_track 日历敏感修复**（test_em_fetch.py）：F10 通道一并打桩返空——
+  v5.8.0 整期前移分支在真实 F10/磁盘缓存期次领先 mock 数据时点火（三季报披露季变红实证），
+  前移/补齐/兜底覆盖仍由 test_18 专项承担；局部 import em_finance 遵循本文件既有惯例。
+- **验证**：pytest 262 全绿 + golden 12 项（GOLDEN_UPDATE=1 重写 7 份基线，diff 逐行核验
+  仅预期改动）；面板浏览器首屏/锚点跳转实测正常；Edge 无头打印 full_fill 15 页、
+  period_h1 11 页，关键章节文字全在场（含条件章节 3 最新报告期透视）。
+- **RENDERER_VERSION** v5.8.2→v5.8.4（渲染输出确有变化：模板 CSS + table-scroll 属性；
+  v5.8.3 零漂移不涨号，本版对称适用「输出变则涨号」）。
+
 ### V5.8.3（2026-10-21）— 热核缓修项清零：build_price_history slots[] 重框架 + validate.py 按域五拆 + 审计残余批处理（全部输出零漂移）
 
 > 缘起：v5.8.2 发布时用户拍板「没修的那几项继续」——热核审计三大缓修项同轮清零：

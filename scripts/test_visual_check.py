@@ -39,3 +39,21 @@ def test_main_without_browser_skips(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(sys, "argv", ["visual_check.py", str(page)])
     assert visual_check.main() == 0
     assert "跳过" in capsys.readouterr().out
+
+
+def test_measure_page_forces_render(monkeypatch, tmp_path):
+    """v5.8.5：测量页必须注入 content-visibility 强制渲染——模板 v5.8.4 起首屏以下章节
+    延迟渲染停在 contain-intrinsic-size 600px 占位高，dump-dom 无滚动场景下裁切误报 +
+    折行/溢出失明（宝丰能源 16 条误报实证）。钉住 FORCE_RENDER_CSS 与 measure() 不脱钩。"""
+    captured = {}
+
+    def fake_run(chrome, page, work, ready, *flags):
+        captured["html"] = page.read_text(encoding="utf-8")
+        return ('<div id="visual-check-report">{"vw": 1280, "docH": 1, "hscroll": false,'
+                ' "spills": [], "wrapped": [], "clipped": []}</div>')
+
+    monkeypatch.setattr(visual_check, "chrome_run", fake_run)
+    r = visual_check.measure("fake-chrome", "<html><body><p>x</p></body></html>",
+                             tmp_path, 1280)
+    assert "content-visibility: visible !important" in captured["html"]
+    assert r["clipped"] == []

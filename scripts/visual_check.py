@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""visual_check.py — 渲染后视觉审计门禁（v4.11.3，advisory v1）
+"""visual_check.py — 渲染后视觉审计门禁（v5.8.5，advisory v1）
 
     python scripts/visual_check.py <报告.html>            # 双视口审计（1280/390）
     python scripts/visual_check.py <报告.html> --shots    # 同时输出桌面/移动 PNG
@@ -147,6 +147,14 @@ window.addEventListener('load', () => setTimeout(() => {
 
 REPORT_RE = re.compile(r'<div id="visual-check-report">(.*?)</div>', re.S)
 
+# v5.8.5：模板 v5.8.4 起首屏以下章节 content-visibility:auto + contain-intrinsic-size:600px
+# 延迟渲染（report-template.html），--dump-dom 无滚动场景下视口外章节永不布局、停在 600px
+# 占位高——裁切检测把「真实高−占位高」报成误报（宝丰能源 16 条实证），折行/溢出检测同步
+# 失明（未布局元素量不出尺寸）。测量页强制全量渲染，回到 v5.8.4 前的测量条件；模板用户侧
+# 滚动性能优化不动。
+FORCE_RENDER_CSS = ('<style id="visual-check-force-render">'
+                    '* { content-visibility: visible !important; }</style>')
+
 
 def find_chrome(explicit: str | None):
     if explicit:
@@ -193,7 +201,7 @@ def chrome_run(chrome: str, page: Path, work: Path, ready, *flags: str) -> str:
 
 def measure(chrome: str, html: str, work: Path, width: int) -> dict:
     page = work / f"measure-{width}.html"
-    snippet = MEASURE_JS.replace("%SLOTS%", json.dumps(SLOT_SELECTORS))
+    snippet = FORCE_RENDER_CSS + MEASURE_JS.replace("%SLOTS%", json.dumps(SLOT_SELECTORS))
     page.write_text(html.replace("</body>", snippet + "</body>", 1)
                     if "</body>" in html else html + snippet, encoding="utf-8")
     dom = chrome_run(chrome, page, work,

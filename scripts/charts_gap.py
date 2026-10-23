@@ -351,6 +351,18 @@ def _gh_org_key(org: str) -> str:
     return s
 
 
+# v5.8.5 头部/外资券商清单（_gh_org_key 归一化后精确匹配）：目标价降级面板行外券商
+# 独立行的选取优先级——大券商目标价参考价值高于小券商（宝丰能源复盘实证：中金/中信建投
+# 单份研报目标价沉右下小字补列，用户拍板大券商优先列示）
+_GH_TIER1_ORGS = frozenset((
+    # 外资
+    "高盛", "摩根士丹利", "摩根大通", "瑞银", "花旗", "汇丰", "野村", "美银", "巴克莱",
+    "杰富瑞", "麦格理", "大和",
+    # 头部内资
+    "中信", "中金", "中信建投", "华泰", "国泰海通", "国泰君安", "招商", "广发",
+    "申万宏源", "国信", "兴业", "东方", "光大", "平安"))
+
+
 def _flat_ring(cx, cy) -> str:
     """「沙点+钢蓝环=持平」记号单源（v5.8.2：图例 ring glyph 与 _dumbbell 持平行此前
     在图例/_dumbbell 各手写一遍，收敛为本 helper 供 _dumbbell，图例走 _legend_row 同参数 ring）。
@@ -373,7 +385,12 @@ def build_gap_history(fill: dict) -> str:
     计数口径=截断前全集（图内注明「图列前 N 家」）。
     v5.8.0 目标价面板降级（用户拍板形态）：tp 对全缺（无同券商两份可比）而
     gap_history.tp_reports 非空时，右面板按同一价值轴单点列示各券商最新目标价
-    （点落左面板机构共享行，带数值与日期；行外券商右下文字补列），无箭头无首末幅度。"""
+    （点落左面板机构共享行，带数值与日期），无箭头无首末幅度。
+    v5.8.5 降级面板形态升级（用户拍板）：行外券商（有目标价但不在净利对比行内）不再
+    右下小字补列，改为各占一独立行——左面板标「无净利可比」，右面板同轴单点；选取
+    优先级=头部/外资券商清单（_GH_TIER1_ORGS）→日期最新，至多 6 行，超出一行小字
+    注明家数。宝丰能源复盘实证：中金/中信建投等大券商只有单份研报进不了对比行，
+    5 家目标价全沉右下小字。"""
     gh = fill.get("gap_history") or {}
     rows = []
     for r in gh.get("rows") or []:
@@ -398,9 +415,10 @@ def build_gap_history(fill: dict) -> str:
 
     has_np = any(r["npf"] is not None for r in rows)
     has_tp = any(r["tpf"] is not None for r in rows)
-    # v5.8.0 目标价面板降级（用户拍板形态）：无同券商两份可比时，各家最新目标价按同一
-    # 价值轴单点列示——落在左面板机构共享行上（各家价格可比）；有目标价但不在左面板行
-    # （无净利可比）的券商在右面板下方文字补列。数据=gap_history.tp_reports（落盘照抄键）
+    # v5.8.0 目标价面板降级：无同券商两份可比时，各家最新目标价按同一价值轴单点列示——
+    # 落在左面板机构共享行上（各家价格可比）。数据=gap_history.tp_reports（落盘照抄键）
+    # v5.8.5 形态升级（用户拍板）：行外券商各占一独立行（左面板标「无净利可比」），
+    # 优先级=头部/外资清单（_GH_TIER1_ORGS）→日期最新，至多 6 行，超出一行小字注明家数
     tp_map = {}     # 归一化机构名 → {"tp","date","org"}（同券商多份取日期最新）
     if not has_tp:
         for r in gh.get("tp_reports") or []:
@@ -413,12 +431,23 @@ def build_gap_history(fill: dict) -> str:
             # '2' 恒大于 '0'/'1'，同券商多份恒被最旧一份覆盖）；渲染处再切片 MM-DD
             if key and tp is not None and (key not in tp_map or dte > tp_map[key]["date"]):
                 tp_map[key] = {"tp": tp, "date": dte, "org": org}
-    row_keys = {_gh_org_key(r["org"]) for r in rows}
+    n_np = len(rows)    # 净利对比行数（tp 独立行追加前的口径，判词横条注明列示范围用）
+    n_tp_overflow = 0
+    n_extra_lines = 0
+    if tp_map:
+        row_keys = {_gh_org_key(r["org"]) for r in rows}
+        extras = [v for k, v in tp_map.items() if k not in row_keys]
+        # 稳定排序两遍：先日期降序，再 tier 清单优先（后一遍优先级更高）
+        extras.sort(key=lambda v: v["date"], reverse=True)
+        extras.sort(key=lambda v: _gh_org_key(v["org"]) not in _GH_TIER1_ORGS)
+        n_tp_overflow = max(len(extras) - 6, 0)
+        n_extra_lines = 1 if n_tp_overflow else 0
+        for v in extras[:6]:
+            rows.append({"org": v["org"], "yr": "", "d_from": "", "d_to": "",
+                         "npf": None, "npt": None, "tpf": None, "tpt": None,
+                         "rf": "", "rt": "", "tp_only": True})
     tp_dots = [(i, tp_map[_gh_org_key(r["org"])]) for i, r in enumerate(rows)
                if _gh_org_key(r["org"]) in tp_map]
-    tp_extra = sorted(((v["org"], v) for k, v in tp_map.items() if k not in row_keys),
-                      key=lambda kv: -kv[1]["tp"])
-    n_extra_lines = (min(len(tp_extra), 6) + 2) // 3 if tp_extra else 0
     yrs = {r["yr"] for r in rows if r["yr"]}
     np_title = (f"① {next(iter(yrs))}E 归母净利预测（亿元）· 同预测年度对比" if len(yrs) == 1
                 else "① 归母净利预测（亿元）· 各行同预测年度首末对比")
@@ -477,8 +506,10 @@ def build_gap_history(fill: dict) -> str:
     def _dumbbell(x0, kf, kt, X, r, cy):
         v0, v1 = r[kf], r[kt]
         if v0 is None:
+            missing = ("未给目标价" if kf == "tpf"
+                       else "无净利可比" if r.get("tp_only") else "无同年度对比")
             return (f'<text x="{x0}" y="{cy + 3.5}" font-size="9.5" fill="{_C_SAND}">'
-                    f'{"未给目标价" if kf == "tpf" else "无同年度对比"}</text>')
+                    f'{missing}</text>')
         a, b = X(v0), X(v1)
         if v0 == v1:
             return (_flat_ring(a, cy)
@@ -512,18 +543,31 @@ def build_gap_history(fill: dict) -> str:
                          f'fill="{_C_LABEL}">{_esc(r["d_from"])} → {_esc(r["d_to"])}</text>')
         for x0, kf, kt, X in mappers:
             parts.append(_dumbbell(x0, kf, kt, X, r, cy))
-        # 右列：净利幅度 / 目标价幅度 + 评级变化
-        dnp, dtp = _gh_delta(r, "npf", "npt"), _gh_delta(r, "tpf", "tpt")
-        pct = " / ".join([f"{d * 100:+.1f}%" if d is not None else "—"
-                          for d, has in ((dnp, has_np), (dtp, has_tp)) if has])
-        ry = cy + (0 if (r["rf"] and r["rt"]) else 3.5)
-        parts.append(f'<text x="{RX}" y="{_px(ry)}" font-size="11.5" font-weight="700" '
-                     f'fill="{_C_INK}">{pct}</text>')
-        if r["rf"] and r["rt"]:
-            parts.append(f'<text x="{RX}" y="{cy + 10}" font-size="9" fill="{_C_STONE}">'
-                         f'评级 {_esc(r["rf"])}→{_esc(r["rt"])}</text>')
+        # 右列：净利幅度 / 目标价幅度 + 评级变化（v5.8.5：幅度带维度前缀——目标价全缺时
+        # 裸 % 挂在目标价面板右缘会被误读为目标价变化，宝丰能源复盘实证；双维度拆两行，
+        # 行距 32 内：cy-2/cy+9，评级行挪 cy+19；tp 独立行无首末对比，右列整列跳过）
+        if not r.get("tp_only"):
+            dnp, dtp = _gh_delta(r, "npf", "npt"), _gh_delta(r, "tpf", "tpt")
+            dims = [(lbl, d) for lbl, d, has in
+                    (("净利", dnp, has_np), ("目标价", dtp, has_tp)) if has]
+            if len(dims) == 2:
+                for (lbl, d), dy in zip(dims, (-2, 9)):
+                    parts.append(f'<text x="{RX}" y="{_px(cy + dy)}" font-size="10.5" '
+                                 f'font-weight="700" fill="{_C_INK}">{lbl} '
+                                 f'{f"{d * 100:+.1f}%" if d is not None else "—"}</text>')
+                ry_rating = cy + 19
+            else:
+                lbl, d = dims[0]
+                ry = cy + (0 if (r["rf"] and r["rt"]) else 3.5)
+                parts.append(f'<text x="{RX}" y="{_px(ry)}" font-size="11.5" font-weight="700" '
+                             f'fill="{_C_INK}">{lbl} '
+                             f'{f"{d * 100:+.1f}%" if d is not None else "—"}</text>')
+                ry_rating = cy + 10
+            if r["rf"] and r["rt"]:
+                parts.append(f'<text x="{RX}" y="{ry_rating}" font-size="9" fill="{_C_STONE}">'
+                             f'评级 {_esc(r["rf"])}→{_esc(r["rt"])}</text>')
     # v5.8.0 降级面板：单份目标价点落在左面板机构共享行（数值轴同上，各行可比）；
-    # 有目标价但不在左面板行的券商，右面板下缘文字补列（3 家一行，至多 2 行）
+    # v5.8.5：行外券商各占一独立行（行构造见上），超出 6 行的家数一行小字注明
     if tp_X is not None:
         for i, v in tp_dots:
             cy = cy0 + step * i
@@ -534,17 +578,10 @@ def build_gap_history(fill: dict) -> str:
                          f'font-weight="600" fill="{_C_INK}">{_gap_fmt(v["tp"])}</text>'
                          f'<text x="{_px(x)}" y="{cy + 14}" text-anchor="middle" font-size="8.5" '
                          f'fill="{_C_LABEL}">{_esc(v["date"][5:])}</text>')
-    if tp_extra:
-        seg = [f'{o} {_gap_fmt(v["tp"])}（{v["date"][5:]}）' for o, v in tp_extra[:6]]
-        if len(tp_extra) > 6:
-            seg[-1] += f' 等 {len(tp_extra)} 家'
-        for li in range(n_extra_lines):
-            chunk = seg[li * 3:(li + 1) * 3]
-            if not chunk:
-                break
-            prefix = "另有目标价（无净利可比，补列）：" if li == 0 else ""
-            parts.append(f'<text x="{TP0}" y="{cy_last + 44 + li * 15}" font-size="9.5" '
-                         f'fill="{_C_LABEL}">{_esc(prefix + "；".join(chunk))}</text>')
+    if n_extra_lines:
+        parts.append(f'<text x="{TP0}" y="{cy_last + 44}" font-size="9.5" '
+                     f'fill="{_C_LABEL}">另有 {n_tp_overflow} 家券商给出目标价未列示'
+                     '（行数上限，头部/外资券商与最新日期优先）</text>')
     parts.append(_svg_close())
 
     # 判词横条（脚本复算，持平=首末完全相等；计数口径=截断前全集，图内注明列示范围）
@@ -558,7 +595,7 @@ def build_gap_history(fill: dict) -> str:
         return u, d, f
 
     s_parts = [f"近 180 天 {n_total} 家券商有可比前后研报"
-               + (f"（图列变化幅度前 {n} 家）" if n_total > n else "")]
+               + (f"（图列变化幅度前 {n_np} 家）" if n_total > n_np else "")]
     if has_np:
         u, d, f = _counts("npf", "npt")
         s_parts.append(f"净利预测 <b>上调 {u} 家 / 下调 {d} 家 / 持平 {f} 家</b>")
@@ -567,7 +604,8 @@ def build_gap_history(fill: dict) -> str:
         m = sum(1 for r in rows_full if r["tpf"] is not None)
         s_parts.append(f"目标价 <b>上调 {u} 家 / 下调 {d} 家 / 持平 {f} 家</b>（{m} 家给出）")
     elif tp_map:
-        s_parts.append(f"目标价 {len(tp_map)} 家给出（无同券商两份可比，右面板按同一价值轴单点列示）")
+        s_parts.append(f"目标价 {len(tp_map)} 家给出（无同券商两份可比，右面板按同一价值轴"
+                       f"单点列示{f'，图列前 {len(tp_dots)} 家' if n_tp_overflow else ''}）")
     chg = [r for r in rows_full if r["rf"] and r["rt"]]
     if chg:
         seg = "；".join(f'{r["org"]} {r["rf"]}→{r["rt"]}' for r in chg[:4])
@@ -583,7 +621,8 @@ def build_gap_history(fill: dict) -> str:
         '① 净利预测仅同预测年度首末对比，跨年预测不直接可比；② 目标价取研报区间中值；'
         '右列=两维度首末幅度与评级变化；仅覆盖 180 天内 ≥2 份研报的券商，'
         '目标价维度无同券商两份可比时，右面板按同一价值轴单点列示各券商最新目标价'
-        '（共享左面板机构行），行外券商在右下补列；'
+        '（共享左面板机构行；行外券商各占一独立行，至多 6 行、头部/外资券商与最新日期'
+        '优先，超出注明家数）；'
         '东财兜底路径与港股无逐份明细、不适用本图；'
         '评级变化=同一券商首末对比口径，与 12 章时机信号「近 90 天评级上/下调家数」'
         '（券商评级分布统计）口径不同，两处数字不要求互洽'))

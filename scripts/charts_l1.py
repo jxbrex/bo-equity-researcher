@@ -432,7 +432,8 @@ def build_dupont_html(fill: dict) -> str:
     parts.append(_chart_source(
         "杜邦归因乘积链", f"东财 F10 主要财务指标（{cap}{cmp_txt}）",
         "净利率×总资产周转率×权益乘数=ROE；报告期累计口径（非年化）；"
-        "加权 ROE 与三因子乘积存在口径差（加权平均 vs 期末权益），结论以方向为准"))
+        "加权 ROE 与三因子乘积存在口径差（加权平均 vs 期末权益），结论以方向为准；"
+        "变化标签 pct=百分点（净利率/ROE 的绝对变化）、%=相对变化（周转率/权益乘数）"))
     return "".join(parts)
 
 

@@ -931,6 +931,8 @@ def test_gap_history_chart():
     assert "上调 2 家 / 下调 1 家 / 持平 1 家" in html, "tp 计数（国泰海通 122→122 持平）"
     assert "未给目标价" in html, "华泰无 tp 应注记"
     assert "评级 增持→买入" in html and "评级变化 2 家" in html
+    assert "净利 +5.1%" in html and "目标价 +14.5%" in html, \
+        "v5.8.5 右列幅度带维度前缀（招商 np 880→925 / tp 110→126，双维度拆两行）"
     assert html.index("招商证券") < html.index("中金公司"), "应按 np 幅度降序（招商 +5.1% 居首）"
     assert ">122 持平<" in html, "国泰海通 tp 持平应有沙色环注（122 持平）"
     # 无效行 / 空字段 → 空串（缺失不告警，同 holders 惯例）
@@ -955,26 +957,29 @@ def test_gap_history_chart():
 
 
 def test_gap_history_tp_fallback_dots():
-    """v5.8.0 目标价面板降级（用户拍板形态）：tp 对全缺而 tp_reports 非空时，
-    右面板按同一价值轴单点列示（点落左面板机构共享行、带数值与日期）；
-    行外券商右下文字补列；横条计数口径=截断前全集。"""
+    """v5.8.0 目标价面板降级：tp 对全缺而 tp_reports 非空时，右面板按同一价值轴单点列示
+    （点落左面板机构共享行、带数值与日期）；横条计数口径=截断前全集。
+    v5.8.5 形态升级（用户拍板）：行外券商各占一独立行（左面板标「无净利可比」），
+    优先级=头部/外资清单→日期最新，至多 6 行，超出一行小字注明家数。"""
     import charts_gap
     rows = [{"org": f"券商{c}", "yr": "2026", "d_from": "2026-05-10", "d_to": "2026-08-24",
              "np_from": 50 + i, "np_to": 60 + i} for i, c in enumerate("ABCDEFGHIJ")]
     tp_reports = [{"org": "券商A", "date": "2026-08-24", "tp": 50.1},
                   {"org": "券商B", "date": "2026-08-21", "tp": 48.6},
-                  {"org": "行外券商", "date": "2026-10-10", "tp": 55.0}]
+                  {"org": "行外券商", "date": "2026-10-10", "tp": 55.3}]
     html = charts_gap.build_gap_history({"gap_history": {"rows": rows,
                                                          "tp_reports": tp_reports}})
     assert "② 目标价（元）· 单份研报列示（无同券商两份可比）" in html
     assert ">50.1</text>" in html and "08-24" in html, "共享行目标价单点+日期"
-    assert "另有目标价（无净利可比，补列）：行外券商 55（10-10）" in html
+    assert ">55.3</text>" in html and "10-10" in html and "无净利可比" in html, \
+        "v5.8.5 行外券商独立行：右面板单点+数值+日期，左面板标无净利可比"
+    assert "另有目标价（无净利可比，补列）" not in html, "旧右下小字补列形态已废止"
     assert "近 180 天 10 家券商有可比前后研报（图列变化幅度前 8 家）" in html, "横条计数=截断前全集"
     assert "上调 10 家" in html
     assert "目标价 3 家给出（无同券商两份可比" in html
-    # 无 tp_reports → 旧空态文案，无补列
+    # 无 tp_reports → 旧空态文案，无独立行
     html2 = charts_gap.build_gap_history({"gap_history": {"rows": rows}})
-    assert "② 目标价：近 180 天无两份可比研报" in html2 and "另有目标价" not in html2
+    assert "② 目标价：近 180 天无两份可比研报" in html2 and "无净利可比" not in html2
     # v5.8.1 审核实证①：同券商多份取日期最新（此前存量存 MM-DD 与完整日期混比，恒取最旧）
     tp_multi = [{"org": "券商A", "date": "2026-08-24", "tp": 52.7},
                 {"org": "券商A", "date": "2026-06-11", "tp": 51.3},
@@ -988,7 +993,25 @@ def test_gap_history_tp_fallback_dots():
                 "np_from": 50, "np_to": 60}]
     html4 = charts_gap.build_gap_history({"gap_history": {"rows": rows_zj, "tp_reports": [
         {"org": "中金公司", "date": "2026-09-13", "tp": 500.0}]}})
-    assert ">500</text>" in html4 and "另有目标价" not in html4, "归一化后应落共享行而非补列"
+    assert ">500</text>" in html4 and "无净利可比" not in html4, "归一化后应落共享行而非独立行"
+    # v5.8.5 形态 A（宝丰能源复盘实证场景）：大券商只有单份研报进不了对比行——独立行 +
+    # tier 清单优先 + 溢出注明。extras 7 家（tier1 两家 + 非 tier 五家）→ 列 6 行、溢出 1 家
+    rows_bf = [{"org": f"小券商{i}", "yr": "2026", "d_from": "2026-05-10",
+                "d_to": "2026-08-24", "np_from": 50 + i, "np_to": 60 + i}
+               for i in range(3)]
+    tp_bf = ([{"org": "中信建投证券", "date": "2026-08-26", "tp": 38.25},
+              {"org": "中金公司", "date": "2026-10-22", "tp": 27.5}]
+             + [{"org": f"行外{c}", "date": d, "tp": t} for c, d, t in [
+                 ("甲", "2026-10-01", 30.0), ("乙", "2026-09-01", 31.0), ("丙", "2026-08-15", 32.0),
+                 ("丁", "2026-08-01", 33.0), ("戊", "2026-07-01", 26.5)]])
+    html5 = charts_gap.build_gap_history({"gap_history": {"rows": rows_bf,
+                                                          "tp_reports": tp_bf}})
+    assert html5.count("无净利可比") == 6, "6 家行外券商各占一独立行"
+    assert "净利 —" not in html5, "tp 独立行无首末对比，右列整列跳过（防豁免退化）"
+    assert html5.index("中金公司") < html5.index("中信建投证券") < html5.index("行外甲"), \
+        "tier1 优先、同 tier 按日期降序（中金 10-22 先于中信建投 08-26，再非 tier）"
+    assert "行外戊" not in html5, "最旧非 tier 超出行数上限不列示"
+    assert "另有 1 家券商给出目标价未列示" in html5
 
 
 def test_dupont_chain():
@@ -1003,6 +1026,7 @@ def test_dupont_chain():
     assert "30.4%" in html and "+11.2pct" in html, "净利率 pct 点差"
     assert "+21.3%" in html, "周转率百分比变化"
     assert "去年同期 19.2%" in html and "归因结论" in html and "东财 F10" in html
+    assert "pct=百分点" in html, "v5.8.5 图注口径说明：pct=百分点（率绝对变化）、%=相对变化"
     assert build_dupont_html({}) == ""
     assert build_dupont_html({"dupont": {"roe": 16.1}}) == "", "四因子缺一返空"
     only_cur = build_dupont_html({"dupont": {"roe": 16.1, "nm": 30.4, "turn": 0.313, "em": 1.70}})

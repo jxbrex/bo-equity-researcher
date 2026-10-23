@@ -746,20 +746,22 @@ def _check_handwritten_dupes(fill: dict, warns: list) -> None:
     if len(gp_dims) >= 2 and "<table" in gh and re.search(r"机构|卖方", gh):
         warns.append("gap_html 含逐机构对照表：v4.11.1 起由 gap_plot 图承载（文字信息进 note "
                      "附注），请删除手写对照表")
-    # v5.6.0：gap_history 图会生成时，gap_html 禁手写同内容变化表（同一券商首末对比）
+    # v5.6.0：gap_history 图会生成时，gap_html 禁手写同内容变化表（同一券商两份对比，
+    # v5.9.0 口径=最新一份 vs 上一份）
     if (fill.get("gap_history") or {}).get("rows") and "<table" in gh \
             and re.search(r"首末|态度变化|上调.{0,4}下调", gh):
         warns.append("gap_html 含手写券商态度变化表：v5.6.0 起由 gap_history 图承载"
                      "（图+判词横条自动生成），请删除手写表")
-    # v5.8.0：散文罗列同禁——≥2 组「数值→数值亿」首末数字 + 上调/下调表述即与图重复
+    # v5.8.0：散文罗列同禁——≥2 组「数值→数值亿」对比数字 + 上调/下调表述即与图重复
     # （中国巨石复盘实证：佐证段与图完全同源，且手写「12家」与横条「8家」口径打架）；
     # 佐证只写方向性结论与本文相对位置，数值留给图与判词横条。
     # v5.8.1 审核实证：须加佐证域关键词门槛（首末/态度变化/佐证）——A 档卖方假设分行列写
     # （「净利——东吴（05-10）：57.6→82.3亿（上调）」）合法含 ≥2 组箭头数字，无门槛会误伤
+    # （v5.9.0：「首末」语境词保留——防的正是手写旧口径措辞，「态度变化/佐证」不变）
     if (fill.get("gap_history") or {}).get("rows"):
         n_arrows = len(re.findall(r"\d+(?:\.\d+)?\s*→\s*\d+(?:\.\d+)?\s*亿", gh))
         if n_arrows >= 2 and re.search(r"上调|下调", gh) \
                 and re.search(r"首末|态度变化|佐证", gh):
-            warns.append("gap_html 散文罗列券商首末数字（≥2 组「→」幅度+上/下调表述）："
+            warns.append("gap_html 散文罗列券商对比数字（≥2 组「→」幅度+上/下调表述）："
                          "与券商态度变化图内容重复——只写方向性结论与本文相对位置，"
-                         "首末数值由图与判词横条承载")
+                         "两份对比数值由图与判词横条承载")

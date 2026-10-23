@@ -521,8 +521,9 @@ def test_final_html_source_gate_banned_words_exhaustive():
 
 
 def test_gap_history_prose_dupe():
-    """v5.8.0：gap_history 图会生成时，gap_html 散文罗列首末数字（≥2 组「数值→数值亿」+
-    上/下调表述）→ 告警（中国巨石复盘佐证段实证）；无 gap_history / 纯结论句 → 不告警。"""
+    """v5.8.0：gap_history 图会生成时，gap_html 散文罗列对比数字（≥2 组「数值→数值亿」+
+    上/下调表述）→ 告警（中国巨石复盘佐证段实证）；无 gap_history / 纯结论句 → 不告警。
+    v5.9.0：告警文案「首末数字」→「对比数字」（口径重构；「首末」语境词仍留作手写旧措辞防线）。"""
     rows = [{"org": "中金公司", "yr": "2026", "d_from": "2026-06-30", "d_to": "2026-09-28",
              "np_from": 930.0, "np_to": 952.0}]
     head = ("<!--GAP--><p>档位 A：已检索到具体券商研报假设（妙想+tushare，查询日 2026-10-14），"
@@ -532,17 +533,17 @@ def test_gap_history_prose_dupe():
              "东吴57.6→82.3亿（05-10→08-24）、国投59.8→84.0亿、长江63.1→84.7亿——"
              "市场自己在向乐观方向修正。</p>")
     out = validate_stderr(minimal_fill(gap_history={"rows": rows}, gap_html=head + prose))
-    assert "散文罗列券商首末数字" in out, f"散文罗列应告警: {out}"
+    assert "散文罗列券商对比数字" in out, f"散文罗列应告警: {out}"
     out = validate_stderr(minimal_fill(gap_html=head + prose))
-    assert "散文罗列券商首末数字" not in out, f"无 gap_history 不应告警: {out}"
+    assert "散文罗列券商对比数字" not in out, f"无 gap_history 不应告警: {out}"
     clean = "<p>佐证：市场在向乐观方向修正，本文谨慎是对价格外推的结构性保留。</p>"
     out = validate_stderr(minimal_fill(gap_history={"rows": rows}, gap_html=head + clean))
-    assert "散文罗列券商首末数字" not in out, f"纯结论句不应误伤: {out}"
+    assert "散文罗列券商对比数字" not in out, f"纯结论句不应误伤: {out}"
     # v5.8.1 审核实证：A 档假设分行列写（无 首末/态度变化/佐证 语境词）不应误伤
     assume = ("<ul><li>净利——东吴（05-10）：57.6→82.3亿（上调）；国投（06-02）："
               "59.8→84.0亿（上调）</li></ul>")
     out = validate_stderr(minimal_fill(gap_history={"rows": rows}, gap_html=head + assume))
-    assert "散文罗列券商首末数字" not in out, f"A 档假设列写不应误伤: {out}"
+    assert "散文罗列券商对比数字" not in out, f"A 档假设列写不应误伤: {out}"
 
 
 def test_gh_sort_key_single_source():

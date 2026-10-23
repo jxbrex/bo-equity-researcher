@@ -1009,28 +1009,46 @@ def test_25_daily_basic_latest():
 
 
 def test_26_consensus_history():
-    """26. E5 券商态度变化（v5.6.0，gap_history 数据源，无网络 mock ts_call）：
-    同机构 ≥2 份才出行；np 仅同预测年度首末对比（跨年不出 np，退 tp 日期）；tp 取含
-    目标价研报首末两份（区间中值）；评级仅记变化；日期 ISO 化；按 np 变化幅度降序。"""
+    """26. E5 券商态度变化（v5.9.0 口径重构，gap_history 数据源，无网络 mock ts_call）：
+    同一券商最新一份（限近 180 天）vs 上一份（不限时间——窗口外上一份纳入对比）；
+    最新一份在 180 天外 → 不出行；np 仅同预测年度对比（跨年不出 np，退 tp 日期）；
+    tp 取两份区间中值（缺一不比）；评级仅记变化；日期 ISO 化；排序头部/外资优先、
+    组内按 np 变化幅度降序。日期全部相对化（timedelta），防窗口腐烂。"""
     import em_owner
+    from datetime import date, timedelta
+    _d = lambda n: (date.today() - timedelta(days=n)).strftime("%Y%m%d")
+    _iso = lambda n: (date.today() - timedelta(days=n)).isoformat()
     rows = [
-        # 中金：两份同年 np 930→952、目标价 118→135、评级不变（不记）
-        {"org_name": "中金", "report_date": "20260630", "quarter": "2026Q4",
+        # 中金：两份同年 np 930→952、目标价 118→135、评级不变（不记）；
+        # 另有「中金公司」名义的最新一份（口径漂移应合并为同一券商，v5.9.0 宁德探针实证）——
+        # 合并后最新=_d(5)（中金公司名义）、上一份=_d(30)（中金名义）：np 952→960、tp 135→133
+        {"org_name": "中金", "report_date": _d(100), "quarter": "2026Q4",
          "np": 9300000, "min_price": 115, "max_price": 121, "rating": "买入"},
-        {"org_name": "中金", "report_date": "20260928", "quarter": "2026Q4",
+        {"org_name": "中金", "report_date": _d(30), "quarter": "2026Q4",
          "np": 9520000, "min_price": 130, "max_price": 140, "rating": "买入"},
+        {"org_name": "中金公司", "report_date": _d(5), "quarter": "2026Q4",
+         "np": 9600000, "min_price": 128, "max_price": 138, "rating": "买入"},
         # 大摩：两份 np 下调、评级变化
-        {"org_name": "摩根士丹利", "report_date": "20260712", "quarter": "2026Q4",
+        {"org_name": "摩根士丹利", "report_date": _d(90), "quarter": "2026Q4",
          "np": 9050000, "rating": "增持"},
-        {"org_name": "摩根士丹利", "report_date": "20260915", "quarter": "2026Q4",
+        {"org_name": "摩根士丹利", "report_date": _d(40), "quarter": "2026Q4",
          "np": 8780000, "rating": "中性"},
-        # 华泰：跨年（首 2025Q4 / 末 2026Q4）→ 无同年可比不出 np，仅 tp 105→115
-        {"org_name": "华泰", "report_date": "20260608", "quarter": "2025Q4",
+        # 华泰：跨年预测（上一份 2025Q4 / 最新 2026Q4）→ 无同年可比不出 np，仅 tp 105→115
+        {"org_name": "华泰", "report_date": _d(120), "quarter": "2025Q4",
          "np": 8000000, "min_price": 100, "max_price": 110},
-        {"org_name": "华泰", "report_date": "20261009", "quarter": "2026Q4",
+        {"org_name": "华泰", "report_date": _d(14), "quarter": "2026Q4",
          "np": 9080000, "min_price": 112, "max_price": 118},
-        # 野村：单份 → 不出行
-        {"org_name": "野村", "report_date": "20260830", "quarter": "2026Q4", "np": 9520000},
+        # 中信建投：上一份在 180 天外（400 天前）——旧口径整行滤掉，v5.9.0 起纳入
+        {"org_name": "中信建投", "report_date": _d(400), "quarter": "2026Q4", "np": 5000000},
+        {"org_name": "中信建投", "report_date": _d(10), "quarter": "2026Q4", "np": 5500000},
+        # 浙商（非头部/外资）：np +100% 大变化——排序仍排全部头部/外资之后
+        {"org_name": "浙商", "report_date": _d(80), "quarter": "2026Q4", "np": 1000000},
+        {"org_name": "浙商", "report_date": _d(20), "quarter": "2026Q4", "np": 2000000},
+        # 野村：单份 → 无上一份，不出行
+        {"org_name": "野村", "report_date": _d(25), "quarter": "2026Q4", "np": 9520000},
+        # 老券商：最新一份也在 180 天外（200 天前）→ 态度非当前，不出行
+        {"org_name": "老券商", "report_date": _d(400), "quarter": "2026Q4", "np": 800000},
+        {"org_name": "老券商", "report_date": _d(200), "quarter": "2026Q4", "np": 900000},
     ]
     _orig = em_core.ts_call
     try:
@@ -1040,18 +1058,28 @@ def test_26_consensus_history():
         em_core.ts_call = _orig
     hist = {h["org"]: h for h in c["history"]}
     assert "野村" not in hist, f"单份机构不应出行：{hist}"
-    zj = hist["中金"]
-    assert (zj["yr"], zj["np_from"], zj["np_to"]) == ("2026", 930.0, 952.0), f"实际 {zj}"
-    assert (zj["tp_from"], zj["tp_to"]) == (118.0, 135.0), f"tp 应取区间中值首末：{zj}"
-    assert (zj["d_from"], zj["d_to"]) == ("2026-06-30", "2026-09-28"), f"日期应 ISO 化：{zj}"
+    assert "老券商" not in hist, f"最新一份在 180 天外不应出行：{hist}"
+    zj = hist["中金公司"]     # 漂移合并后展示名=最新一份的原始机构名
+    assert "中金" not in {h["org"] for h in c["history"] if h["org"] != "中金公司"}, \
+        f"漂移不应拆出独立「中金」行：{[h['org'] for h in c['history']]}"
+    assert (zj["yr"], zj["np_from"], zj["np_to"]) == ("2026", 952.0, 960.0), \
+        f"合并后最新=_d(5)、上一份=_d(30)：{zj}"
+    assert (zj["tp_from"], zj["tp_to"]) == (135.0, 133.0), f"tp 应取两份区间中值：{zj}"
+    assert (zj["d_from"], zj["d_to"]) == (_iso(30), _iso(5)), f"日期应 ISO 化：{zj}"
     assert "rating_from" not in zj, f"评级不变不应记录：{zj}"
     ms = hist["摩根士丹利"]
     assert (ms["rating_from"], ms["rating_to"]) == ("增持", "中性"), f"实际 {ms}"
     ht = hist["华泰"]
     assert "np_from" not in ht, f"跨年预测不应比 np：{ht}"
     assert (ht["tp_from"], ht["tp_to"]) == (105.0, 115.0), f"实际 {ht}"
-    assert (ht["d_from"], ht["d_to"]) == ("2026-06-08", "2026-10-09"), f"应退 tp 日期：{ht}"
-    assert c["history"][0]["org"] == "中金", f"应按 np 变化幅度降序：{[h['org'] for h in c['history']]}"
+    assert (ht["d_from"], ht["d_to"]) == (_iso(120), _iso(14)), f"应退 tp 日期：{ht}"
+    zx = hist["中信建投"]
+    assert (zx["np_from"], zx["np_to"]) == (500.0, 550.0), f"180 天外上一份应纳入对比：{zx}"
+    assert zx["d_from"] == _iso(400) and zx["d_from"][:4] != zx["d_to"][:4], \
+        f"上一份跨年应带全称日期：{zx}"
+    order = [h["org"] for h in c["history"]]
+    assert order == ["中信建投", "中金公司", "摩根士丹利", "华泰", "浙商"], \
+        f"应头部/外资优先、组内按 np 幅度降序（浙商 +100% 仍排最后）：{order}"
     print("26. E5 券商态度变化 通过")
 
 
@@ -1063,7 +1091,8 @@ def test_27_tp_reports_hint():
     落盘 _CAPTURE 原样带 tp_reports。"""
     hist = [{"org": "中金公司", "yr": "2026", "d_from": "2026-04-25", "d_to": "2026-07-26",
              "np_from": 959.8, "np_to": 959.8}]
-    hist_line = ("券商态度变化（gap_history 照抄行，1 家，同一券商近180天首末两份）: "
+    hist_line = ("券商态度变化（gap_history 照抄行，1 家，同一券商最新一份vs上一份·"
+                 "最新限180天内/上一份不限/头部外资优先）: "
                  "中金公司 2026E净利959.8(04-25)→959.8(07-26)")
     tp_reps = [{"org": "群益证券(香港)", "date": "2026-09-29", "tp": 390.0},
                {"org": "群益证券(香港)", "date": "2026-09-29", "tp": 390.0},
@@ -1112,14 +1141,20 @@ def test_27_tp_reports_hint():
     assert "目标价研报清单" not in out3, f"键缺失不应出行: {out3}"
 
     # v5.8.3：渲染键真值由 fetch_consensus 产出——真调数据层钉文案（去重/计数/格式化在此层）
+    # v5.9.0：日期相对化（防窗口腐烂）；history_line 钉新口径文案（最新vs上一份/头部外资优先）
     import em_owner
+    from datetime import date, timedelta
+    _d = lambda n: (date.today() - timedelta(days=n)).strftime("%Y%m%d")
+    _mm = lambda n: f"{_d(n)[4:6]}-{_d(n)[6:8]}"
+    _iso = lambda n: (date.today() - timedelta(days=n)).isoformat()
+    _sd = lambda a, b: _mm(a) if _d(a)[:4] == _d(b)[:4] else _iso(a)  # 跨年带全称（同数据层）
     rows = [
-        {"org_name": "野村", "report_date": "20260830", "quarter": "2026Q4",
+        {"org_name": "野村", "report_date": _d(30), "quarter": "2026Q4",
          "np": 9520000, "eps": 2.1, "min_price": 30, "max_price": 32, "rating": "买入"},
-        {"org_name": "野村", "report_date": "20260701", "quarter": "2026Q4", "np": 9000000},
-        {"org_name": "摩根士丹利", "report_date": "20260812", "quarter": "2026Q4",
+        {"org_name": "野村", "report_date": _d(90), "quarter": "2026Q4", "np": 9000000},
+        {"org_name": "摩根士丹利", "report_date": _d(60), "quarter": "2026Q4",
          "np": 8780000, "eps": 2.0},
-        {"org_name": "老券商", "report_date": "20250101", "quarter": "2026Q4", "np": 1000000},
+        {"org_name": "老券商", "report_date": _d(400), "quarter": "2026Q4", "np": 1000000},
     ]
     _orig_ts = em_core.ts_call
     try:
@@ -1128,12 +1163,18 @@ def test_27_tp_reports_hint():
     finally:
         em_core.ts_call = _orig_ts
     assert c4["history_line"] == \
-        "券商态度变化（gap_history 照抄行，1 家，同一券商近180天首末两份）: 野村 2026E净利900(07-01)→952(08-30)", \
+        (f"券商态度变化（gap_history 照抄行，1 家，同一券商最新一份vs上一份·"
+         f"最新限180天内/上一份不限/头部外资优先）: 野村 2026E净利900({_sd(90, 30)})→952({_mm(30)})"), \
         f"实际 {c4['history_line']}"
     assert c4["detail_lines"] == [
-        "2026E 净利明细（gap_plot 照抄行，2 家，按值降序）: 野村952(08-30)·摩根士丹利878(08-12)"],         f"实际 {c4['detail_lines']}"
-    assert c4["aim_line"] ==         "目标价明细（gap_plot 照抄行，1 家，(研报下限+上限)/2）: 野村31(08-30)",         f"实际 {c4['aim_line']}"
-    assert c4["tp_reports_line"] ==         "目标价研报清单（gap_history.tp_reports 照抄键，1 家/1 份，降级面板数据源）: 野村31(08-30)",         f"实际 {c4['tp_reports_line']}"
+        f"2026E 净利明细（gap_plot 照抄行，2 家，按值降序）: 野村952({_mm(30)})·摩根士丹利878({_mm(60)})"], \
+        f"实际 {c4['detail_lines']}"
+    assert c4["aim_line"] == \
+        f"目标价明细（gap_plot 照抄行，1 家，(研报下限+上限)/2）: 野村31({_mm(30)})", \
+        f"实际 {c4['aim_line']}"
+    assert c4["tp_reports_line"] == \
+        f"目标价研报清单（gap_history.tp_reports 照抄键，1 家/1 份，降级面板数据源）: 野村31({_mm(30)})", \
+        f"实际 {c4['tp_reports_line']}"
     print("27. E5 目标价研报清单提示行 通过")
 
 

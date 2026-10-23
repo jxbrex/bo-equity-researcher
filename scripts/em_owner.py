@@ -18,6 +18,7 @@ from datetime import date
 
 import em_core as _C
 from em_core import (to_ts_code, _fmt_date, _em_dc, _win_years, yi, RateLimitError)
+from org_tier import is_tier1, norm_org
 
 
 # ---------------- E4 股东户数 ----------------
@@ -90,24 +91,42 @@ def _em_consensus(code: str) -> dict:
     return data[0] if data else {}
 
 
-def _org_history(hist_rows: dict) -> list:
-    """v5.6.0 gap_history 数据源：同一券商 180 天内 ≥2 份研报的首末对比行。
-    hist_rows: org → [(rd, yr, np亿|None, tp中值|None, rating)]（同循环顺带收集）。
-    行口径：np 对比取「首末两个日期都有该年度 np」的年度（当年优先，否则最大年）——同预测年度
-    才可比；tp 对比取含目标价研报的首末两份；评级仅记录首末变化。行日期 = np 对比日期
-    （np 缺失退 tp 日期）。按 np 变化幅度降序（无 np 按 tp），输出 ISO 日期。"""
+def _org_history(hist_rows: dict, name_map: dict = None) -> list:
+    """gap_history 数据源：同一券商「最新一份 vs 上一份」研报对比行（v5.9.0 口径重构——
+    原 v5.6.0「近 180 天内 ≥2 份首末对比」废止：「半年前一份 → 今天一份」这类最有价值的
+    变化曾被窗口整行滤掉，而 tushare report_rc 返回全历史（v5.9.0 探针实证最早 2019 年）。
+    口径：最新一份 d1 = 该券商近 180 天内最新研报日期（180 天内无 → 不出行，保「当前态度」
+    语义）；上一份 d0 = d1 之前最近一份，不限时间（np 同预测年度约束自带时间过滤——跨期
+    太远年份对不上时 np 自动不比）。np 对比取 d0/d1 都有该年度 np 的年度（当年优先，否则
+    最大年）；tp 取 d0/d1 两份区间中值（缺一不比）；评级仅记变化。行日期 = np 对比日期
+    （np 缺失退 tp 日期）。排序：头部/外资券商（org_tier.is_tier1）优先，组内按 np 变化
+    幅度降序（无 np 按 tp）。输出 ISO 日期。
+    hist_rows 键须为归一化机构名（org_tier.norm_org——「中金/中金公司」口径漂移不合并会
+    把同一券商拆成两行幻影对比，v5.9.0 宁德 300750 探针实证）；name_map = 归一化名 →
+    最新一份研报的原始机构名（展示用）。"""
     cur_yr = str(date.today().year)
+    cutoff = date.today().toordinal() - 180
 
     def _iso(rd):
         return f"{rd[:4]}-{rd[4:6]}-{rd[6:8]}" if len(rd) == 8 else rd
 
+    def _ord(rd):
+        try:
+            return date(int(rd[:4]), int(rd[4:6]), int(rd[6:8])).toordinal()
+        except Exception:
+            return -1
+
     out = []
     for org, rows in hist_rows.items():
-        dates = sorted({rd for rd, *_ in rows if rd})
-        if len(dates) < 2:
+        dates = sorted({rd for rd, *_ in rows if rd and _ord(rd) > 0})
+        d1 = next((d for d in reversed(dates) if _ord(d) >= cutoff), None)
+        if d1 is None:          # 近 180 天无最新研报 → 态度非当前，不出行
             continue
-        d0, d1 = dates[0], dates[-1]
-        entry = {"org": org}
+        prev = [d for d in dates if d < d1]
+        if not prev:            # 历史上无上一份 → 无可比，不出行
+            continue
+        d0 = prev[-1]
+        entry = {"org": (name_map or {}).get(org, org)}
         yrs = [y for y in {yr for _, yr, np_, *_ in rows if yr and np_ is not None}
                if any(rd == d0 and yr == y and np_ is not None for rd, yr, np_, *_ in rows)
                and any(rd == d1 and yr == y and np_ is not None for rd, yr, np_, *_ in rows)]
@@ -116,22 +135,22 @@ def _org_history(hist_rows: dict) -> list:
             v0 = next(np_ for rd, yr, np_, *_ in rows if rd == d0 and yr == y)
             v1 = next(np_ for rd, yr, np_, *_ in rows if rd == d1 and yr == y)
             entry.update(yr=y, d_from=_iso(d0), d_to=_iso(d1), np_from=v0, np_to=v1)
-        tps = sorted({rd: tp for rd, _, _, tp, _ in rows if rd and tp is not None}.items())
-        if len(tps) >= 2:
-            entry.update(tp_from=tps[0][1], tp_to=tps[-1][1])
-            entry.setdefault("d_from", _iso(tps[0][0]))
-            entry.setdefault("d_to", _iso(tps[-1][0]))
-        rts = sorted({rd: rt for rd, *_, rt in rows if rd and rt}.items())
-        if len(rts) >= 2 and rts[0][1] != rts[-1][1]:
-            entry.update(rating_from=rts[0][1], rating_to=rts[-1][1])
+        tps = {rd: tp for rd, _, _, tp, _ in rows if rd in (d0, d1) and tp is not None}
+        if d0 in tps and d1 in tps:
+            entry.update(tp_from=tps[d0], tp_to=tps[d1])
+            entry.setdefault("d_from", _iso(d0))
+            entry.setdefault("d_to", _iso(d1))
+        rts = {rd: rt for rd, *_, rt in rows if rd in (d0, d1) and rt}
+        if d0 in rts and d1 in rts and rts[d0] != rts[d1]:
+            entry.update(rating_from=rts[d0], rating_to=rts[d1])
         if "np_from" in entry or "tp_from" in entry:
             out.append(entry)
 
     def _delta(e, k1, k2):
         return (e[k2] / e[k1] - 1) if k1 in e and k2 in e and e[k1] else -9
 
-    out.sort(key=lambda e: (-_delta(e, "np_from", "np_to"), -_delta(e, "tp_from", "tp_to"),
-                            e["org"]))
+    out.sort(key=lambda e: (not is_tier1(e["org"]), -_delta(e, "np_from", "np_to"),
+                            -_delta(e, "tp_from", "tp_to"), e["org"]))
     return out
 
 
@@ -162,11 +181,13 @@ def _e5_render_ready(detail: dict, aim_detail: list, history: list, tp_reports: 
                     f"(研报下限+上限)/2）: {seg}")
     history_line = None
     if history:
+        def _sd(h):  # 上一份日期跨年带全称（MM-DD→MM-DD 跨年歧义，v5.9.0 上一份不限窗口）
+            return (h["d_from"][5:] if h["d_from"][:4] == h["d_to"][:4] else h["d_from"])
         segs = []
         for h in history[:12]:
             seg = h["org"]
             if "np_from" in h:
-                seg += (f" {h['yr']}E净利{h['np_from']:g}({h['d_from'][5:]})"
+                seg += (f" {h['yr']}E净利{h['np_from']:g}({_sd(h)})"
                         f"→{h['np_to']:g}({h['d_to'][5:]})")
             if "tp_from" in h:
                 seg += f"·目标价{h['tp_from']:g}→{h['tp_to']:g}"
@@ -174,7 +195,8 @@ def _e5_render_ready(detail: dict, aim_detail: list, history: list, tp_reports: 
                 seg += f"·评级{h['rating_from']}→{h['rating_to']}"
             segs.append(seg)
         history_line = (f"券商态度变化（gap_history 照抄行，{_cap_note(12, len(history))}，"
-                        f"同一券商近180天首末两份）: " + "；".join(segs))
+                        f"同一券商最新一份vs上一份·最新限180天内/上一份不限/头部外资优先）: "
+                        + "；".join(segs))
     tp_reports_line = None
     if tp_reports:
         tp12 = tp_reports[:12]
@@ -198,7 +220,9 @@ def _e5_render_ready(detail: dict, aim_detail: list, history: list, tp_reports: 
 
 def fetch_consensus(code: str) -> dict:
     """E5 一致预期。tushare report_rc（券商盈利预测明细）优先；东财 RPT_WEB_RESPREDICT 兜底。
-    返回带 _src 标记的 dict。tushare 返回近180天研报聚合：家数/分年度净利与EPS均值/目标价区间。"""
+    返回带 _src 标记的 dict。tushare 返回全历史研报（v5.9.0 探针实证最早 2019 年）：
+    一致预期聚合（家数/分年度净利与EPS均值/目标价区间/逐机构明细）仍限近 180 天，
+    gap_history 对比（_org_history）用全历史——上一份不限窗口。"""
     try:
         rows = _C.ts_call("report_rc", {"ts_code": to_ts_code(code)})
         if not rows:
@@ -219,7 +243,6 @@ def fetch_consensus(code: str) -> dict:
         years, prices, ratings = {}, [], {}
         latest_by_org = {}   # v4.11.1（gap_plot 落地）：(yr, org) → 最新研报行，供 E5 逐机构明细
         aim_by_org = {}      # org → 最新含目标价研报行
-        hist_rows = {}       # v5.6.0（gap_history 落地）：org → [(rd, yr, np亿, tp中值, rating)] 全量保留
         tp_reports = []      # v5.8.0：180 天内全部含目标价研报（org/date/tp 中值，日期倒序）——
                              # 态度变化图目标价面板「无同券商可比两份」时的研报一览降级数据源
         for r in recent:
@@ -227,12 +250,6 @@ def fetch_consensus(code: str) -> dict:
             yr = q[:4] if len(q) >= 4 else ""
             org = (r.get("org_name") or "").strip()
             rd = str(r.get("report_date") or "")
-            if org:
-                _tp = (round((float(r["min_price"]) + float(r["max_price"])) / 2, 2)
-                       if r.get("min_price") and r.get("max_price") else None)
-                _np = round(float(r["np"]) / 1e4, 1) if r.get("np") is not None else None
-                hist_rows.setdefault(org, []).append(
-                    (rd, yr, _np, _tp, (r.get("rating") or "").strip()))
             if yr.isdigit():
                 slot = years.setdefault(yr, {"np": [], "eps": []})
                 if r.get("np") is not None:
@@ -266,7 +283,27 @@ def fetch_consensus(code: str) -> dict:
                       for org, r in sorted(aim_by_org.items(),
                                            key=lambda kv: -(float(kv[1]["min_price"])
                                                             + float(kv[1]["max_price"])))]
-        hist = _org_history(hist_rows)
+        hist_rows = {}       # gap_history 数据源：归一化机构名 → [(rd, yr, np亿, tp中值, rating)]。
+        # v5.9.0 起收集全历史（非 180 天 recent）——对比口径「最新一份 vs 上一份」的上一份
+        # 不限窗口（tushare report_rc 返回全历史，v5.9.0 探针实证最早 2019 年）；
+        # 键用 norm_org 归一化名合并口径漂移（「中金/中金公司」拆两行幻影对比，宁德探针实证），
+        # hist_name 记录各归一化名最新研报的原始机构名供展示
+        hist_name = {}
+        for r in rows:
+            org = (r.get("org_name") or "").strip()
+            rd = str(r.get("report_date") or "")
+            if org and rd:
+                key = norm_org(org)
+                if key not in hist_name or rd > hist_name[key][0]:
+                    hist_name[key] = (rd, org)
+                q = str(r.get("quarter") or "")
+                _tp = (round((float(r["min_price"]) + float(r["max_price"])) / 2, 2)
+                       if r.get("min_price") and r.get("max_price") else None)
+                _np = round(float(r["np"]) / 1e4, 1) if r.get("np") is not None else None
+                hist_rows.setdefault(key, []).append(
+                    (rd, q[:4] if len(q) >= 4 else "", _np, _tp,
+                     (r.get("rating") or "").strip()))
+        hist = _org_history(hist_rows, {k: v[1] for k, v in hist_name.items()})
         tp_sorted = sorted(tp_reports, key=lambda x: x["date"], reverse=True)
         return {"_src": "tushare", "orgs": len(orgs), "n_reports": len(recent),
                 "years": years, "detail": detail, "aim_detail": aim_detail,

@@ -329,7 +329,7 @@ def _check_gap_history(fill: dict, warns: list) -> None:
             yrs.add(str(r["yr"]).strip())
     if len(yrs) > 1:
         warns.append(f"gap_history.rows 预测年度不一致（{sorted(yrs)}）：图题将退化为"
-                     f"「各行同预测年度首末对比」——建议只保留同年度行")
+                     f"「各行同预测年度两份对比」——建议只保留同年度行")
 
     ref = _quote_ref(fill)
     if ref is None:
@@ -341,7 +341,8 @@ def _check_gap_history(fill: dict, warns: list) -> None:
                 if isinstance(h, dict)}
     if not ref_rows:
         warns.append("gap_history 已填但落盘 JSON 无 gap_history.rows：E5 未产出可比行"
-                     "（近 180 天无同券商 ≥2 份研报）或 fill 手填——请重跑 em_fetch --out 核对")
+                     "（近 180 天无券商最新研报，或历史上无上一份可比）或 fill 手填"
+                     "——请重跑 em_fetch --out 核对")
         return
     for r in rows:
         if not isinstance(r, dict):
@@ -397,6 +398,8 @@ def _check_gap_history(fill: dict, warns: list) -> None:
         # 排序取前 8 再判 tp 对；全量扫描会在「≥9 家可比且 tp 对落在第 9 名后」时漏报。
         # v5.8.2：排序键同源 import charts_gap._gh_sort_key（v5.8.1 内联复制已删——渲染端
         # 排序策略一变校验端即失准，正是本校验要防的失效模式）；行 dict 键名与渲染端对齐
+        # （v5.9.0：补 org 键——排序键新增头部/外资优先（org_tier.is_tier1），缺 org 即
+        # KeyError 且口径与渲染端分裂）
         parsed = []
         for r in rows:
             if not isinstance(r, dict):
@@ -405,7 +408,8 @@ def _check_gap_history(fill: dict, warns: list) -> None:
             tpf, tpt = _num(r.get("tp_from")), _num(r.get("tp_to"))
             if (npf is None or npt is None) and (tpf is None or tpt is None):
                 continue
-            parsed.append({"npf": npf, "npt": npt, "tpf": tpf, "tpt": tpt})
+            parsed.append({"org": str(r.get("org") or ""), "npf": npf, "npt": npt,
+                           "tpf": tpf, "tpt": tpt})
         parsed.sort(key=_gh_sort_key)
         has_tp_pair = any(t["tpf"] is not None for t in parsed[:8])
         if ref_tp_miss and not has_tp_pair:

@@ -576,8 +576,9 @@ def _sec_e5(pure: str, is_hk: bool) -> list:
             if c.get("ratings"):
                 lines.append("评级分布: " + " ".join(f"{k}{v}" for k, v in
                                                       sorted(c["ratings"].items(), key=lambda x: -x[1])))
-            # v5.6.0（gap_history 落地）：同一券商首末两份研报对比行——fill 的 gap_history.rows
-            # 照抄本行（np 仅同预测年度首末对比、tp 为研报区间中值首末、评级仅记变化）；
+            # gap_history 落地：同一券商「最新一份 vs 上一份」研报对比行——fill 的
+            # gap_history.rows 照抄本行（v5.9.0 口径：最新限 180 天内、上一份不限窗口，
+            # 头部/外资排序优先；np 仅同预测年度对比、tp 为两份区间中值、评级仅记变化）；
             # 并落盘 _CAPTURE["gap_history"] 供 render 对账（防伪链同 consensus_np 款）。
             # v5.8.0：目标价研报清单一并落盘（无同券商可比两份时的面板降级数据源）；
             # v5.8.1：清单此前只落盘不进摘要行，填报方不可见 → 漏抄断链（宁德 300750 复盘

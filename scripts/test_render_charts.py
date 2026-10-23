@@ -906,8 +906,9 @@ def test_fin_trend_unit_escaped():
 
 
 def test_gap_history_chart():
-    """v5.6.0：券商态度变化图（charts_gap.build_gap_history，哑铃两面板并排）——
-    图+判词横条生成、np/tp 上调下调持平计数、机构按 np 幅度降序、缺目标价行注、
+    """v5.9.0 口径（原 v5.6.0 首末对比废止）：券商态度变化图（charts_gap.build_gap_history，
+    哑铃两面板并排）——图+判词横条生成、np/tp 上调下调持平计数、头部/外资排序优先+
+    机构名橙色、组内按 np 幅度降序、缺目标价行注、跨年上一份日期带全称、
     评级变化入右列与横条、无效/空字段返空串、render_fill 端到端进 9 章。"""
     import charts_gap
     rows = [
@@ -923,17 +924,24 @@ def test_gap_history_chart():
         {"org": "摩根士丹利", "yr": "2026", "d_from": "2026-07-12", "d_to": "2026-09-15",
          "np_from": 905, "np_to": 878, "tp_from": 105, "tp_to": 98,
          "rating_from": "增持", "rating_to": "中性"},
+        # 非头部/外资：np +30% 幅度最大，排序仍排全部头部/外资之后（v5.9.0 用户拍板）
+        {"org": "浙商证券", "yr": "2026", "d_from": "2026-05-10", "d_to": "2026-10-10",
+         "np_from": 500, "np_to": 650},
     ]
     html = charts_gap.build_gap_history({"gap_history": {"rows": rows}})
     assert "券商态度变化" in html and "<svg" in html and "layer-summary" in html
     assert "① 2026E 归母净利预测" in html, "统一预测年度应入左面板标题"
-    assert "上调 3 家 / 下调 2 家 / 持平 0 家" in html, "np 计数（招商/国泰/中金升，华泰/大摩降）"
+    assert "上调 4 家 / 下调 2 家 / 持平 0 家" in html, "np 计数（浙商/招商/国泰/中金升，华泰/大摩降）"
     assert "上调 2 家 / 下调 1 家 / 持平 1 家" in html, "tp 计数（国泰海通 122→122 持平）"
-    assert "未给目标价" in html, "华泰无 tp 应注记"
+    assert "未给目标价" in html, "华泰/浙商无 tp 应注记"
     assert "评级 增持→买入" in html and "评级变化 2 家" in html
     assert "净利 +5.1%" in html and "目标价 +14.5%" in html, \
         "v5.8.5 右列幅度带维度前缀（招商 np 880→925 / tp 110→126，双维度拆两行）"
-    assert html.index("招商证券") < html.index("中金公司"), "应按 np 幅度降序（招商 +5.1% 居首）"
+    assert html.index("招商证券") < html.index("中金公司"), \
+        "头部/外资组内应按 np 幅度降序（招商 +5.1% 居首）"
+    assert html.index("摩根士丹利") < html.index("浙商证券"), \
+        "非头部/外资券商幅度再大（浙商 +30%）也排头部/外资之后"
+    assert html.count('fill="#c08a2e"') == 5, "5 家头部/外资券商机构名应橙色（浙商不橙）"
     assert ">122 持平<" in html, "国泰海通 tp 持平应有沙色环注（122 持平）"
     # 无效行 / 空字段 → 空串（缺失不告警，同 holders 惯例）
     assert charts_gap.build_gap_history({}) == ""
@@ -943,17 +951,23 @@ def test_gap_history_chart():
     # 混杂预测年度 → 标题退化
     mixed = charts_gap.build_gap_history({"gap_history": {"rows": [
         dict(rows[0]), dict(rows[1], org="野村", yr="2027")]}})
-    assert "各行同预测年度首末对比" in mixed
+    assert "各行同预测年度两份对比" in mixed
+    # v5.9.0：跨年上一份日期带全称（MM-DD→MM-DD 跨年歧义；上一份不限窗口后跨年常见）
+    cross = charts_gap.build_gap_history({"gap_history": {"rows": [
+        {"org": "中金", "yr": "2026", "d_from": "2025-11-20", "d_to": "2026-09-15",
+         "np_from": 900, "np_to": 952}]}})
+    assert "2025-11-20 → 09-15" in cross, "跨年上一份日期应带全称年份"
     # 端到端：经 9 章锚点注入进渲染产物
     out = render_fill(minimal_fill(gap_history={"rows": rows}))
-    assert "券商态度变化图" in out and "同一券商首末两份研报对比" in out
+    assert "券商态度变化图" in out and "同一券商最新一份 vs 上一份" in out
     # 排序回归（v5.6.0 审核 #1）：持平（0.0%）须排在下调之前——`or -9` 曾把 0.0 吞成 -9
     flat = charts_gap.build_gap_history({"gap_history": {"rows": [
         {"org": "平平", "np_from": 100, "np_to": 100},
         {"org": "降降", "np_from": 100, "np_to": 99},
         {"org": "升升", "np_from": 100, "np_to": 101},
     ]}})
-    assert flat.index("升升") < flat.index("平平") < flat.index("降降"),         "顺序应为 升→持平→降"
+    assert flat.index("升升") < flat.index("平平") < flat.index("降降"), \
+        "顺序应为 升→持平→降"
 
 
 def test_gap_history_tp_fallback_dots():
@@ -974,12 +988,13 @@ def test_gap_history_tp_fallback_dots():
     assert ">55.3</text>" in html and "10-10" in html and "无净利可比" in html, \
         "v5.8.5 行外券商独立行：右面板单点+数值+日期，左面板标无净利可比"
     assert "另有目标价（无净利可比，补列）" not in html, "旧右下小字补列形态已废止"
-    assert "近 180 天 10 家券商有可比前后研报（图列变化幅度前 8 家）" in html, "横条计数=截断前全集"
+    assert "近 180 天 10 家券商有最新研报且存在上一份可比（图列前 8 家，头部/外资优先）" in html, \
+        "横条计数=截断前全集"
     assert "上调 10 家" in html
     assert "目标价 3 家给出（无同券商两份可比" in html
     # 无 tp_reports → 旧空态文案，无独立行
     html2 = charts_gap.build_gap_history({"gap_history": {"rows": rows}})
-    assert "② 目标价：近 180 天无两份可比研报" in html2 and "无净利可比" not in html2
+    assert "② 目标价：无两份可比研报" in html2 and "无净利可比" not in html2
     # v5.8.1 审核实证①：同券商多份取日期最新（此前存量存 MM-DD 与完整日期混比，恒取最旧）
     tp_multi = [{"org": "券商A", "date": "2026-08-24", "tp": 52.7},
                 {"org": "券商A", "date": "2026-06-11", "tp": 51.3},
@@ -1007,7 +1022,7 @@ def test_gap_history_tp_fallback_dots():
     html5 = charts_gap.build_gap_history({"gap_history": {"rows": rows_bf,
                                                           "tp_reports": tp_bf}})
     assert html5.count("无净利可比") == 6, "6 家行外券商各占一独立行"
-    assert "净利 —" not in html5, "tp 独立行无首末对比，右列整列跳过（防豁免退化）"
+    assert "净利 —" not in html5, "tp 独立行无两份对比，右列整列跳过（防豁免退化）"
     assert html5.index("中金公司") < html5.index("中信建投证券") < html5.index("行外甲"), \
         "tier1 优先、同 tier 按日期降序（中金 10-22 先于中信建投 08-26，再非 tier）"
     assert "行外戊" not in html5, "最旧非 tier 超出行数上限不列示"

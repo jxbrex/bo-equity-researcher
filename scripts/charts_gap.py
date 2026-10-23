@@ -12,6 +12,7 @@ import re
 
 from scoring import _num, _fmt, _esc
 from charts_base import *
+from org_tier import TIER1_ORGS, norm_org, is_tier1
 
 # ════════════════════ 8 市场预期差拆解 · 逐机构分布图 / B 档哑铃 ════════════════════
 
@@ -318,11 +319,11 @@ def _gap_plot_b(dims: list) -> str:
     return "".join(parts)
 
 
-# ════════════════════ 9 章 · 券商态度变化（同一券商首末两份研报对比，v5.6.0）════════════════════
+# ════════════════════ 9 章 · 券商态度变化（同一券商最新一份 vs 上一份研报对比，v5.9.0）════════════════════
 
 
 def _gh_delta(r: dict, kf: str, kt: str):
-    """首末变化率（小数）；缺值或基期为 0 → None。"""
+    """两份对比变化率（小数，上一份→最新一份）；缺值或基期为 0 → None。"""
     v0, v1 = r.get(kf), r.get(kt)
     if v0 is None or v1 is None or not v0:
         return None
@@ -330,37 +331,17 @@ def _gh_delta(r: dict, kf: str, kt: str):
 
 
 def _gh_sort_key(r: dict):
-    """排序键：np 幅度降序优先、无 np 行按 tp 幅度降序靠后。None（缺值）≠ 0（持平）——
-    不能用 `or -9`：0.0 会被吞成 -9，持平行错排到下调行之后（v5.6.0 审核 #1）。"""
+    """排序键：头部/外资券商（org_tier.is_tier1）优先（v5.9.0 用户拍板——大券商/外资的
+    态度变化最优先关注）；组内 np 幅度降序优先、无 np 行按 tp 幅度降序靠后。
+    None（缺值）≠ 0（持平）——不能用 `or -9`：0.0 会被吞成 -9，持平行错排到下调行之后
+    （v5.6.0 审核 #1）。"""
     d = _gh_delta(r, "npf", "npt")
     if d is not None:
-        return (0, -d)
-    d = _gh_delta(r, "tpf", "tpt")
-    return (1, -(d if d is not None else -9))
-
-
-def _gh_org_key(org: str) -> str:
-    """机构名归一化（v5.8.1）：tushare org_name 存在「中金/中金公司」口径漂移，
-    rows 与 tp_reports 同机构名可能不一致——去尾部公司后缀后比对（宁德 300750 复盘
-    实证：归一前降级面板单点落行外补列）。括号注（如 (香港)）保留，区分境内外主体。"""
-    s = org.strip()
-    for suf in ("证券股份有限公司", "股份有限公司", "有限责任公司", "有限公司", "公司", "证券"):
-        if s.endswith(suf):
-            s = s[:-len(suf)]
-            break
-    return s
-
-
-# v5.8.5 头部/外资券商清单（_gh_org_key 归一化后精确匹配）：目标价降级面板行外券商
-# 独立行的选取优先级——大券商目标价参考价值高于小券商（宝丰能源复盘实证：中金/中信建投
-# 单份研报目标价沉右下小字补列，用户拍板大券商优先列示）
-_GH_TIER1_ORGS = frozenset((
-    # 外资
-    "高盛", "摩根士丹利", "摩根大通", "瑞银", "花旗", "汇丰", "野村", "美银", "巴克莱",
-    "杰富瑞", "麦格理", "大和",
-    # 头部内资
-    "中信", "中金", "中信建投", "华泰", "国泰海通", "国泰君安", "招商", "广发",
-    "申万宏源", "国信", "兴业", "东方", "光大", "平安"))
+        mag = (0, -d)
+    else:
+        d = _gh_delta(r, "tpf", "tpt")
+        mag = (1, -(d if d is not None else -9))
+    return (not is_tier1(r["org"]),) + mag
 
 
 def _flat_ring(cx, cy) -> str:
@@ -375,20 +356,24 @@ def _flat_ring(cx, cy) -> str:
 def build_gap_history(fill: dict) -> str:
     """9 章券商态度变化图（fill["gap_history"] 可选字段，缺失/无有效行 → 空串不告警）。
 
-    形态（demo v2 变体 A 定稿）：哑铃两面板并排——左=净利预测首末对比（同预测年度）、
-    右=目标价（研报区间中值）首末对比，两行共享机构行；沙点=较早研报、最新一份钢蓝=上调 /
-    中灰=下调 / 沙色环=持平，箭头指向最新值；右列=两维度首末幅度与评级变化。
+    形态（demo v2 变体 A 定稿）：哑铃两面板并排——左=净利预测两份对比（同预测年度）、
+    右=目标价（研报区间中值）两份对比，两行共享机构行；沙点=上一份、最新一份钢蓝=上调 /
+    中灰=下调 / 沙色环=持平，箭头指向最新值；右列=两维度变化幅度与评级变化。
     rows: [{"org","yr"?,"d_from"?,"d_to"?,"np_from"?,"np_to"?,"tp_from"?,"tp_to"?,
             "rating_from"?,"rating_to"?}]——np 对 / tp 对至少居其一为有效行；行数取前 8
-    （按净利变化幅度降序，无净利按目标价）；行日期 = 净利对比首末日期（无净利退目标价日期）。
+    （v5.9.0 用户拍板：头部/外资券商 org_tier.is_tier1 优先，组内按净利变化幅度降序、
+    无净利按目标价；机构名橙色=头部/外资）；行日期 = 净利对比两份日期（无净利退目标价
+    日期；跨年上一份日期带全称，MM-DD 跨年歧义）。
+    v5.9.0 口径（取数侧 em_owner._org_history）：最新一份限近 180 天（保当前态度语义）、
+    上一份不限时间（np 同预测年度约束自带时间过滤）——原「180 天内 ≥2 份首末对比」废止。
     判词横条脚本复算（上调/下调/持平按变化率符号严格判，持平=完全相等），模型禁手写；
     计数口径=截断前全集（图内注明「图列前 N 家」）。
     v5.8.0 目标价面板降级（用户拍板形态）：tp 对全缺（无同券商两份可比）而
     gap_history.tp_reports 非空时，右面板按同一价值轴单点列示各券商最新目标价
-    （点落左面板机构共享行，带数值与日期），无箭头无首末幅度。
+    （点落左面板机构共享行，带数值与日期），无箭头无变化幅度。
     v5.8.5 降级面板形态升级（用户拍板）：行外券商（有目标价但不在净利对比行内）不再
     右下小字补列，改为各占一独立行——左面板标「无净利可比」，右面板同轴单点；选取
-    优先级=头部/外资券商清单（_GH_TIER1_ORGS）→日期最新，至多 6 行，超出一行小字
+    优先级=头部/外资券商清单（org_tier.TIER1_ORGS）→日期最新，至多 6 行，超出一行小字
     注明家数。宝丰能源复盘实证：中金/中信建投等大券商只有单份研报进不了对比行，
     5 家目标价全沉右下小字。"""
     gh = fill.get("gap_history") or {}
@@ -402,7 +387,7 @@ def build_gap_history(fill: dict) -> str:
         if not org or ((npf is None or npt is None) and (tpf is None or tpt is None)):
             continue
         rows.append({"org": org, "yr": str(r.get("yr") or "").strip(),
-                     "d_from": str(r.get("d_from") or "")[5:], "d_to": str(r.get("d_to") or "")[5:],
+                     "d_from": str(r.get("d_from") or ""), "d_to": str(r.get("d_to") or ""),
                      "npf": npf, "npt": npt, "tpf": tpf, "tpt": tpt,
                      "rf": str(r.get("rating_from") or "").strip(),
                      "rt": str(r.get("rating_to") or "").strip()})
@@ -418,7 +403,7 @@ def build_gap_history(fill: dict) -> str:
     # v5.8.0 目标价面板降级：无同券商两份可比时，各家最新目标价按同一价值轴单点列示——
     # 落在左面板机构共享行上（各家价格可比）。数据=gap_history.tp_reports（落盘照抄键）
     # v5.8.5 形态升级（用户拍板）：行外券商各占一独立行（左面板标「无净利可比」），
-    # 优先级=头部/外资清单（_GH_TIER1_ORGS）→日期最新，至多 6 行，超出一行小字注明家数
+    # 优先级=头部/外资清单（org_tier.TIER1_ORGS）→日期最新，至多 6 行，超出一行小字注明家数
     tp_map = {}     # 归一化机构名 → {"tp","date","org"}（同券商多份取日期最新）
     if not has_tp:
         for r in gh.get("tp_reports") or []:
@@ -426,7 +411,7 @@ def build_gap_history(fill: dict) -> str:
                 continue
             org = str(r.get("org") or "").strip()
             tp, dte = _num(r.get("tp")), str(r.get("date") or "")
-            key = _gh_org_key(org)
+            key = norm_org(org)
             # v5.8.1 审核实证：存量须存完整日期再比较（此前存 MM-DD 与完整日期混比，
             # '2' 恒大于 '0'/'1'，同券商多份恒被最旧一份覆盖）；渲染处再切片 MM-DD
             if key and tp is not None and (key not in tp_map or dte > tp_map[key]["date"]):
@@ -435,50 +420,50 @@ def build_gap_history(fill: dict) -> str:
     n_tp_overflow = 0
     n_extra_lines = 0
     if tp_map:
-        row_keys = {_gh_org_key(r["org"]) for r in rows}
+        row_keys = {norm_org(r["org"]) for r in rows}
         extras = [v for k, v in tp_map.items() if k not in row_keys]
         # 稳定排序两遍：先日期降序，再 tier 清单优先（后一遍优先级更高）
         extras.sort(key=lambda v: v["date"], reverse=True)
-        extras.sort(key=lambda v: _gh_org_key(v["org"]) not in _GH_TIER1_ORGS)
+        extras.sort(key=lambda v: norm_org(v["org"]) not in TIER1_ORGS)
         n_tp_overflow = max(len(extras) - 6, 0)
         n_extra_lines = 1 if n_tp_overflow else 0
         for v in extras[:6]:
             rows.append({"org": v["org"], "yr": "", "d_from": "", "d_to": "",
                          "npf": None, "npt": None, "tpf": None, "tpt": None,
                          "rf": "", "rt": "", "tp_only": True})
-    tp_dots = [(i, tp_map[_gh_org_key(r["org"])]) for i, r in enumerate(rows)
-               if _gh_org_key(r["org"]) in tp_map]
+    tp_dots = [(i, tp_map[norm_org(r["org"])]) for i, r in enumerate(rows)
+               if norm_org(r["org"]) in tp_map]
     yrs = {r["yr"] for r in rows if r["yr"]}
     np_title = (f"① {next(iter(yrs))}E 归母净利预测（亿元）· 同预测年度对比" if len(yrs) == 1
-                else "① 归母净利预测（亿元）· 各行同预测年度首末对比")
+                else "① 归母净利预测（亿元）· 各行同预测年度两份对比")
     n = len(rows)
     # 布局常数（v5.8.3 收拢：原散落于函数体各字面量）：W=画布宽、NP0/NP1=左（净利）面板轴域、
-    # TP0/TP1=右（目标价）面板轴域、OX=机构列（右对齐）、RX=右列（首末幅度/评级变化）、
+    # TP0/TP1=右（目标价）面板轴域、OX=机构列（右对齐）、RX=右列（变化幅度/评级变化）、
     # TY=面板标题行 y、GY=面板网格顶 y、LG=图例起点 x
     W, NP0, NP1, TP0, TP1, OX, RX, TY, GY, LG = 1000, 210, 470, 600, 860, 180, 895, 44, 56, 30
     cy0, step = 74, 32
     cy_last = cy0 + step * (n - 1)
     H = cy_last + 40 + (n_extra_lines * 15 + 6 if n_extra_lines else 0)
-    parts = ['<span class="section-tag">券商态度变化 · 同一券商首末两份研报对比（近 180 天）</span>',
+    parts = ['<span class="section-tag">券商态度变化 · 同一券商最新一份 vs 上一份（头部/外资优先）</span>',
              _svg_open(W, H, "券商态度变化图")]
     # 图例（v5.8.2 收敛为 _legend_row glyph 数据列表；「持平」ring 双圈字形与 _dumbbell
     # 持平记号同一 _flat_ring 参数，此前两处手写）
     _legend_row(parts, [
-        ("较早研报", {"k": "dot", "r": 4, "fill": _C_SAND, "dx": 10, "gap": 30}),
+        ("上一份", {"k": "dot", "r": 4, "fill": _C_SAND, "dx": 10, "gap": 30}),
         ("最新 · 上调", {"k": "dot", "r": 5, "fill": _C_BLUE, "dx": 11, "gap": 17.36}),
         ("最新 · 下调", {"k": "dot", "r": 5, "fill": _C_STONE, "dx": 11, "gap": 17.36}),
         ("持平", {"k": "ring", "r_in": 4, "fill_in": _C_SAND, "r_out": 6.5,
                   "stroke": _C_BLUE, "sw2": 1.5, "dx": 12, "gap": 24}),
-        ("箭头指向最新值 · 右列=首末幅度与评级变化", {"k": "none", "dx": 0}),
+        ("箭头指向最新值 · 右列=变化幅度与评级变化 · 橙名=头部/外资", {"k": "none", "dx": 0}),
     ], LG, fs=10.5, xround=True, ty=14)
     tp_title = ("② 目标价（元）· 区间中值" if has_tp
                 else "② 目标价（元）· 单份研报列示（无同券商两份可比）" if tp_map
-                else "② 目标价：近 180 天无两份可比研报")
+                else "② 目标价：无两份可比研报")
     parts.append(f'<text x="{NP0}" y="{TY}" font-size="12" font-weight="700" fill="{_C_BLACK}">'
                  f'{_esc(np_title) if has_np else "① 归母净利预测：无同机构同年度可比研报"}</text>')
     parts.append(f'<text x="{TP0}" y="{TY}" font-size="12" font-weight="700" fill="{_C_BLACK}">'
                  f'{tp_title}</text>')
-    parts.append(f'<text x="{RX}" y="{TY}" font-size="10.5" fill="{_C_LABEL}">首末变化</text>')
+    parts.append(f'<text x="{RX}" y="{TY}" font-size="10.5" fill="{_C_LABEL}">变化</text>')
 
     panels = []   # (面板左 x0, 面板右 x1, 旧值键, 新值键, 值域 min, 值域 max)
     if has_np:
@@ -536,16 +521,20 @@ def build_gap_history(fill: dict) -> str:
 
     for i, r in enumerate(rows):
         cy = cy0 + step * i
+        # v5.9.0：头部/外资券商机构名橙色（与 gap_plot major 橙点同惯例；排序优先见 _gh_sort_key）
+        org_col = _C_ORANGE if is_tier1(r["org"]) else _C_INK
         parts.append(f'<text x="{OX}" y="{cy - 2}" text-anchor="end" font-size="11.5" '
-                     f'font-weight="600" fill="{_C_INK}">{_esc(r["org"])}</text>')
+                     f'font-weight="600" fill="{org_col}">{_esc(r["org"])}</text>')
         if r["d_from"] or r["d_to"]:
+            # 跨年上一份日期带全称（MM-DD→MM-DD 跨年歧义，v5.9.0 上一份不限窗口）
+            df = r["d_from"] if r["d_from"][:4] != r["d_to"][:4] else r["d_from"][5:]
             parts.append(f'<text x="{OX}" y="{cy + 9}" text-anchor="end" font-size="9" '
-                         f'fill="{_C_LABEL}">{_esc(r["d_from"])} → {_esc(r["d_to"])}</text>')
+                         f'fill="{_C_LABEL}">{_esc(df)} → {_esc(r["d_to"][5:])}</text>')
         for x0, kf, kt, X in mappers:
             parts.append(_dumbbell(x0, kf, kt, X, r, cy))
         # 右列：净利幅度 / 目标价幅度 + 评级变化（v5.8.5：幅度带维度前缀——目标价全缺时
         # 裸 % 挂在目标价面板右缘会被误读为目标价变化，宝丰能源复盘实证；双维度拆两行，
-        # 行距 32 内：cy-2/cy+9，评级行挪 cy+19；tp 独立行无首末对比，右列整列跳过）
+        # 行距 32 内：cy-2/cy+9，评级行挪 cy+19；tp 独立行无两份对比，右列整列跳过）
         if not r.get("tp_only"):
             dnp, dtp = _gh_delta(r, "npf", "npt"), _gh_delta(r, "tpf", "tpt")
             dims = [(lbl, d) for lbl, d, has in
@@ -584,7 +573,7 @@ def build_gap_history(fill: dict) -> str:
                      '（行数上限，头部/外资券商与最新日期优先）</text>')
     parts.append(_svg_close())
 
-    # 判词横条（脚本复算，持平=首末完全相等；计数口径=截断前全集，图内注明列示范围）
+    # 判词横条（脚本复算，持平=两份完全相等；计数口径=截断前全集，图内注明列示范围）
     def _counts(kf, kt):
         u = d = f = 0
         for r in rows_full:
@@ -594,8 +583,8 @@ def build_gap_history(fill: dict) -> str:
             u, d, f = u + (dl > 0), d + (dl < 0), f + (dl == 0)
         return u, d, f
 
-    s_parts = [f"近 180 天 {n_total} 家券商有可比前后研报"
-               + (f"（图列变化幅度前 {n_np} 家）" if n_total > n_np else "")]
+    s_parts = [f"近 180 天 {n_total} 家券商有最新研报且存在上一份可比"
+               + (f"（图列前 {n_np} 家，头部/外资优先）" if n_total > n_np else "")]
     if has_np:
         u, d, f = _counts("npf", "npt")
         s_parts.append(f"净利预测 <b>上调 {u} 家 / 下调 {d} 家 / 持平 {f} 家</b>")
@@ -614,17 +603,17 @@ def build_gap_history(fill: dict) -> str:
                + ("：" + "；".join(s_parts[1:]) if len(s_parts) > 1 else "") + "。</div>")
 
     parts.append(_chart_source(
-        "券商态度变化图", "券商研报明细（近 180 天首末两份，落盘核对）",
-        '每行=一家券商'
-        '近 180 天首末两份研报（按净利变化幅度降序，取前 8 家），沙点=较早一份、最新一份'
-        '钢蓝=上调 / 中灰=下调 / 沙色环=持平（首末完全相等），箭头指向最新值；'
-        '① 净利预测仅同预测年度首末对比，跨年预测不直接可比；② 目标价取研报区间中值；'
-        '右列=两维度首末幅度与评级变化；仅覆盖 180 天内 ≥2 份研报的券商，'
+        "券商态度变化图", "券商研报明细（最新一份 vs 上一份，落盘核对）",
+        '每行=一家券商最新一份研报（限近 180 天）与其上一份（不限时间）的对比'
+        '（头部/外资券商优先列示、机构名橙色，组内按净利变化幅度降序，取前 8 家），'
+        '沙点=上一份、最新一份钢蓝=上调 / 中灰=下调 / 沙色环=持平（两份完全相等），'
+        '箭头指向最新值；① 净利预测仅同预测年度对比，跨年预测不直接可比；'
+        '② 目标价取研报区间中值；右列=两维度变化幅度与评级变化；'
         '目标价维度无同券商两份可比时，右面板按同一价值轴单点列示各券商最新目标价'
         '（共享左面板机构行；行外券商各占一独立行，至多 6 行、头部/外资券商与最新日期'
         '优先，超出注明家数）；'
         '东财兜底路径与港股无逐份明细、不适用本图；'
-        '评级变化=同一券商首末对比口径，与 12 章时机信号「近 90 天评级上/下调家数」'
+        '评级变化=同一券商两份对比口径，与 12 章时机信号「近 90 天评级上/下调家数」'
         '（券商评级分布统计）口径不同，两处数字不要求互洽'))
     return "".join(parts) + summary
 

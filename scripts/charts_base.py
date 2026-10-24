@@ -181,17 +181,20 @@ def _chart_source(title: str, source: str, note: str = "") -> str:
 _SCENARIO_COLORS = {"pess": _C_RED, "base": _C_ORANGE, "opt": _C_GREEN}
 
 
-def _prev_track_rows(prev: dict, quality, valuation, timing) -> list:
-    """回测三轨分新旧对比共享行（build_prev_strip 与 build_review_dumbbell 同一口径）：
-    旧版 prev 键 research 自动映射 quality（兼容旧回测数据）；_num 解析、新旧均有效才入行；
-    d=新−旧（≥0 上调=好/绿，<0 下调=坏/红）——呈现映射（CSS 类 good/bad 与 SVG 色）由调用方各自完成。"""
+def _prev_track_rows(prev: dict, quality, valuation, timing, quality_version=1) -> list:
+    """三轨对比共享行；只有同版三轨质量分计算差值，旧单轨永远只可展示。
+    quality_version 只管质量算法，估值与时机仍按原口径比较。"""
     rows = []
+    previous_version = prev.get("quality_version") or 1
     for label, old, new in (("质量分", _num(prev.get("quality", prev.get("research"))), quality),
                             ("估值分", _num(prev.get("valuation")), valuation),
                             ("时机分", _num(prev.get("timing")), timing)):
         if old is None or new is None:
             continue
-        rows.append({"label": label, "old": old, "new": float(new), "d": float(new) - old})
+        comparable = (label != "质量分" or (previous_version != "legacy-single-track"
+                                          and str(previous_version) == str(quality_version)))
+        rows.append({"label": label, "old": old, "new": float(new), "comparable": comparable,
+                     "d": float(new) - old if comparable else None})
     return rows
 
 

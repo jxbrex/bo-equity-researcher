@@ -15,7 +15,20 @@
 ```bash
 python "<技能目录>\scripts\em_fetch.py" [代码] --peers=[peer1],[peer2],[peer3],[peer4]
 # 例: python "<技能目录>\scripts\em_fetch.py" 600989 --peers=600309,002001
+
+# 新报告同时取九维机械输入（分型按标的实际替换，--out 必须保留）
+python "<技能目录>\scripts\em_fetch.py" 600989 --quality-v2 --stock-type=成长型 --growth-tier=mid --industry-profile=generic --out=_em_600989_quote.json
 ```
+
+`--quality-v2` 是显式开关，旧命令不加时输出不变。三个 profile 参数必须按 Phase 0.5 结论
+填写；缺失时只返回 `profile_missing`，不得默认套通用 F。机械输入以报告日为截止日过滤
+披露信息，摘要完整打印 `quality_inputs` JSON，`--out` 落盘同名子键，fill 的 `score_inputs`
+只合并其中 1D/1F 机械字段，九维其余事实与人工判断仍按 `scoring.md` 查证，不能把整包
+直接当九维答案。落盘与 fill 双向漏抄/不一致会告警；profile 不一致或报告日后披露会拒渲染。
+`1D.liquidity.ocf_short_cover` 统一用最近完整年度经营现金流÷短期有息负债，债务余额仍取
+报告日前最新可见报告期；短债覆盖 <1 且该比率 >2 才触发流动性上调一档。
+`roic_basis=normalized` 时，`roic_normalized_components` 必须保留三个完整年度值且与 ROIC
+中位数一致；`latest` 必须显式给 3/6/9/12 个月，缺组成、期间或不一致均不得评分。
 
 **妙想 MCP 直调补充**（如 `mcp__mx-ds-mcp-stdio__mx_*` 在工具列表且未明确额度耗尽，脚本盲区/增强项；**MCP 缺席或返回明确积分/额度耗尽提示时，改用 Skill 工具调 `mx-data` skill**，同一东财妙想 API、独立额度，下列定量查询等价适用）：
 - **筹码分布（筹码面）**：tushare `cyq_*` 无权限 → `mx_ashare_finance_data(query="[公司] 最新获利比例、90%成本区间、平均成本、筹码集中度")`（实测返回平均成本/集中度）

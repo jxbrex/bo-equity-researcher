@@ -1336,3 +1336,86 @@ def test_29_summarize_clears_capture():
         em._CAPTURE.clear()
         em._CAPTURE.update(_orig_cap)
     print("29. summarize 清 _CAPTURE（二次调用无残留污染）通过")
+
+
+def test_30_quality_v2_summary_out_and_legacy_unchanged():
+    import contextlib
+    import io
+    import json
+
+    calls = []
+    payload = {"status": "ok", "as_of": "2026-10-24", "profile": {},
+               "1D": {"f_items": {"profit_positive": True}}, "1F": {},
+               "coverage": {}, "sources": [], "meta": {}}
+    original = em.summarize, em._C._tushare_token, sys.argv, dict(em._CAPTURE)
+    marker = object()
+    original_fetch = getattr(em, "fetch_quality_inputs", marker)
+    def fake_summary(*args):
+        em._CAPTURE.clear()
+        em._CAPTURE["price"] = 10.5
+        return "旧摘要"
+    def fake_quality(code, secucode, as_of, profile):
+        calls.append((code, secucode, as_of, profile))
+        return dict(payload, as_of=as_of, profile=profile)
+    try:
+        em.summarize = fake_summary
+        em._C._tushare_token = lambda: "configured"
+        em.fetch_quality_inputs = fake_quality
+        with tempfile.TemporaryDirectory() as d:
+            out_path = os.path.join(d, "quote.json")
+            sys.argv = ["em_fetch.py", "600000", "--quality-v2", "--stock-type=成长型",
+                        "--growth-tier=mid", "--industry-profile=generic", f"--out={out_path}"]
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                em.main()
+            output = buf.getvalue()
+            assert "旧摘要" in output and "quality_inputs" in output
+            assert '"profit_positive": true' in output
+            saved = json.load(open(out_path, encoding="utf-8"))
+            assert saved["quality_inputs"]["1D"]["f_items"]["profit_positive"] is True
+            assert calls[0][0:2] == ("600000", "600000.SH")
+            assert calls[0][3] == {"stock_type": "成长型", "growth_tier": "mid",
+                                   "industry_profile": "generic"}
+            sys.argv = ["em_fetch.py", "600000"]
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                em.main()
+            assert buf.getvalue() == "旧摘要\n"
+            assert len(calls) == 1
+    finally:
+        em.summarize, em._C._tushare_token, sys.argv, _ = original
+        em._CAPTURE.clear()
+        em._CAPTURE.update(original[3])
+        if original_fetch is marker:
+            del em.fetch_quality_inputs
+        else:
+            em.fetch_quality_inputs = original_fetch
+    print("30. 质量v2摘要落盘与旧命令不变 通过")
+
+
+def test_31_quality_v2_profile_missing():
+    import contextlib
+    import io
+    import quality_inputs
+
+    original = em.summarize, em._C._tushare_token, sys.argv, dict(em._CAPTURE)
+    marker = object()
+    original_fetch = getattr(em, "fetch_quality_inputs", marker)
+    try:
+        em.summarize = lambda *args: "旧摘要"
+        em._C._tushare_token = lambda: "configured"
+        em.fetch_quality_inputs = quality_inputs.fetch_quality_inputs
+        sys.argv = ["em_fetch.py", "600000", "--quality-v2"]
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            em.main()
+        assert "profile_missing" in buf.getvalue()
+    finally:
+        em.summarize, em._C._tushare_token, sys.argv, _ = original
+        em._CAPTURE.clear()
+        em._CAPTURE.update(original[3])
+        if original_fetch is marker:
+            del em.fetch_quality_inputs
+        else:
+            em.fetch_quality_inputs = original_fetch
+    print("31. 质量v2缺profile显式降级 通过")

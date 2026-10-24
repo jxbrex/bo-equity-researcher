@@ -52,17 +52,16 @@ def bucket_of(v, buckets):
 
 
 def collect_reports(directory: str) -> list:
-    """扫描目录（递归子目录，剪枝口径与 extract_review/score_drift 一致）→
-    [{path, code, rep_date, quality, valuation, timing, price}]。提取失败的跳过并告警。"""
+    """递归扫描报告并保留 quality_version；旧单轨综合分只入明细，不冒充质量分。"""
     reps = []
     for root, dirs, files in os.walk(directory):
-        E.prune_scan_dirs(dirs)  # 报告按子目录归档时平扫会静默漏样本（审计#16）
+        E.prune_scan_dirs(dirs)
         for fn in sorted(files):
             if not fn.lower().endswith(".html"):
                 continue
             info = parse_report_name(fn)
             if not info:
-                if E._looks_like_report(fn):   # 「像报告但解析失败」不静默丢（与回测触发同口径）
+                if E._looks_like_report(fn):
                     print(f"[跳过: 文件名无法解析 {fn}]", file=sys.stderr)
                 continue
             code, rep_date = info["code"], info["date"]
@@ -74,24 +73,22 @@ def collect_reports(directory: str) -> list:
                 continue
             prev = ext.get("prev") or {}
             q, v = prev.get("quality"), prev.get("valuation")
-            code = norm_code(ext.get("code") or code)  # 归一：剥 .SH/.SZ 后缀，口径见 extract_review
-            if q is None and v is None:
-                # 旧版单轨报告（pre-v4.0）：无三轨分——取文件名首分作质量分近似
-                # （_ 分隔格式那是综合分，- 分隔双分格式第一个是质量分），入明细但不入桶
-                if info["quality"] is None:
-                    print(f"跳过 {fn}（未提取到三轨分，旧版单轨报告）", file=sys.stderr)
+            version = prev.get("quality_version") or (1 if info["valuation"] is not None else "legacy-single-track")
+            code = norm_code(ext.get("code") or code)
+            if version == "legacy-single-track":
+                legacy_quality = info["quality"] if info["quality"] is not None else q
+                if legacy_quality is None:
+                    print(f"跳过 {fn}（未提取到旧版单轨综合分）", file=sys.stderr)
                     continue
-                reps.append({"file": fn, "code": code,
-                             "company": ext.get("company") or fn,
+                reps.append({"file": fn, "code": code, "company": ext.get("company") or fn,
                              "rep_date": prev.get("date") or rep_date,
-                             "quality": info["quality"], "valuation": None, "timing": None,
-                             "price": ext.get("price"), "legacy": True})
+                             "quality": legacy_quality, "valuation": None, "timing": None,
+                             "price": ext.get("price"), "legacy": True, "quality_version": version})
                 continue
-            reps.append({"file": fn, "code": code,
-                         "company": ext.get("company") or fn,
+            reps.append({"file": fn, "code": code, "company": ext.get("company") or fn,
                          "rep_date": prev.get("date") or rep_date,
                          "quality": q, "valuation": v, "timing": prev.get("timing"),
-                         "price": ext.get("price")})
+                         "price": ext.get("price"), "quality_version": version})
     return reps
 
 
@@ -239,17 +236,22 @@ def main():
     for r in sorted(ok, key=lambda x: x["rep_date"]):
         note = "短窗(<20日)只看不评" if r["n_days"] < SHORT_WINDOW else ""
         if r.get("legacy"):
-            note = (note + "；" if note else "") + "旧版单轨分近似，不入桶"
+            note = (note + "；" if note else "") + "旧版单轨综合分，仅展示不入桶"
         exc = f"{r['excess']:+.1%}" if r.get("excess") is not None else "—"
         print(f"| {r['company']} | {r['code']} | {r['rep_date']} | {r['quality']} | "
               f"{r['valuation']} | {r['timing']} | {r['n_days']} | {r['ret']:+.1%} | {exc} | {note} |")
 
-    ok_b = [r for r in ok if not r.get("legacy")]  # 入桶口径：排除旧版单轨近似
+    ok_b = [r for r in ok if not r.get("legacy")]
+    for version in sorted({r.get("quality_version", 1) for r in ok_b}, key=str):
+        version_reps = [r for r in ok_b if r.get("quality_version", 1) == version]
+        for label, group in (("全口径（同股多份都计入，窗口有重叠）", version_reps),
+                             ("去重口径（同股仅取最早一份，独立窗口）", dedup_earliest(version_reps))):
+            print(f"\n## 分桶统计——v{version}｜{label}")
+            for line in _bucket_table(group, "quality", Q_BUCKETS, "质量分 × 实际收益"):
+                print(line)
     for label, group in (("全口径（同股多份都计入，窗口有重叠）", ok_b),
                          ("去重口径（同股仅取最早一份，独立窗口）", dedup_earliest(ok_b))):
-        print(f"\n## 分桶统计——{label}")
-        for line in _bucket_table(group, "quality", Q_BUCKETS, "质量分 × 实际收益"):
-            print(line)
+        print(f"\n## 分桶统计——估值（跨质量版本）｜{label}")
         for line in _bucket_table(group, "valuation", V_BUCKETS, "估值分 × 实际收益"):
             print(line)
 

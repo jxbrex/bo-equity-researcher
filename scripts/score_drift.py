@@ -6,8 +6,9 @@
     python score_drift.py [报告目录]     # 默认 D:\\个股深度分析
 
 口径与判读纪律：
-- 扫描目录内全部报告文件名（extract_review.parse_report_name 三代命名通吃），按代码分组、
-  日期排序，相邻两版配对算 |Δ质量分| / |Δ估值分|（旧命名无估值分 → 只入质量分样本）。
+- 扫描目录内三代报告并读取 quality_version，按代码分组、日期排序；仅同质量版本的三轨报告
+  相邻配对计算 |Δ质量分|；本轮估值算法未改，|Δ估值分| 允许跨质量版本配对；
+  旧单轨综合分与跨版本质量分一律隔离。
 - 配对差 = 真实信息变化 + 评分噪声的合量，是「总分漂移」的上界代理——用于校准机制一
   临界宽度（±0.3 初始值，scoring.md 承诺「按 archive 漂移实测校准」），不是纯噪声测量。
 - 阈值判读：两轨 P80 取大者 < 0.2 → 支持收窄到 ±0.2（±0.1 低于单维度评分粒度
@@ -34,30 +35,37 @@ def _pctile(xs, q):
 
 
 def scan_infos(directory: str):
-    """扫描目录 → (code → [info] 分组, 像报告但解析失败计数)。
-    扫描与计算拆开（审计#小6），供离线测试直接构造文件名验证。"""
+    """扫描目录并读取报告内质量版本，返回代码分组与无法解析计数。"""
     by_code, skipped_unparsed = {}, 0
     for root, dirs, files in os.walk(directory):
-        E.prune_scan_dirs(dirs)  # 与 find_prev_report 同一剪枝口径（单源）
+        E.prune_scan_dirs(dirs)
         for fn in sorted(files):
             info = E.parse_report_name(fn)
             if info:
+                path = os.path.join(root, fn)
+                with open(path, encoding="utf-8", errors="replace") as f:
+                    info["quality_version"] = E.detect_quality_version(f.read(), path)
                 by_code.setdefault(E.norm_code(info["code"]), []).append(info)
             elif E._looks_like_report(fn):
-                skipped_unparsed += 1  # 像报告但解析失败：校准样本的下偏必须显性化
+                skipped_unparsed += 1
     return by_code, skipped_unparsed
 
 
 def pair_deltas(by_code: dict):
-    """同股相邻两版配对 → (质量分差列表, 估值分差列表, 配对数, 跨代隔离数)。
-    跨命名代配对隔离：旧代（valuation=None）quality 是单轨综合分，新代是纯质量分，
-    口径混杂会系统性抬高 P50/P80（热核审计实证），恰好一侧 None 即跳过。"""
+    """质量仅同版配对；估值跨质量版本仍配对；旧单轨不计算质量漂移。"""
     dq, dv, pairs, cross_gen = [], [], 0, 0
     for _code, rs in sorted(by_code.items()):
         rs = sorted((r for r in rs if r["quality"] is not None), key=lambda r: r["date"])
         for a, b in zip(rs, rs[1:]):
-            if (a["valuation"] is None) != (b["valuation"] is None):
+            va = a.get("quality_version") or ("legacy-single-track" if a["valuation"] is None else 1)
+            vb = b.get("quality_version") or ("legacy-single-track" if b["valuation"] is None else 1)
+            if va == "legacy-single-track" or vb == "legacy-single-track":
                 cross_gen += 1
+                continue
+            if str(va) != str(vb):
+                cross_gen += 1
+                if a["valuation"] is not None and b["valuation"] is not None:
+                    dv.append(abs(b["valuation"] - a["valuation"]))
                 continue
             pairs += 1
             dq.append(abs(b["quality"] - a["quality"]))

@@ -30,25 +30,36 @@ def test_pctile_fixed_inputs():
     assert xs == [0.5, 0.1, 0.4, 0.2, 0.3], "内部排序不得改动调用方入参"
 
 
-def _info(q, v, d):
-    """构造 parse_report_name 形态的 info 字典（pair_deltas 只消费这三个键）。"""
-    return {"quality": q, "valuation": v, "date": d}
+def _info(q, v, d, version=None):
+    info = {"quality": q, "valuation": v, "date": d}
+    if version is not None:
+        info["quality_version"] = version
+    return info
 
 
 def test_pair_deltas_pairs_and_cross_gen_skip():
-    """同股相邻两版配对入样（质量/估值差各一份）；新旧命名跨代相邻必须跳过并计数——
-    旧代 quality 是单轨综合分，口径混杂会系统性抬高 P50/P80（热核审计实证）。"""
+    """同版三轨报告才可配对；跨命名代及两份旧单轨报告均隔离。"""
     by_code = {
-        # 新-新相邻 1 对入样；新-旧相邻 1 对跨代隔离
         "600309": [_info(6.0, 7.0, "2026-06-01"), _info(6.3, 7.2, "2026-07-01"),
                    _info(6.5, None, "2026-08-01")],
-        "00700": [_info(6.9, None, "2026-07-15"), _info(7.0, None, "2026-08-15")],  # 旧代内 1 对
+        "00700": [_info(6.9, None, "2026-07-15"), _info(7.0, None, "2026-08-15")],
     }
     dq, dv, pairs, cross_gen = sd.pair_deltas(by_code)
-    assert pairs == 2, f"配对数: {pairs}"
-    assert cross_gen == 1, f"跨代隔离数: {cross_gen}"
-    assert sorted(dq) == [pytest.approx(0.1), pytest.approx(0.3)], f"质量分差样本: {dq}"
+    assert pairs == 1, f"配对数: {pairs}"
+    assert cross_gen == 2, f"跨代隔离数: {cross_gen}"
+    assert dq == [pytest.approx(0.3)], f"质量分差样本: {dq}"
     assert dv == [pytest.approx(0.2)], f"估值分差样本: {dv}"
+
+
+def test_pair_deltas_separates_quality_versions():
+    by_code = {"600309": [
+        _info(6.0, 7.0, "2026-06-01", 1), _info(6.8, 7.2, "2026-07-01", 2),
+        _info(7.0, 7.4, "2026-08-01", 2), _info(7.1, 7.5, "2026-09-01", 2),
+    ]}
+    dq, dv, pairs, cross_gen = sd.pair_deltas(by_code)
+    assert pairs == 2 and cross_gen == 1
+    assert dq == [pytest.approx(0.2), pytest.approx(0.1)]
+    assert dv == [pytest.approx(0.2), pytest.approx(0.2), pytest.approx(0.1)]
 
 
 def test_pair_deltas_skips_none_quality():
@@ -59,17 +70,19 @@ def test_pair_deltas_skips_none_quality():
 
 
 def test_scan_infos_parses_and_counts_unparsed():
-    """真实文件名走 parse_report_name 三代命名解析并按代码归一分组；
-    「像报告但解析失败」的必须显性计数（校准样本下偏不可静默），不像报告的不计数。"""
+    """文件名分组与报告内版本标记同时生效；旧单轨只识别、不配漂移。"""
     with tempfile.TemporaryDirectory() as d:
-        open(os.path.join(d, "万华化学-600309-6.74-7.4-2026-08-01.html"), "w").close()
+        with open(os.path.join(d, "万华化学-600309-6.74-7.4-2026-08-01.html"),
+                  "w", encoding="utf-8") as f:
+            f.write('<div class="hero-track quality" data-quality-version="2"><div class="s-value">6.74</div></div>')
         open(os.path.join(d, "中国神华_601088_6.72_2026-08-07.html"), "w").close()
-        open(os.path.join(d, "神秘600309报告.html"), "w").close()  # 像报告（含 6 位代码）但解析失败
-        open(os.path.join(d, "随手笔记.html"), "w").close()        # 不像报告，不计数
+        open(os.path.join(d, "神秘600309报告.html"), "w").close()
+        open(os.path.join(d, "随手笔记.html"), "w").close()
         by_code, skipped = sd.scan_infos(d)
     assert sorted(by_code) == ["600309", "601088"], f"分组: {sorted(by_code)}"
-    assert len(by_code["600309"]) == 1
-    assert by_code["601088"][0]["valuation"] is None  # 旧 _ 命名单轨近似
+    assert by_code["600309"][0]["quality_version"] == 2
+    assert by_code["601088"][0]["valuation"] is None
+    assert by_code["601088"][0]["quality_version"] == "legacy-single-track"
     assert skipped == 1, f"解析失败计数: {skipped}"
 
 
@@ -78,8 +91,10 @@ if __name__ == "__main__":
     print("OK _pctile 固定输入（空序列/乱序/q 边界/不改入参）")
     test_pair_deltas_pairs_and_cross_gen_skip()
     print("OK pair_deltas 配对入样 + 跨代隔离计数")
+    test_pair_deltas_separates_quality_versions()
+    print("OK pair_deltas 质量版本隔离")
     test_pair_deltas_skips_none_quality()
     print("OK pair_deltas 跳过 quality=None")
     test_scan_infos_parses_and_counts_unparsed()
     print("OK scan_infos 三代命名分组 + 解析失败显性计数")
-    print("全部 4 项测试通过")
+    print("全部 5 项测试通过")

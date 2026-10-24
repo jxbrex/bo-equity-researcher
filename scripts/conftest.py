@@ -176,6 +176,58 @@ def minimal_fill(**over):
     return fill
 
 
+def _v2_dim(key, name):
+    return (f'<div class="dim-block" data-dim="{key}"><div class="dim-header">'
+            f'<span class="dim-name">{name}</span><!--SCORE_BADGE--></div>'
+            f'<p>{_LONG_TEXT} 反方证据：2026年行业价格波动幅度超过20%。</p><!--SCORE_DETAIL--></div>')
+
+
+def v2_fill(**over):
+    fill = minimal_fill(date="2026-10-24", quality_version=2,
+                        stock_type="成长型", growth_tier="mid", industry_profile="generic")
+    fill.pop("scores")
+    f_names = ["profit_positive", "ocf_positive", "roa_improving", "cash_quality_ok",
+               "long_debt_down", "short_cover_improving", "no_dilution",
+               "gross_margin_improving", "asset_turnover_improving"]
+    specs = {
+        "1A": {"stage": "mature", "growth": 2, "demand_decline_2y": False,
+               "substitution_low": True, "structure_ok": True, "price_mechanism_ok": True,
+               "policy": "neutral"},
+        "1B": {"cost_quartile": 1, "price_transmission": True, "bargaining_status": "正常",
+               "customer_concentration": 0.1, "supplier_concentration": 0.1},
+        "1C": {"moats": [{"verified": True, "rhetoric": False, "type": "cost",
+                          "replication": "多年资本投入", "evidence": "同业成本差20%", "trend": "stable"},
+                         {"verified": True, "rhetoric": False, "type": "switching_cost",
+                          "replication": "替换供应商需两年验证", "evidence": "客户留存率95%", "trend": "stable"}],
+               "pressure": "警惕"},
+        "1D": {"f_items": {name: True for name in f_names},
+               "liquidity": {"debt_ratio": 0.2, "short_cover": 2.0},
+               "red_flags": {"receivables": False, "inventory": False, "gross_margin_anomaly": False}},
+        "1E": {"pledge_pct": 0, "reduction_pct": 0, "age": 60, "penalties": 0,
+               "dividend": {"payout_streak": 3}, "buyback": {"cancel": True}},
+        "1F": {"roic": 0.16, "wacc": 0.08, "roic_period_months": 12, "roic_basis": "latest",
+               "dupont_driver": "净利率"},
+        "3A": {"growth_lo": 21, "growth_hi": 25, "driver_status": "已验证"},
+        "3B": {"projects": [{"name": "核心项目", "stage": "已投产", "contribution": 1}]},
+        "3C": {"events": [{"name": "项目投产", "month": "2026-11", "revaluation": True},
+                          {"name": "新品获批", "month": "2026-12", "revaluation": True}]},
+    }
+    for spec in specs.values():
+        spec["counter_evidence"] = "2026年行业价格波动幅度超过20%，存在明确反方证据"
+    fill["score_inputs"] = specs
+    names = {"1A": "4.1 赛道与宏观", "1B": "4.2 产业链位置", "1C": "4.3 商业模式与护城河",
+             "1D": "4.4 财务健康", "1E": "4.5 治理与资本配置", "1F": "4.6 资本回报质量",
+             "3A": "5.1 利润增长", "3B": "5.2 项目确定性", "3C": "5.3 催化剂"}
+    fill["l1_html"] = "".join(_v2_dim(key, names[key]) for key in ("1A", "1B", "1C", "1D", "1E", "1F"))
+    fill["l3_html"] = "".join(_v2_dim(key, names[key]) for key in ("3A", "3B", "3C"))
+    fill["l4_html"] = fill["l4_html"].replace(
+        '<p>黄灯扣分：无——四类（a 交易与股东行为 / b 行业与政策环境 / '
+        'c 盈利与财务质量 / d 经营与公司治理）逐项核查无扣分。</p>',
+        '<!--RISK_REGISTER-->')
+    fill.update(over)
+    return fill
+
+
 def full_fill(**over):
     """全功能 fill（golden 快照专用，v4.10.2）：cycle/review/peers_plot/sensitivity/segments/
     chain/triggers/consensus/price_history/pe_history/prev 全开——罩住第 11/13 章与
@@ -367,6 +419,33 @@ def render_fill(fill, name="_fill_t.json"):
     with tempfile.TemporaryDirectory() as d:
         p = write_fill(fill, d, name)
         out = R.render(p, out_path=os.path.join(d, "out.html"))
+        return open(out, encoding="utf-8").read()
+
+
+def prepare_v2_quote(fill, d):
+    fields = {"1D": ("f_items", "liquidity", "red_flags", "cash_runway_months"),
+              "1F": ("roic", "wacc", "incremental_roic", "roic_period_months",
+                     "roic_basis", "cash_runway_months")}
+    score_inputs = fill.get("score_inputs") or {}
+    quality_inputs = {
+        "as_of": fill["date"], "status": "ok",
+        "profile": {"stock_type": fill.get("stock_type"),
+                    "industry_profile": fill.get("industry_profile", "generic"),
+                    "growth_tier": fill.get("growth_tier")},
+        "coverage": {}, "sources": [], "meta": {"latest_ann_date": fill["date"].replace("-", "")}}
+    for dim, keys in fields.items():
+        quality_inputs[dim] = {key: score_inputs.get(dim, {})[key] for key in keys if key in score_inputs.get(dim, {})}
+    ref = write_fill({"price": fill["price"], "pe_ttm": fill["pe_ttm"],
+                      "quality_inputs": quality_inputs}, d, name="_em_quote.json")
+    fill["quote"] = {"source_file": ref, "date": fill["date"]}
+    return fill
+
+
+def render_v2_fill(fill, name="_fill_t.json"):
+    with tempfile.TemporaryDirectory() as d:
+        fill = prepare_v2_quote(fill, d)
+        path = write_fill(fill, d, name)
+        out = R.render(path, out_path=os.path.join(d, "out.html"))
         return open(out, encoding="utf-8").read()
 
 

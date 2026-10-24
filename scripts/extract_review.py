@@ -13,7 +13,7 @@ extract_review.py — 从旧版深度分析 HTML 报告提取复盘锚点（回�
                                                 # --dir 指定扫描根目录（默认 "."，递归子目录）
 
 输出: 结构化 JSON（stdout）：
-- prev：上版锚点（date/quality/valuation/timing/target_range），可直接拷入新 fill JSON 的 prev 字段
+- prev：上版锚点（date/quality/valuation/timing/target_range/quality_version），可直接拷入新 fill JSON 的 prev 字段
 - scenarios：旧三情景假设（触发条件/净利/PE/目标价/较现价），供复盘四格表"当时预测"列引用
 - dash_tables：旧跟踪仪表盘全部表格（关键指标/触发条件/预测登记），供旧触发条件逐条核对
   （v4.9.1 起核对结果写 `triggers` 状态条，dash_html 不再手写旧触发条件核对表）
@@ -89,7 +89,7 @@ def extract(path: str) -> dict:
         out["date"] = m.group(1).strip()
 
     def _hero_score(cls):
-        m = re.search(r'hero-track %s">.*?s-value[^>]*>([\d.]+)<' % cls, html, re.S)
+        m = re.search(r'hero-track %s\b[^>]*>.*?s-value[^>]*>([\d.]+)<' % cls, html, re.S)
         return float(m.group(1)) if m else None
 
     quality, valuation = _hero_score("quality"), _hero_score("valuation")
@@ -108,7 +108,8 @@ def extract(path: str) -> dict:
         elif "股价" in lab:
             price = _num(val)
     out["prev"] = {"date": out.get("date"), "quality": quality, "valuation": valuation,
-                   "timing": timing, "target_range": target_range}
+                   "timing": timing, "target_range": target_range,
+                   "quality_version": detect_quality_version(html, path)}
     out["price"] = price
 
     secs = _sections(html)
@@ -212,10 +213,7 @@ class PrevFind(NamedTuple):
 
 
 def parse_report_name(path: str):
-    """报告文件名/路径 → {company, code, quality, valuation, date, is_review}；不匹配返回 None。
-    代码口径：6 位纯数字 = A股/北交所，5 位 = 港股（00700 前导零保留）。
-    旧命名（_ 分隔）只有单轨综合分：填入 quality 作近似、valuation 为 None、
-    is_review 恒 False——调用方要区分两代命名看 valuation is None 即可。"""
+    """解析三代报告文件名；旧命名的 quality 保留单轨综合分原值，不代表 v1 质量分。"""
     fn = os.path.basename(path)
     m = _NAME_DASH_RE.match(fn)
     if m:
@@ -228,6 +226,19 @@ def parse_report_name(path: str):
                 "quality": _score(m.group(3)), "valuation": None,
                 "date": m.group(4), "is_review": False}
     return None
+
+
+def detect_quality_version(html: str, path: str):
+    info = parse_report_name(path)
+    if info and info["valuation"] is None:
+        return "legacy-single-track"
+    marker = re.search(r'hero-track\s+quality[^>]*data-quality-version="(\d+)"', html or "")
+    if marker:
+        return int(marker.group(1))
+    if ("hero-track quality" in (html or "") and "hero-track valuation" not in html
+            and "hero-timing-mini" not in html):
+        return "legacy-single-track"
+    return 1
 
 
 def prune_scan_dirs(dirs: list) -> None:

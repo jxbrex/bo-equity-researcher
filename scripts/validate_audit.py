@@ -3,8 +3,8 @@
 """validate_audit.py — 照抄对账/落盘防伪校验域（v5.8.3 自 validate.py 按域拆分）。
 
 内容：quote 防伪链（price_date/quote_consistency/quote_present/consensus_np）、
-gap_plot 分布图与 street 落盘源、gap_history 态度变化、dupont 杜邦乘积链、
-period_track 第 3 章照抄对账、growth_consistency 增速换算对账，
+quality_inputs 双向照抄/profile/披露日对账、gap_plot 分布图与 street 落盘源、
+gap_history 态度变化、dupont 杜邦乘积链、period_track 第 3 章照抄对账、growth_consistency 增速换算对账，
 及 _strict_num/_req_strict/_tol_floor/_audit_pairs 等比对工具
 （_quote_ref 为跨域公共层，见 validate.py）。
 契约：raise = 硬拒渲染；warns.append = 软告警。
@@ -13,7 +13,9 @@ import json, re
 from scoring import (
     _num,
     _fmt,
-    _plain_text)
+    _plain_text,
+    _quality_context,
+    _quality_version)
 from charts_base import (
     _gap_dim_ok,
     _period_ratio,
@@ -506,6 +508,7 @@ def _check_growth_consistency(fill: dict, warns: list) -> None:
     """v5.1.2：growth_plot 增速与落盘一致预期/valuation 基础情景换算对账（条件不齐静默跳过）——
     基数=fin_trend「归母净利」柱末年值（标准 4 面板之一）；落盘 np_avg÷基数−1 vs
     fcst.np_consensus（>2pct 告警）；base.profit÷基数−1 应落在 [np_lo−2, np_hi+2]（越界告警）。
+    合并年份区间（如 2026-27E）的 np_consensus 是累计增速，不套用上一年度的单年换算公式。
     基数 ≤0（亏损期）换算无意义，跳过。"""
     ft = fill.get("fin_trend") or {}
     gp = fill.get("growth_plot") or {}
@@ -536,7 +539,8 @@ def _check_growth_consistency(fill: dict, warns: list) -> None:
         if not ym or int(ym.group(0)) != last_year + 1:
             continue
         cnp_yr = _num(cnp.get("year"))
-        if np_avg and cnp_yr and int(cnp_yr) == last_year + 1:
+        cumulative_year = re.search(r"20\d{2}\s*[-–—/]\s*(?:20)?\d{2}E\b", str(f.get("y") or ""))
+        if not cumulative_year and np_avg and cnp_yr and int(cnp_yr) == last_year + 1:
             g_cons = (np_avg / base_np - 1) * 100
             npc = _num(f.get("np_consensus"))
             if npc is not None and abs(npc - g_cons) > 2:
@@ -793,3 +797,65 @@ def _check_period_track(fill: dict, warns: list) -> None:
         if summary_len > 100:
             warns.append(f"period_track.summary_html 纯文本 {summary_len} 字 > 100：进度小结定位 ≤2 句，"
                          f"展开论证归 4.4/5.1/9 章")
+
+
+def _check_quality_inputs(fill: dict, warns: list) -> None:
+    if _quality_version(fill) != 2:
+        return
+    ref = _quote_ref(fill) or {}
+    package = ref.get("quality_inputs")
+    if not isinstance(package, dict):
+        warns.append("v2 quote 落盘缺 quality_inputs：请用 em_fetch --quality-v2 与三个 profile 参数重取，"
+                     "机械输入目前无法照抄对账")
+        return
+    report_date = str(fill.get("date") or "").replace("-", "")
+
+    def _day(value):
+        digits = re.sub(r"\D", "", str(value or ""))
+        return digits[:8] if len(digits) >= 8 else None
+
+    as_of = _day(package.get("as_of"))
+    if as_of is None:
+        warns.append("quality_inputs.as_of 缺失或非法：无法证明取数截止日期")
+    elif as_of > report_date:
+        raise ValueError(f"quality_inputs.as_of={as_of} 在报告日之后（{report_date}），拒渲染")
+    elif as_of < report_date:
+        warns.append(f"quality_inputs.as_of={as_of} 早于报告日 {report_date}：请核对是否使用了陈旧输入")
+    latest_ann = _day((package.get("meta") or {}).get("latest_ann_date"))
+    if latest_ann and latest_ann > report_date:
+        raise ValueError(f"quality_inputs 最新披露日 {latest_ann} 在报告日之后（{report_date}），拒渲染")
+    for source in package.get("sources") or []:
+        source_date = _day((source or {}).get("as_of"))
+        if source_date and source_date > report_date:
+            raise ValueError(f"quality_inputs 来源日期 {source_date} 在报告日之后（{report_date}），拒渲染")
+    profile = package.get("profile")
+    if not isinstance(profile, dict) or package.get("status") == "profile_missing":
+        raise ValueError("quality_inputs profile_missing：必须显式提供 stock_type/growth_tier/industry_profile")
+    actual = _quality_context(fill)
+    for key in ("stock_type", "industry_profile", "growth_tier"):
+        if (profile.get(key) or None) != (actual.get(key) or None):
+            raise ValueError(f"fill 与落盘 quality_inputs.profile.{key} 不一致："
+                             f"{actual.get(key)!r} vs {profile.get(key)!r}")
+    score_inputs = fill.get("score_inputs") or {}
+    fields = {"1D": ("f_items", "liquidity", "red_flags", "cash_runway_months"),
+              "1F": ("roic", "wacc", "incremental_roic", "roic_period_months",
+                     "roic_basis", "cash_runway_months")}
+
+    def _compare(path, fill_value, ref_value):
+        if fill_value is None and ref_value is not None:
+            warns.append(f"quality_inputs.{path} 漏抄（落盘 {ref_value!r}）")
+        elif fill_value is not None and ref_value is None:
+            warns.append(f"quality_inputs.{path} 落盘缺失/未取到，但 fill 已有 {fill_value!r}："
+                         "请补替代来源与证据，不得冒充机械照抄")
+        elif fill_value is not None and fill_value != ref_value:
+            warns.append(f"quality_inputs.{path} 与落盘不一致：fill={fill_value!r} vs 落盘={ref_value!r}")
+
+    for dim, keys in fields.items():
+        for key in keys:
+            fv = (score_inputs.get(dim) or {}).get(key)
+            rv = (package.get(dim) or {}).get(key)
+            if isinstance(fv, dict) or isinstance(rv, dict):
+                for child in sorted(set((fv or {}).keys()) | set((rv or {}).keys())):
+                    _compare(f"{dim}.{key}.{child}", (fv or {}).get(child), (rv or {}).get(child))
+            else:
+                _compare(f"{dim}.{key}", fv, rv)

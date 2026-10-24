@@ -28,8 +28,11 @@ tushare 不可用时自动回落东财野生端点（curl 传输，防 TLS 指�
     python em_fetch.py 600989 --kline-years=5    # 月K线回溯年数（默认5）
     python em_fetch.py 600989 --search="收购,减持,新华三"  # E7 定性站内搜索（可多关键词，逗号分隔）
     python em_fetch.py 600989 --out=_em_600989_quote.json  # E1 源头数字落盘（fill.quote 防伪引用）
+    python em_fetch.py 600989 --quality-v2 --stock-type=成长型 --growth-tier=mid --industry-profile=generic --out=_em_600989_quote.json
+                                                       # 追加九维机械输入摘要与 quality_inputs 落盘
 
 输出: 紧凑 Markdown 摘要到 stdout（实测约 3.5KB/股），原始 JSON 不落盘不进上下文。
+       --quality-v2 时追加完整 quality_inputs JSON；缺 profile 返回 profile_missing，不套通用 F。
 覆盖: E1 行情估值 / E2 月线 / E3 F10 主要指标 / E4 股东户数 / E5 一致预期 / E6 主营构成
       / 盈利质量红旗四项 / 审计意见（tushare fina_audit，独立行，供 L4 红灯 a 项判定）
       / 有息负债（tushare balancesheet）
@@ -41,6 +44,7 @@ import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 
+from quality_inputs import fetch_quality_inputs
 import em_core as _C
 # 兼容性 re-export：只保留内部函数体裸用名（yi/pct/yoy_text/secid_of/RateLimitError/
 # _TS_DEBUG/_STATS）；其余解析一律走 _C.<name>（迟绑定）。v5.8.3 收敛：to_ts_code/ts_call/
@@ -756,6 +760,9 @@ def main():
     for a in sys.argv[1:]:
         if not a.startswith("--"):
             continue
+        if a == "--quality-v2":
+            opts["quality-v2"] = True
+            continue
         if "=" not in a:
             # --peers 这类不带 = 的参数原样会被静默忽略，改为明确报错+用法提示
             print(f"错误：参数 {a} 需要「=值」形式（如 --peers=600309,002001）\n\n用法:{__doc__}",
@@ -781,12 +788,23 @@ def main():
     searches = None
     if opts.get("search"):
         searches = [s.strip() for s in opts["search"].split(",") if s.strip()]
-    print(summarize(args[0], years, searches))
+    summary = summarize(args[0], years, searches)
+    captured_e1 = bool(_CAPTURE)
+    if opts.get("quality-v2"):
+        _secid, secucode, _is_hk = secid_of(args[0])
+        profile = {key: opts.get(key.replace("_", "-"))
+                   for key in ("stock_type", "growth_tier", "industry_profile")}
+        quality_inputs = fetch_quality_inputs(secucode.split(".")[0], secucode,
+                                              date.today().isoformat(), profile)
+        _CAPTURE["quality_inputs"] = quality_inputs
+        summary += ("\n\n## 九维质量输入（quality_inputs，照抄以下 JSON）\n"
+                    + json.dumps(quality_inputs, ensure_ascii=False, indent=2, sort_keys=True))
+    print(summary)
     if opts.get("out"):
         # E1 落盘：现价/PE/分位带/报告期进度(period_track)/当年一致预期净利(consensus_np)等
         # 源头数字写 JSON，fill 的 quote.source_file 引用它，
         # render 时比对 price/pe_ttm 防手填造假（神华 601088 事故修复，偏差>1% 拒渲染）
-        if not _CAPTURE:
+        if not captured_e1:
             print("警告：--out 已指定但 E1 捕获为空（E1 取数失败？），未落盘", file=sys.stderr)
         else:
             # v5.1.0：东财降级源的 consensus_eps 存根换算为 consensus_np

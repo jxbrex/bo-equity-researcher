@@ -35,7 +35,7 @@
 
 金融股资产负债结构与一般工商业不同，Beneish M-Score 不适用。财报可信度评级（A/B/C/D）
 改按以下替代项人工判断，评级接入规则与 `forensic-accounting.md` 第 7 节一致
-（C → 黄灯 d 类至少扣 0.5；D → 红灯回避）：
+（C → 核心结论警示并登记风险事实与跟踪指标，不固定扣 0.5；D → 红灯回避）：
 
 | 子类 | 替代核查项 |
 |------|-----------|
@@ -46,6 +46,23 @@
 审计意见仍是三类共用的必查红灯项（供红灯 a 项判定，不再列于 1D 红旗清单）。
 
 ---
+
+## 评分 v2 接入（金融子类共用规则，逐项与 `quality_rules.py` 对账）
+
+- **1B 两轴**：银行看负债成本与中收定价，保险看负债成本与渠道，分别填
+  `cost_strength/pricing_strength`（strong/neutral/weak）。两强=A、一强=B、均不强=C；
+  集中度>50%且议价权实质丧失=D，集中度未知最高 7.9。券商虽复用同一结构，尚缺整案验收，
+  不得宣称已验证。
+- **1D 专项清单**：银行 `npl_trend/provision_trend/loan_migration/cet1`；保险
+  `solvency/combined_ratio/reserve/investment_assumption`；券商 `proprietary_exposure/net_capital/
+  credit_impairment/leverage`。全部通过=A、仅 1 项未通过=B、2 项未通过=C、其余=D；
+  只有有明确依据的 `not_applicable` 可豁免单项，并须在 `industry_check_evidence` 逐项填写
+  理由与来源；缺依据按 missing，全部不适用仍 missing，空值不得冒充豁免。
+- **1F 正常化资本回报**：银行用 ROTCE 或正常化 ROE，保险用正常化 ROE，均对 COE，
+  不套工商业 ROIC/WACC。覆盖倍数 ≥1.5=A、≥1=B 基础 6、<1=D 且最高 4；
+  `return_metric`、正常化回报与 COE 必须明确，不得拿单季市场贝塔高景气值代替。
+- **1B 与 1D/1F 不重复**：负债成本归 1B 产业链定价，资产质量与资本缓冲归 1D，
+  正常化资本回报归 1F；同一指标不跨维加扣分。
 
 ## 一、银行
 

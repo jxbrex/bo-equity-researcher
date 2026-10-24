@@ -161,6 +161,9 @@ def _compose_annual_row(r: dict, ind: dict, cf: dict, em: dict) -> dict:
         inv_days = em.get("CHZZTS")
     return {
         "REPORT_DATE_NAME": f"{r['end_date'][:4]}年报",
+        "END_DATE": r.get("end_date"),
+        "ANN_DATE": r.get("ann_date"),
+        "ROIC": ind.get("roic") if ind.get("roic") is not None else em.get("ROIC"),
         "TOTALOPERATEREVE": r.get("total_revenue"),
         "PARENTNETPROFIT": r.get("n_income_attr_p"),
         "PARENTNETPROFITTZ": None,  # 同比在外层回填（需相邻期）

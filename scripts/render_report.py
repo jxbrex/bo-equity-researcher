@@ -33,13 +33,14 @@ for _stream in (sys.stdout, sys.stderr):
 # 本模块实际使用的符号直接从真身模块导入（删除 charts.py 兼容壳后不再经壳中转）。
 # 依赖方向单向：scoring（共享基座）← charts_base / 各图族模块 / validate ← 本模块，无循环。
 from scoring import (
-    REQUIRED_SCALAR, valuation_badge_class,
-    _esc, _cn_placeholders, compute_scores,
+    REQUIRED_SCALAR, DIMS, valuation_badge_class, badge_class,
+    _esc, _cn_placeholders, compute_scores, _quality_version,
     build_score_summary, build_valuation_process_card, build_position_card,
     _quality_verdict, _valuation_verdict,
     compute_valuation, compute_valuation_score, build_dcf_cards, build_regime_note,
     _edge_info, build_edge_upgrade_rows, _matrix_applies,
 )
+from quality_rules import F_ITEM_IDS
 from charts_base import _fmt_px, _prev_track_rows, _SOURCE_BANNED_RE
 from charts_scenario import (
     build_scenario_spectrum, build_scenario_block, build_peers_plot,
@@ -61,7 +62,7 @@ from validate import validate_content
 
 # 渲染器版本：嵌入输出 HTML 尾部注释，事后可 grep 验证报告确由本脚本渲染
 # （防"render 报错后手写全文 HTML 绕行"，巨石 2026-08-23 实证）
-RENDERER_VERSION = "v5.9.0"
+RENDERER_VERSION = "v5.10.0"
 
 # Windows 文件名非法字符：\ / : * ? " < > | 及 ASCII 控制字符（\x00-\x1f）
 _WIN_ILLEGAL = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
@@ -152,16 +153,17 @@ def build_toc(has_period: bool, has_cycle: bool, has_review: bool) -> str:
     return f'<nav class="toc-side">{links}</nav>'
 
 
-def build_prev_strip(prev: dict, quality: float, valuation: float, timing, target_range: str) -> str:
-    """回测模式的 Hero 对比条：基于上版日期 + 质量分/估值分/时机分/目标价 旧→新。
-    分数差值脚本计算，模型只在 prev 里给上版锚点数据。prev 为空 → 返回空串（非回测模式）。
-    旧版 prev 键 research 自动映射到 quality（兼容旧回测数据）。
-    v4.10.2 自 validate.py 归位（Hero 片段构建，与 build_toc 同区）。"""
+def build_prev_strip(prev: dict, quality: float, valuation: float, timing, target_range: str,
+                     quality_version=1) -> str:
+    """回测对比条；跨质量版本只并列新旧值，不把算法变化写成公司改善。"""
     if not prev:
         return ""
     items = []
-    for r in _prev_track_rows(prev, quality, valuation, timing):
-        # v4.9：分数差是评价语义（升=好），用 good/bad 而非 up/down（后者 v4.9 起为股价方向色）
+    for r in _prev_track_rows(prev, quality, valuation, timing, quality_version):
+        if not r["comparable"]:
+            items.append(f'{r["label"]} {r["old"]:.2f}→{r["new"]:.2f} '
+                         '<span class="muted">(口径不同)</span>')
+            continue
         cls = "good" if r["d"] >= 0 else "bad"
         items.append(f'{r["label"]} {r["old"]:.2f}→{r["new"]:.2f} <span class="{cls}">({r["d"]:+.2f})</span>')
     if prev.get("target_range"):
@@ -292,6 +294,121 @@ def _build_context(fill: dict, calc: dict):
     return date, subtitle, target_range
 
 
+def _risk_rule_is_active(sc, home, rule_id):
+    if home != "1D":
+        return True
+    f_names = {value: key for key, value in F_ITEM_IDS.items()}
+    if rule_id in f_names:
+        return sc["score_inputs"]["1D"].get("f_items", {}).get(f_names[rule_id]) is False
+    if rule_id.startswith("1D.RED."):
+        return any(step["id"] == rule_id and ((step.get("delta") or 0) < 0
+                   or rule_id.endswith(".IMMATERIAL"))
+                   for step in sc["dimension_results"]["1D"]["rule_steps"])
+    checks = sc["score_inputs"]["1D"].get("industry_checks") or {}
+    flag = rule_id.rsplit(".", 1)[-1].lower()
+    if flag in checks:
+        return checks[flag] is True
+    return True
+
+
+def build_risk_register(fill: dict) -> str:
+    sc = compute_scores(fill)
+    if sc.get("quality_version") != 2:
+        return ""
+    items = fill.get("risk_items") or []
+    if not isinstance(items, list):
+        raise ValueError("risk_items 必须是数组")
+    home_names = {key: name for key, _layer, name, _weight in DIMS}
+    home_names.update(valuation="8 估值与安全边际", timing="12 仓位与时机", dashboard="14 跟踪仪表盘")
+    impact_names = {"quality": "质量", "valuation": "估值", "timing": "时机", "monitor": "仅跟踪"}
+    status_names = {"hit": "命中", "watch": "观察", "unknown": "未核实"}
+    active_ids, hits, rows = set(), [], []
+    for index, item in enumerate(items, 1):
+        prefix = f"risk_items[{index}]"
+        if not isinstance(item, dict):
+            raise ValueError(f"{prefix} 必须是对象")
+        for field in ("name", "status", "evidence", "impact", "home", "trigger", "source"):
+            if not isinstance(item.get(field), str) or not item[field].strip():
+                raise ValueError(f"{prefix}.{field} 必填且必须是非空字符串")
+        status, impact, home = (item[field].strip() for field in ("status", "impact", "home"))
+        for field, value, allowed in (("status", status, status_names),
+                                      ("impact", impact, impact_names), ("home", home, home_names)):
+            if value not in allowed:
+                raise ValueError(f"{prefix}.{field} 非法值 {value!r}，可选 {sorted(allowed)}")
+        raw_rule_id = item.get("rule_id")
+        if raw_rule_id is not None and not isinstance(raw_rule_id, str):
+            raise ValueError(f"{prefix}.rule_id 必须是字符串或 null")
+        rule_id = (raw_rule_id or "").strip()
+        if impact == "quality" and status == "hit":
+            if not rule_id:
+                raise ValueError(f"{prefix} 质量类命中必须填写 rule_id")
+            registered_home = sc["rule_registry"].get(rule_id)
+            if registered_home is None:
+                raise ValueError(f"{prefix}.rule_id {rule_id} 不在 RULE_REGISTRY 或实际得分链中")
+            if registered_home != home:
+                raise ValueError(f"{prefix}.home={home} 与 RULE_REGISTRY 归属 {registered_home} 不一致")
+            step_ids = {step["id"] for step in sc["dimension_results"][home]["rule_steps"]}
+            if rule_id not in step_ids:
+                raise ValueError(f"{prefix}.rule_id {rule_id} 未出现在 {home} 实际得分链中")
+            if not _risk_rule_is_active(sc, home, rule_id):
+                raise ValueError(f"{prefix}.rule_id {rule_id} 未实际命中 {home} 的负面事实")
+        if status == "hit":
+            hits.append(item)
+            if rule_id:
+                if rule_id in active_ids:
+                    raise ValueError(f"{prefix}.rule_id {rule_id} 不得重复登记")
+                active_ids.add(rule_id)
+        reference = home_names[home] + (f" / {rule_id}" if impact == "quality" and status == "hit" else "")
+        rows.append(
+            f'<tr><td>{_esc(item["name"].strip())}</td>'
+            f'<td>{_esc(item["evidence"].strip())}<br><span class="source">来源：{_esc(item["source"].strip())}</span></td>'
+            f'<td>{impact_names[impact]}｜{status_names[status]}</td>'
+            f'<td>{_esc(reference)}</td><td>{_esc(item["trigger"].strip())}</td></tr>')
+    red_review = str(fill.get("red_review") or "").strip()
+    if len(hits) >= 4 and len({item["home"].strip() for item in hits}) >= 3 and not red_review:
+        raise ValueError("风险命中 ≥4 项且覆盖 ≥3 个位置时必须填写 red_review；复核不自动升级红灯")
+    if not rows:
+        rows.append('<tr><td colspan="5">本期未登记风险；这不代表风险已经排除。</td></tr>')
+    html = ('<div class="risk-register"><p>质量类命中已在对应维度反映，此处不重复扣分；'
+            '多项命中只触发红灯复核，不自动升级红灯。</p>'
+            '<div class="table-scroll"><table><thead><tr><th>风险事实</th><th>证据与当前值</th>'
+            '<th>影响去向</th><th>对应位置</th><th>跟踪指标</th></tr></thead>'
+            f'<tbody>{"".join(rows)}</tbody></table></div></div>')
+    if red_review:
+        html += f'<div class="warning-card"><strong>红灯复核：</strong>{_esc(red_review)}</div>'
+    return html
+
+
+def _inject_dimension_scores(frag: str, dimension_results: dict) -> str:
+    for key, result in dimension_results.items():
+        marker = f'data-dim="{key}"'
+        if marker not in frag:
+            continue
+        start = frag.index(marker)
+        end = frag.find("data-dim=", start + len(marker))
+        if end < 0:
+            end = len(frag)
+        block = frag[start:end]
+        if "<!--SCORE_BADGE-->" not in block or "<!--SCORE_DETAIL-->" not in block:
+            raise ValueError(f"v2 维度 {key} 缺少 SCORE_BADGE 或 SCORE_DETAIL 占位符")
+        score = result["final"]
+        badge = f'<span class="badge {badge_class(score)}">{score:.2f}</span>'
+        items = []
+        for step in result.get("rule_steps", []):
+            delta = step.get("delta")
+            delta_text = f"{float(delta):+g}" if delta is not None else "0"
+            items.append(f'<li><code>{_esc(str(step.get("id")))}</code>：'
+                         f'{_esc(str(step.get("evidence", "")))}（{delta_text}）</li>')
+        cap = result.get("cap")
+        cap_text = f'，上限 {cap:g}' if cap is not None else ""
+        detail = (f'<details class="score-detail"><summary>得分链：基础 {result.get("base"):g}'
+                  f'{cap_text}，最终 {score:.2f}</summary><ul>{"".join(items)}</ul></details>')
+        block = block.replace("<!--SCORE_BADGE-->", badge)
+        block = block.replace("<!--SCORE_DETAIL-->", detail)
+        frag = frag[:start] + block + frag[end:]
+    return frag
+
+
 # v5.8.2：_build_repl_map 的 15 个散装形参收拢为 RenderContext（render 组装一次传入）——
 # 形参每加一项要同步改两处签名，上下文对象随 render 流水线天然同生共灭
 RenderContext = namedtuple("RenderContext", [
@@ -338,6 +455,16 @@ def _build_repl_map(ctx: "RenderContext") -> dict:
         # 徽章与 14 章升档行同生共灭
         edge_crit, _q_eff, _v_eff = _edge_info(quality, valuation,
                                                valuation_calc.get("floor_uplift"))
+    l1_html = _inject_l1_charts(fill.get("l1_html", ""), fill)
+    l3_html = _inject_l3_charts(fill.get("l3_html", ""), fill)
+    l4_html = fill.get("l4_html", "")
+    if sc.get("quality_version") == 2:
+        l4_html = l4_html.replace("<!--RISK_REGISTER-->", build_risk_register(fill))
+        l1_html = _inject_dimension_scores(l1_html, sc["dimension_results"])
+        l3_html = _inject_dimension_scores(l3_html, sc["dimension_results"])
+        missing = [key for key in sc["dimension_results"] if f'data-dim="{key}"' not in l1_html + l3_html]
+        if missing:
+            raise ValueError(f"v2 缺少维度锚点 data-dim: {missing}")
     repl = {
         "DATE": _esc(date),
         "COMPANY": _esc(fill["company"]),
@@ -373,9 +500,14 @@ def _build_repl_map(ctx: "RenderContext") -> dict:
         "PERIOD_NOTE_HTML": f'<span class="source">{period_note}</span>' if period_note else "",
         # v4.8：4.1 业务构成图 / 4.2 产业链图由锚点 <!--SEGMENTS--> / <!--CHAIN--> 注入 l1_html
         # v4.9：4.4 财务趋势图墙 <!--FIN_TREND--> 同注入；5.1 利润增长图 <!--GROWTH--> 注入 l3_html
-        "L1_HTML": _inject_l1_charts(fill.get("l1_html", ""), fill),
-        "L3_HTML": _inject_l3_charts(fill.get("l3_html", ""), fill),
-        "L4_HTML": fill.get("l4_html", ""),
+        "L1_HTML": l1_html,
+        "L3_HTML": l3_html,
+        "L4_HTML": l4_html,
+        "RISK_TITLE": ("风险评估（统一风险登记）— 红灯独立熔断" if sc.get("quality_version") == 2
+                       else "风险评估（红/黄灯）— 质量轨门禁"),
+        "RISK_BADGE": ('<span class="badge badge-blue">风险列示，不重复扣分</span>'
+                       if sc.get("quality_version") == 2
+                       else f'<span class="badge badge-red">扣 {yellow_total:.1f} 分</span>'),
         "VALUATION_METHOD": _esc(fill.get("valuation_method", "")),
         # v5.3.0 判据 v2：7 卡片头强制标注判据版本（脚本拼接，模型无法漏写）
         "STOCK_TYPE": _esc(fill.get("stock_type", "")) + "（判据 v2）",
@@ -412,7 +544,8 @@ def _build_repl_map(ctx: "RenderContext") -> dict:
         # 12 章股东户数趋势（holders，裸占位符空串替换）
         "PRICE_HIST_HTML": build_price_history(fill),
         "HOLDERS_PLOT_HTML": build_holders_plot(fill),
-        "REVIEW_PLOT_HTML": build_review_dumbbell(prev, quality, valuation, timing),
+        "REVIEW_PLOT_HTML": build_review_dumbbell(prev, quality, valuation, timing,
+                                                  quality_version=sc.get("quality_version", 1)),
         # v5.1.0 锚纪律三：锚移动台账（回测模式 prev.scenarios 存在时生成；空串裸替换）
         "ANCHOR_LEDGER_HTML": build_anchor_ledger(fill, calc),
         # v4.11.3：DCF 双卡（dcf 字段，垫在估值分计算过程卡前；空串替换）
@@ -423,18 +556,22 @@ def _build_repl_map(ctx: "RenderContext") -> dict:
                                                                fill.get("valuation_inputs") or {})
                                   + build_regime_note(fill),
         "POSITION_CARD_HTML": build_position_card(quality, valuation, timing, calc, red_flag,
-                                                  floor_uplift=valuation_calc.get("floor_uplift")),
+                                                  floor_uplift=valuation_calc.get("floor_uplift"),
+                                                  critical=sc.get("critical_weaknesses")),
 
         # 回测模式（prev 存在时生效，否则条件块自动删除）
-        "PREV_HTML": build_prev_strip(prev, quality, valuation, timing, target_range),
+        "PREV_HTML": build_prev_strip(prev, quality, valuation, timing, target_range,
+                                      quality_version=sc.get("quality_version", 1)),
         "PREV_DATE": _esc(str((prev or {}).get("date", "—"))),
         "REVIEW_HTML": review_html,
         "GEN_TIME": _esc(fill.get("gen_time", date)),
         "CALIB_NOTE": _esc(fill.get("calib_note", "")),
-        # 质量分（扣黄灯 → 最终质量分）
+        # v1 保留黄灯扣分；v2 的质量分只由九维加权，此处仅兼容旧模板徽章
         "YELLOW_TOTAL": f"{yellow_total:.1f}",
         "QUALITY_SCORE": f"{quality:.2f}",
         "QUALITY_WORD": _quality_verdict(quality),
+        "QUALITY_VERSION": str(sc.get("quality_version", 1)),
+        "SHOW_QUALITY_V": sc.get("quality_version") == 2,
         # 估值分（独立价格轨；徽章四档：≥8 绿 / 6-7.9 蓝 / 4-5.9 橙 / <4 红）
         "VALUATION_SCORE": f"{valuation:.1f}",
         "VALUATION_WORD": _valuation_verdict(valuation),
@@ -591,7 +728,7 @@ def _write_html(html: str, out_path: str) -> None:
 
 def _archive_artifacts(fill: dict, fill_path: str, out_path: str, date: str,
                        quality: float, valuation: float, timing, target_range: str,
-                       red_flag: str, backtest: bool) -> None:
+                       red_flag: str, backtest: bool, sc: dict = None) -> None:
     """渲染成功后的归档（v4.10 B-min 归档库）：fill 与 E1 防伪落盘移入报告目录 `_archive/`，
     并往 `_archive/_index.jsonl` 追加一行索引（跨报告对比/评分校准的数据源）。
     只动 `_fill_`/`_em_` 前缀的会话临时文件（测试 fixture 与存量文件不误移）；
@@ -623,6 +760,10 @@ def _archive_artifacts(fill: dict, fill_path: str, out_path: str, date: str,
             "timing": timing, "price": fill.get("price"), "currency": fill.get("currency") or "元",
             "target_range": target_range, "red_flag": red_flag or "", "backtest": backtest,
             "renderer": RENDERER_VERSION,
+            "quality_version": (sc or {}).get("quality_version", 1),
+            "scores": (sc or {}).get("adj_scores", {}),
+            "weights": (sc or {}).get("weights", {}),
+            "layer_share": (sc or {}).get("layer_share", {}),
         }
         idx_path = os.path.join(arch_dir, "_index.jsonl")
         # v5.8.2：追加改「读旧 + 拼新 + PID-tmp + os.replace」原子写（照抄 em_cache.dc_write
@@ -661,7 +802,10 @@ def _post_render_checks(repl: dict, fill: dict, out_path: str, quality: float, p
               f"请补充字段后重新渲染（格式见 fill-schema.md 顶层字段表）", file=sys.stderr)
     print(f"OK → {out_path}")
     timing_s = f"{timing:.2f}" if timing is not None else "—"
-    print(f"质量分 {quality:.2f}（不考虑风险 {pre_risk:.2f} − 黄灯 {yellow_total:.1f}）| "
+    quality_text = (f"质量分 {quality:.2f}（九维加权，无独立风险扣分）"
+                    if _quality_version(fill) == 2
+                    else f"质量分 {quality:.2f}（不考虑风险 {pre_risk:.2f} − 黄灯 {yellow_total:.1f}）")
+    print(f"{quality_text} | "
           f"估值分 {valuation:.1f} | 时机分 {timing_s} | " +
           " ".join(f"{l} {layer_scores[l]:.2f}" for l in ["L1", "L3"]) +
           (f" | 🔴红灯: {red_flag}" if red_flag else ""))
@@ -672,15 +816,27 @@ def _post_render_checks(repl: dict, fill: dict, out_path: str, quality: float, p
 def _preflight(fill_path: str):
     """--check 与 render 共用的预检单流水线（v4.10.2 合并双流水线，消除手工同步漂移：
     check 曾漏 company/code 必填校验、校验顺序与 render 不同、估值错误消息第三份拷贝）。
-    解析 → 必填标量 → L4 顺序告警 → 估值计算 → 内容校验 → 评分计算 → 估值分可计算检查。
+    解析 → 必填标量 → L4 顺序告警 → 估值计算 → v2 评分、内容校验与风险登记 /
+    v1 先内容校验后评分 → 估值分可计算检查。
     通过返回 (fill, calc, sc, valuation, valuation_calc)；任何一步不过抛 ValueError。"""
     fill = _load_fill(fill_path)
     _check_required_scalars(fill)
     _check_l4_order(fill.get("l4_html", ""))
     # 估值计算（valuation 字段存在时，目标价/中枢/赔率/离散度全部脚本算）
     calc = compute_valuation(fill)
-    validate_content(fill, calc)
-    sc = compute_scores(fill)
+    if _quality_version(fill) == 2:
+        sc = compute_scores(fill)
+        validate_content(fill, calc, sc)
+        build_risk_register(fill)
+        dimension_html = fill.get("l1_html", "") + fill.get("l3_html", "")
+        missing = [key for key in sc["dimension_results"] if f'data-dim="{key}"' not in dimension_html]
+        if missing:
+            raise ValueError(f"v2 缺少维度锚点 data-dim: {missing}")
+        _inject_dimension_scores(fill.get("l1_html", ""), sc["dimension_results"])
+        _inject_dimension_scores(fill.get("l3_html", ""), sc["dimension_results"])
+    else:
+        validate_content(fill, calc)
+        sc = compute_scores(fill)
     valuation, valuation_calc = _apply_valuation_score(fill, calc, sc["valuation"])
     return fill, calc, sc, valuation, valuation_calc
 
@@ -723,7 +879,7 @@ def render(fill_path: str, out_path: str = None) -> str:
     _post_render_checks(repl, fill, out_path, quality, pre_risk, yellow_total,
                         valuation, timing, red_flag, layer_scores)
     _archive_artifacts(fill, fill_path, out_path, date, quality, valuation, timing,
-                       target_range, red_flag, backtest=bool(prev))
+                       target_range, red_flag, backtest=bool(prev), sc=sc)
     return out_path
 
 

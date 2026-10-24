@@ -14,7 +14,8 @@ from scoring import (
     _num,
     _plain_text,
     _LABEL_REFUSE,
-    _cn_placeholders)
+    _cn_placeholders,
+    _quality_version)
 from charts_base import (
     _C_BLUE,
     _sensitivity_items,
@@ -28,7 +29,7 @@ from validate import (
 
 # v4.11.1（审核 D8）：dim-block 切块正则容忍附加类（class="dim-block extra"），
 # 三处消费方（内容地板/维度块校验/治理条）收敛同一 helper，口径唯一
-_DIM_BLOCK_RE = r'<div class="dim-block(?:\s[^"]*)?">'
+_DIM_BLOCK_RE = r'<div class="dim-block(?=[\s"])\s*[^>]*>'
 
 
 # v5.5.0 B5：dim-block 正文体 = 剥「标题行（含编号与分值徽章）」+「评分末拍」，同样容忍附加类/属性
@@ -378,7 +379,19 @@ def _check_timing_table_cells(fill: dict, warns: list) -> None:
                              f"{label} {rv:g}（v5.1.2）")
 
 
-def _check_dim_blocks(fill: dict, warns: list) -> None:
+def _check_v2_counter_evidence(fill: dict, sc: dict = None) -> None:
+    if not sc or sc.get("quality_version") != 2:
+        return
+    for key, result in (sc.get("dimension_results") or {}).items():
+        score = result.get("final")
+        if score is None or not (score >= 8 or score <= 3):
+            continue
+        evidence = (sc.get("score_inputs", {}).get(key) or {}).get("counter_evidence")
+        if not evidence or len(str(evidence).strip()) < 4:
+            raise ValueError(f"{key} 得分 {score:g} 属于极端分，必须提供可观察反方证据")
+
+
+def _check_dim_blocks(fill: dict, warns: list, sc: dict = None) -> None:
     """dim-block 内容地板（纯文本 <40 字拒渲染 / <80 字告警）与极端分证据校验。"""
     # dim-block 内容地板（deepseek 中兴/豪威"每块一句话凑数"缩水实证）：
     # 纯文本 <40 字 → 拒渲染（连一条论据都写不出）；<80 字 → 告警。
@@ -408,7 +421,10 @@ def _check_dim_blocks(fill: dict, warns: list) -> None:
                 thin_warn.append(f"{name} 仅 {blen} 字")
             if key is None:
                 continue
-            sv = (fill.get("scores") or {}).get(key)
+            if sc and sc.get("quality_version") == 2:
+                sv = (sc.get("dimension_results") or {}).get(key, {}).get("final")
+            else:
+                sv = (fill.get("scores") or {}).get(key)
             if sv is None:
                 continue
             sv = float(sv)
@@ -655,14 +671,17 @@ def _peers_col_key(s: str) -> str:
 
 
 def _check_l4_form(fill: dict, warns: list) -> None:
-    """v4.10：L4 固定形态硬门禁（工行 09-11 报告照抄 09-09 旧形态实证——软规则不拦就没人守）。
-    ①损失预演必须为三联卡（.pm-grid，骨架见 fill-schema），禁止退回单段 danger-card 长文；
-    ②黄灯扣分明细表行数必须与顶层 yellow_deductions 条数一致——多列=零扣分空行该删，
-    少列=扣分项没列全。类别字母缺失无法核对时降级告警。"""
+    """两版均保留损失预演三联卡；v1 核对黄灯扣分表，v2 核对风险登记锚点与旧文案。"""
     l4 = fill.get("l4_html") or ""
     if "pm-grid" not in l4:
         raise ValueError("l4_html 缺损失预演三联卡（.pm-grid 固定骨架，v4.10 起）："
                          "禁止退回单段 danger-card 长文——骨架见 fill-schema「损失预演三联卡骨架」")
+    if _quality_version(fill) == 2:
+        if "黄灯扣分" in l4:
+            raise ValueError("v2 的 l4_html 不得保留黄灯扣分文案，请改用 risk_items 与 RISK_REGISTER 锚点")
+        if l4.count("<!--RISK_REGISTER-->") != 1:
+            raise ValueError("v2 的 l4_html 必须且只能有一个 <!--RISK_REGISTER--> 锚点")
+        return
     yellow = fill.get("yellow_deductions") or []
     # v5.1.2：行检出放宽（容忍 <tr>/<td> 带属性——原紧邻形态漏检走降级）+ 逐项数值比对
     row_ms = list(re.finditer(r"<tr[^>]*>\s*<td[^>]*>\s*[abcd][\s　].*?</tr>", l4, re.S))
@@ -703,11 +722,12 @@ def _check_cn_placeholder(fill: dict) -> None:
             raise ValueError(f"{name} 残留中文占位符: {sorted(set(hits))}——请填写实际内容后重渲")
 
 
-def _check_red_flag_conclusion(fill: dict) -> None:
+def _check_red_flag_conclusion(fill: dict, sc: dict = None) -> None:
     """v5.1.2：红旗命中 ≥2 项（red_deductions 条数，1D 红旗扣分明细）→ conclusion_html
     首卡首句必须含「利润真实性存疑」（fill-schema:61 长期承诺、此前零实现——多红旗报告
     静默缺失全文最强的利润真实性警示）。与 red_flag→「不建议参与」同强度：拒渲染。"""
-    red = fill.get("red_deductions") or []
+    red = (sc.get("financial_red_flags") if sc and sc.get("quality_version") == 2
+           else fill.get("red_deductions")) or []
     if len(red) < 2:
         return
     concl = fill.get("conclusion_html") or ""

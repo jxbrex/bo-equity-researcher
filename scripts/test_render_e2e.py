@@ -13,7 +13,7 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import render_report as R
-from conftest import minimal_fill, render_fill, write_fill, capture_stderr_value
+from conftest import minimal_fill, render_fill, write_fill, capture_stderr_value, v2_fill, render_v2_fill
 
 
 def test_fmt_thousands():
@@ -57,6 +57,32 @@ def test_review_dumbbell():
     assert 'aria-label="三轨分新旧对比"' in html, "回测模式应生成哑铃图"
     assert 'id="s13"' in html and "回测复盘" in html, "回测章节应出现（v4.8.1 起为第 13 章）"
     assert html.find('id="s13"') < html.find('id="s14"'), "回测复盘应排在跟踪仪表盘（s14）之前"
+
+
+def test_cross_version_quality_comparison_has_no_delta():
+    prev = {"date": "2026-08-08", "quality": 7.0, "valuation": 5.5, "timing": 5.0,
+            "quality_version": 1, "target_range": "10-12",
+            "scenarios": [{"scenario": "基础情景", "归母净利": "95 亿",
+                           "PE": "10-12x", "目标价": "9.5-11.4 元"}]}
+    rows = R._prev_track_rows(prev, 7.8, 6.0, 5.5, quality_version=2)
+    assert rows[0]["comparable"] is False and rows[0]["d"] is None
+    assert rows[1]["comparable"] is True and rows[1]["d"] == 0.5
+    same = R._prev_track_rows(dict(prev, quality_version=2), 7.8, 6.0, 5.5, quality_version=2)
+    assert same[0]["comparable"] is True and same[0]["d"] > 0.79
+    legacy = R._prev_track_rows(dict(prev, quality_version="legacy-single-track", valuation=None, timing=None),
+                                7.8, 6.0, 5.5, quality_version="legacy-single-track")
+    assert legacy[0]["comparable"] is False and legacy[0]["d"] is None
+    strip = R.build_prev_strip(prev, 7.8, 6.0, 5.5, "10-12", quality_version=2)
+    assert "质量分 7.00→7.80 <span class=\"muted\">(口径不同)</span>" in strip
+    assert "+0.80" not in strip and "估值分 5.50→6.00" in strip
+    chart = R.build_review_dumbbell(prev, 7.8, 6.0, 5.5, quality_version=2)
+    assert "口径不同" in chart and "+0.80" not in chart and "+0.50" in chart
+    fill = v2_fill(prev=prev,
+                   review_html='<table><tr><td>假设变更对比</td></tr></table>'
+                               '<span class="source">数据来源：测试</span>'
+                               '<span class="rev">甲</span><span class="rev">乙</span><span class="rev">丙</span>')
+    html = render_v2_fill(fill)
+    assert "口径不同" in html and "+1.72" not in html
 
 
 def test_fill_literal_mustache_survives():

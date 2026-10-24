@@ -396,7 +396,141 @@ def compute_valuation_score(calc: dict, inputs: dict, gap_tier=None):
     }
 
 
+from quality_rules import evaluate_dimensions, DIM_KEYS, CRITICAL_KEYS, RULE_REGISTRY
+
+
+def _quality_version(fill):
+    raw = fill.get("quality_version")
+    date = str(fill.get("date") or "")
+    if raw is None:
+        if date >= "2026-10-24":
+            raise ValueError("报告日 ≥2026-10-24 的新 fill 必须显式 quality_version: 2")
+        return 1
+    try:
+        version = int(raw)
+    except (TypeError, ValueError):
+        raise ValueError(f"quality_version 必须为 1 或 2，实际: {raw!r}")
+    if version not in (1, 2):
+        raise ValueError(f"quality_version 必须为 1 或 2，实际: {version}")
+    if version == 1 and date >= "2026-10-24":
+        raise ValueError("报告日 ≥2026-10-24 的新 fill 必须显式 quality_version: 2")
+    return version
+
+
+def _quality_context(fill):
+    stock_type = fill.get("stock_type") or ""
+    industry = fill.get("industry_profile")
+    if not industry:
+        if "银行" in stock_type:
+            industry = "financial_bank"
+        elif "保险" in stock_type:
+            industry = "financial_insurance"
+        elif "证券" in stock_type or "券商" in stock_type:
+            industry = "financial_broker"
+        elif "未盈利" in stock_type or "管线" in stock_type:
+            industry = "pre_profit"
+        elif "困境反转" in stock_type:
+            industry = "turnaround"
+        else:
+            industry = "generic"
+    w_override = fill.get("weights") or {}
+    weights = {key: float(w_override.get(key, default)) for key, _layer, _name, default in DIMS}
+    for layer in ("L1", "L3"):
+        total = sum(weights[d[0]] for d in DIMS if d[1] == layer)
+        if any(weights[d[0]] < 0 for d in DIMS if d[1] == layer):
+            raise ValueError(f"{layer} 层内权重含负值，拒渲染")
+        if abs(total - 100.0) > 0.01:
+            raise ValueError(f"{layer} 层内权重总和 = {total}，必须为 100")
+    ls_raw = fill.get("layer_share") or {}
+    if not isinstance(ls_raw, dict):
+        raise ValueError("layer_share 需为对象")
+    layer_share = {key: float(ls_raw.get(key, DEFAULT_LAYER_SHARE[key])) for key in ("L1", "L3")}
+    if any(value < 0 for value in layer_share.values()):
+        raise ValueError("layer_share 含负值，拒渲染")
+    if abs(sum(layer_share.values()) - 100.0) > 0.01:
+        raise ValueError("layer_share 之和必须为 100")
+    return {"stock_type": stock_type, "industry_profile": industry,
+            "growth_tier": fill.get("growth_tier"), "report_date": fill.get("date"),
+            "weights": weights, "layer_share": layer_share}
+
+
+def _compute_scores_v2(fill):
+    if fill.get("scores"):
+        raise ValueError("v2 不得用 scores 手写最终分，请提供 score_inputs")
+    if fill.get("red_deductions"):
+        raise ValueError("v2 非空 red_deductions 拒渲染：红旗只填 score_inputs['1D']['red_flags']")
+    if fill.get("yellow_deductions"):
+        raise ValueError("v2 非空 yellow_deductions 拒渲染：黄灯改为 risk_items 登记")
+    score_inputs = fill.get("score_inputs")
+    if not isinstance(score_inputs, dict):
+        raise ValueError("v2 必填 score_inputs")
+    context = _quality_context(fill)
+    result = evaluate_dimensions(score_inputs, context)
+    if not result["complete"] or result["quality"] is None:
+        reasons = [f"{key}: {result['dimensions'][key].get('missing_reason', '必需证据不完整')}"
+                   for key in DIM_KEYS if result["dimensions"][key]["status"] != "ok"]
+        raise ValueError("九维必需证据不完整：" + "；".join(reasons))
+    weights, layer_share = context["weights"], context["layer_share"]
+    dimension_results = result["dimensions"]
+    adj_scores = {key: dimension_results[key]["final"] for key in DIM_KEYS}
+    layer_scores = {
+        layer: sum(adj_scores[d[0]] * weights[d[0]] for d in DIMS if d[1] == layer) / 100.0
+        for layer in ("L1", "L3")
+    }
+    quality = result["quality"]
+    red_deductions = []
+    for step in dimension_results["1D"]["rule_steps"]:
+        if step["id"].startswith("1D.RED.") and (step.get("delta") or 0) < 0:
+            red_deductions.append({"item": step.get("evidence", ""), "points": -float(step["delta"])})
+    financial_red_flags = list(red_deductions)
+    profile = context.get("industry_profile") or "generic"
+    for name, hit in (score_inputs["1D"].get("industry_checks") or {}).items():
+        if hit is True:
+            financial_red_flags.append({"item": f"{profile}.{name}", "points": 0})
+    red_total = round(sum(item["points"] for item in red_deductions), 2)
+    valuation = None
+    v_raw = fill.get("valuation_score")
+    if v_raw is not None:
+        try:
+            valuation = float(v_raw)
+        except (TypeError, ValueError):
+            raise ValueError("valuation_score 必须是 0-10 数字")
+        if not 0 <= valuation <= 10:
+            raise ValueError(f"valuation_score = {valuation} 超出 0-10 范围")
+    t_scores = fill.get("timing_scores")
+    if not isinstance(t_scores, dict) or not t_scores:
+        raise ValueError("timing_scores 为必填字段")
+    miss_t = [k for k, _n, _w in TIMING_DIMS if k not in t_scores]
+    if miss_t:
+        raise ValueError(f"timing_scores 缺维度: {miss_t}")
+    bad_t = [k for k in t_scores if k not in {d[0] for d in TIMING_DIMS}]
+    if bad_t:
+        raise ValueError(f"timing_scores 含非法键名 {bad_t}")
+    tw_raw = fill.get("timing_weights") or {}
+    if not isinstance(tw_raw, dict):
+        raise ValueError("timing_weights 需为对象")
+    t_weights = {k: float(tw_raw.get(k, dw)) for k, _n, dw in TIMING_DIMS}
+    if abs(sum(t_weights.values()) - 100.0) > 0.01:
+        raise ValueError("时机层权重总和必须为 100")
+    timing = sum(float(t_scores[k]) * t_weights[k] for k, _n, _w in TIMING_DIMS) / 100.0
+    rule_registry = {rule_id: rule["home"] for rule_id, rule in RULE_REGISTRY["rules"].items()}
+    for key, dimension in dimension_results.items():
+        for step in dimension["rule_steps"]:
+            rule_registry[step["id"]] = key
+    return {
+        "layer_scores": layer_scores, "layer_share": layer_share, "pre_risk_quality": quality,
+        "yellow_total": 0, "quality": quality, "red_total": red_total,
+        "red_deductions": red_deductions, "financial_red_flags": financial_red_flags,
+        "valuation": valuation, "timing": timing, "red_flag": (fill.get("red_flag") or "").strip(),
+        "weights": weights, "adj_scores": adj_scores, "dimension_results": dimension_results,
+        "critical_weaknesses": result["critical_weaknesses"], "quality_version": 2,
+        "score_inputs": score_inputs, "rule_registry": rule_registry,
+    }
+
+
 def compute_scores(fill: dict):
+    if _quality_version(fill) == 2:
+        return _compute_scores_v2(fill)
     """v4.0 三轨：质量分（L1 六维 + L3 三维，不含估值）+ 估值分（独立）+ 时机分（微调）。
     返回 dict：layer_scores / layer_share / pre_risk_quality /
     yellow_total / quality（质量分）/ valuation（估值分）/ timing（时机分）/ red_flag。
@@ -900,8 +1034,19 @@ def _matrix_applies(red_flag: str, calc: dict) -> bool:
     return not red_flag and not (calc and calc["central_raw"] < 0)
 
 
+def _critical_items(critical):
+    return [item for item in critical or [] if item.get("key") in CRITICAL_KEYS]
+
+
+def _apply_critical(label, critical):
+    if not _critical_items(critical):
+        return label
+    return {_POS_LABEL[20]: _POS_LABEL[10], _POS_LABEL[10]: _POS_LABEL[5],
+            _POS_LABEL[5]: "观察池"}.get(label, label)
+
+
 def _position_steps(quality: float, valuation: float, timing, calc: dict, red_flag: str,
-                    floor_uplift: dict = None):
+                    floor_uplift: dict = None, critical=None):
     """仓位决策链纯函数（12 卡逻辑体，v4.9 从 build_position_card 抽出便于直接单测；
     HTML 渲染留在卡片函数）。输入 质量/估值/时机分、估值 calc、红灯 → 返回
     (final_label, steps, slot_txt, crit)：steps 为轨迹文案列表（只列实际触发条目），
@@ -911,7 +1056,7 @@ def _position_steps(quality: float, valuation: float, timing, calc: dict, red_fl
     恰落 8.0 时估值轨豁免临界判定（落点是机制产物非测量噪声），票面 8.0 不挂临界徽章、
     矩阵按 8.0 落 ≥8 列、上浮不冻结；与 render 层 14 章升档行同口径（同传一份）。
     决策优先级固定：红灯熔断 > 中枢为负拦截器 > 矩阵落位 > 时机分调节 > 离散度调节
-    > 赔率 ∞ 上浮。上浮类合计净效应 ≤ +1 档且不进 20 档（重仓唯一入口是矩阵直落）。
+    > 赔率 ∞ 上浮 > 关键短板降档。上浮类合计净效应 ≤ +1 档且不进 20 档（重仓唯一入口是矩阵直落）。
     v5.0 机制一：矩阵落位对原分与 _edge_info 有效分两侧各落一次、取保守度孰低
     （_POS_RANK；临界轨压到边界下侧只是候选之一——质量 5.5 行非单调，v<6 时下侧
     反而更高，只算一侧会抬档），
@@ -1017,11 +1162,18 @@ def _position_steps(quality: float, valuation: float, timing, calc: dict, red_fl
                 final_label = "观察池"
         if not steps:
             steps.append("矩阵落位直接生效，无调节项触发")
+    original_label = final_label
+    adjusted_label = _apply_critical(original_label, critical)
+    if adjusted_label != original_label:
+        names = "、".join(item["key"] for item in _critical_items(critical))
+        steps.append(f"关键短板降档：{names} 最终分 <4；{original_label}·关键短板 → "
+                     f"{adjusted_label}（质量分不变，仅降一次）")
+        final_label = f"{adjusted_label}（{original_label}·关键短板）"
     return final_label, steps, slot_txt, crit
 
 
 def build_position_card(quality: float, valuation: float, timing,
-                        calc: dict, red_flag: str, floor_uplift: dict = None) -> str:
+                        calc: dict, red_flag: str, floor_uplift: dict = None, critical=None) -> str:
     """12 仓位与时机决策章末尾三轨判定卡（脚本生成，置于 position_html 之后）：
     ① 三轨判定行（质量/估值/时机各带落档判词）→ ② 调节轨迹（只列实际触发条目）
     → ③ 最终仓位结论徽章行。决策链逻辑在 _position_steps（纯函数），本函数只做
@@ -1029,15 +1181,19 @@ def build_position_card(quality: float, valuation: float, timing,
     v5.0 机制一：临界轨的质量/估值卡 sub 追加「档位临界」橙徽章 + 距离说明。
     v5.0.0（F3）：floor_uplift 透传决策链——net_cash 硬地板上浮恰落 8.0 豁免临界
     （调用方 render 层与 14 章升档行同传 vc["floor_uplift"]，徽章与升档行同生共灭）。
-    v5.8.2：删除未使用的 fill 形参（重构遗留，函数体只消费评分/估值结果）。"""
+    critical 为九维计算派生的关键短板清单，只在决策链末端降一次，不改质量分。"""
     parts = ['<span class="section-tag">三轨判定与仓位结论</span>']
 
     # 决策链先行（① 的临界徽章依赖 crit）：逻辑在 _position_steps（纯函数，规则注释见其 docstring）
     final_label, steps, slot_txt, crit = _position_steps(quality, valuation, timing, calc, red_flag,
-                                                         floor_uplift)
+                                                         floor_uplift, critical)
 
     # ① 三轨判定行
     q_sub = f'{_quality_verdict(quality)}（{_Q_LEGEND}）'
+    active_critical = _critical_items(critical)
+    if active_critical:
+        q_sub += "；关键短板：" + "、".join(
+            f'{item["key"]} {item["score"]:.2f}' for item in active_critical)
     v_sub = f'{_valuation_verdict(valuation)}（{_V_LEGEND}）'
     for c in crit:
         note = (f' <span class="badge badge-orange">档位临界</span>'
@@ -1065,7 +1221,7 @@ def build_position_card(quality: float, valuation: float, timing,
 
     # ③ 最终仓位结论徽章行（落位信息并入，报告只显示落位与结论）
     final_badge = ("badge-red" if final_label in (_LABEL_REFUSE,) or final_label.startswith("回避")
-                   else "badge-orange" if final_label in ("观察池", "轻仓 ≤5%")
+                   else "badge-orange" if final_label.startswith(("观察池", "轻仓 ≤5%"))
                    else "badge-blue" if final_label.startswith("标准仓") else "badge-green")
     slot_html = f'<span class="muted">{slot_txt} ｜ </span>' if slot_txt else ""
     parts.append(f'<div class="decision-bar"><strong>最终仓位结论：</strong>{slot_html}'

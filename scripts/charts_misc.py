@@ -253,12 +253,11 @@ def build_anchor_ledger(fill: dict, calc: dict) -> str:
             + src)
 
 
-def build_review_dumbbell(prev: dict, quality: float, valuation: float, timing) -> str:
-    """13 回测复盘·三轨分新旧对比哑铃图（0-10 定域）：灰点=上版、蓝点=本版，
-    连线带箭头（方向=上版→本版），绿=上调、红=下调，右列=分差。prev 为空 → 返回空串。"""
+def build_review_dumbbell(prev: dict, quality: float, valuation: float, timing, quality_version=1) -> str:
+    """三轨哑铃图；质量口径不同的行只并列两点，不画方向箭头或分差。"""
     if not prev:
         return ""
-    rows = _prev_track_rows(prev, quality, valuation, timing)
+    rows = _prev_track_rows(prev, quality, valuation, timing, quality_version)
     if not rows:
         return ""
     W, NL, BAR_A, BAR_B = 1000, 110, 140, 890
@@ -272,22 +271,29 @@ def build_review_dumbbell(prev: dict, quality: float, valuation: float, timing) 
         cy = T + i * ROW_H + ROW_H / 2 - 6
         xo, xn = X(r["old"]), X(r["new"])
         d = r["d"]
-        dcolor = _C_GREEN if d >= 0 else _C_RED
-        # v4.8.1：连线末端加箭头（方向=上版→本版，直观看出分数升/降）；两点过近时不画
-        parts.append(_arrow_dumbbell(xo, xn, cy, dcolor, lambda v: f"{v:.1f}"))
+        comparable = r["comparable"]
+        dcolor = (_C_GREEN if d >= 0 else _C_RED) if comparable else _C_LABEL
+        if comparable:
+            parts.append(_arrow_dumbbell(xo, xn, cy, dcolor, lambda v: f"{v:.1f}"))
+        else:
+            parts.append(f'<circle cx="{xo:.1f}" cy="{cy:.1f}" r="6" fill="{_C_SAND}"/>')
+            parts.append(f'<circle cx="{xn:.1f}" cy="{cy:.1f}" r="7.5" fill="{_C_BLUE}" '
+                         f'stroke="{_C_PAPER}" stroke-width="2"/>')
         parts.append(f'<text x="{NL}" y="{cy + 4.5:.1f}" text-anchor="end" font-size="12.5" fill="{_C_INK}">{r["label"]}</text>')
-        # 新旧点过近时旧值改放下方，避免两个数值标签重叠
         old_y = cy + 24 if abs(xn - xo) < 70 else cy - 14
         parts.append(f'<text x="{xo:.1f}" y="{old_y:.1f}" text-anchor="middle" font-size="11" fill="{_C_LABEL}">{_fmt(r["old"])}</text>')
         parts.append(f'<text x="{xn:.1f}" y="{cy - 14:.1f}" text-anchor="middle" font-size="12" '
                      f'font-weight="700" fill="{_C_BLUE}">{_fmt(r["new"])}</text>')
+        delta_text = f"{d:+.2f}" if comparable else "口径不同"
         parts.append(f'<text x="{BAR_B + 10}" y="{cy + 4.5:.1f}" font-size="12" font-weight="700" '
-                     f'fill="{dcolor}">{d:+.2f}</text>')
+                     f'fill="{dcolor}">{delta_text}</text>')
     parts.append(_svg_close())
+    incomparable = any(not r["comparable"] for r in rows)
     parts.append(_chart_source(
         "三轨分新旧对比", f"上版报告（{_esc(str(prev.get('date', '上版')))}）与本版评分计算",
         f'灰点={_esc(str(prev.get("date", "上版")))} 上版，'
-        '蓝点=本版；连线箭头指向上版→本版方向（绿=上调、红=下调）；右列=分差；0-10 定域'))
+        '蓝点=本版；连线箭头指向上版→本版方向（绿=上调、红=下调）；右列=分差；0-10 定域'
+        + ('；质量分口径不同的行仅并列，不画箭头或分差' if incomparable else '')))
     return "".join(parts)
 
 

@@ -403,10 +403,10 @@ td.rev, th.rev { padding: 8px 12px; }
     </div>
     <div class="hero-scores-col">
       <div class="hero-tracks">
-        <div class="hero-track quality">
+        <div class="hero-track quality" data-quality-version="{{QUALITY_VERSION}}">
           <div class="s-label">质量分</div>
           <div class="s-value">{{QUALITY_SCORE}}</div>
-          <div class="s-sub">{{QUALITY_WORD}}</div>
+          <div class="s-sub">{{QUALITY_WORD}}</div><!--IF:SHOW_QUALITY_V--><div class="s-version">评分 v{{QUALITY_VERSION}}</div><!--ENDIF-->
         </div>
         <div class="hero-track valuation">
           <div class="s-label">估值分</div>
@@ -523,8 +523,8 @@ td.rev, th.rev { padding: 8px 12px; }
 <div class="section" id="s6">
   <div class="section-header">
     <span class="section-num">6</span>
-    <span class="section-title">风险评估（红/黄灯）— 质量轨门禁</span>
-    <span class="section-meta"><span class="badge badge-red">扣 {{YELLOW_TOTAL}} 分</span></span>
+    <span class="section-title">{{RISK_TITLE}}</span>
+    <span class="section-meta">{{RISK_BADGE}}</span>
   </div>
   <div class="section-body">
     {{L4_HTML}}

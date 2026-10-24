@@ -23,7 +23,7 @@ def test_parse_report_name_wiring():
     assert r["code"] == "00700" and r["date"] == "2026-08-23"
     r = sc.parse_report_name("中国神华_601088_6.72_2026-08-07.html")
     assert r["code"] == "601088" and r["date"] == "2026-08-07"
-    assert r["valuation"] is None and r["quality"] == 6.72  # 旧 _ 命名：单轨综合分作质量分近似
+    assert r["valuation"] is None and r["quality"] == 6.72  # 旧 _ 命名：保留单轨综合分原值，不当 v1 质量分
     assert sc.parse_report_name("随手笔记.html") is None
     assert sc.parse_report_name("无日期-600989-6.0-5.0.html") is None
 
@@ -53,8 +53,8 @@ def test_collect_reports_walks_subdirs():
     正文提取 monkeypatch 掉——本用例只测扫描递归，文件名解析走真实 parse_report_name。"""
     import tempfile
     real_extract = sc.E.extract
-    sc.E.extract = lambda path: {"prev": {"quality": 6.7, "valuation": 7.4, "date": "2026-08-01"},
-                                 "code": "600309"}
+    sc.E.extract = lambda path: {"prev": {"quality": 6.7, "valuation": 7.4, "date": "2026-08-01",
+                                          "quality_version": 2}, "code": "600309"}
     try:
         with tempfile.TemporaryDirectory() as d:
             sub = os.path.join(d, "2026-08")
@@ -67,6 +67,7 @@ def test_collect_reports_walks_subdirs():
         sc.E.extract = real_extract
     assert len(reps) == 1, f"子目录样本被漏: {reps}"
     assert reps[0]["code"] == "600309" and reps[0]["quality"] == 6.7
+    assert reps[0]["quality_version"] == 2
 
 
 def test_fetch_index_return_string_close():
@@ -86,6 +87,45 @@ def test_fetch_index_return_string_close():
     assert abs(ret - 0.1) < 1e-12, f"字符串 close 基准收益算错: {ret}"
 
 
+def test_calibration_main_separates_quality_versions():
+    import contextlib
+    import io
+
+    reps = [
+        {"file": "v1.html", "code": "600001", "company": "甲", "rep_date": "2026-01-01",
+         "quality": 6.0, "valuation": 5.0, "timing": 5.0, "price": 10, "quality_version": 1},
+        {"file": "v2.html", "code": "600002", "company": "乙", "rep_date": "2026-01-02",
+         "quality": 8.0, "valuation": 6.0, "timing": 5.0, "price": 10, "quality_version": 2},
+        {"file": "legacy.html", "code": "600003", "company": "丙", "rep_date": "2024-01-02",
+         "quality": 9.0, "valuation": None, "timing": None, "price": 10,
+         "quality_version": "legacy-single-track", "legacy": True},
+    ]
+    real = sc.collect_reports, sc.fetch_return, sc.fetch_index_return, sys.argv
+    sc.collect_reports = lambda _directory: [dict(r) for r in reps]
+    sc.fetch_return = lambda code, _start, _today: {
+        "ret": 0.1 if code == "600001" else 0.2, "n_days": 30, "entry_date": "20260102"}
+    sc.fetch_index_return = lambda *_args: 0.0
+    sys.argv = ["score_calibration.py", "测试"]
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            sc.main()
+    finally:
+        sc.collect_reports, sc.fetch_return, sc.fetch_index_return, sys.argv = real
+    out = buf.getvalue()
+    sections = out.split("## 分桶统计——")
+    v1 = next(section for section in sections if section.startswith("v1"))
+    v2 = next(section for section in sections if section.startswith("v2"))
+    assert "| 质量≥7 好公司 | 0 |" in v1
+    assert "| 质量≥7 好公司 | 1 |" in v2
+    assert "估值分 × 实际收益" not in v1
+    assert "估值分 × 实际收益" not in v2
+    valuation = [section for section in sections if section.startswith("估值（跨质量版本）")]
+    assert len(valuation) == 2
+    assert all("估值分 × 实际收益" in section for section in valuation)
+    assert not any(section.startswith("vlegacy") for section in sections)
+
+
 if __name__ == "__main__":
     test_parse_report_name_wiring()
     print("OK parse_report_name 接线（owner=extract_review，两代命名 + 非报告排除）")
@@ -97,4 +137,6 @@ if __name__ == "__main__":
     print("OK collect_reports 子目录递归扫描")
     test_fetch_index_return_string_close()
     print("OK fetch_index_return 字符串 close 不丢基准收益")
-    print("全部 5 项测试通过")
+    test_calibration_main_separates_quality_versions()
+    print("OK score_calibration 按质量版本分桶")
+    print("全部 6 项测试通过")

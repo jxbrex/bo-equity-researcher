@@ -15,7 +15,8 @@ from scoring import (
 )
 from conftest import (
     minimal_fill, mcap_fill, _dim, _calc, expect_valueerror, capture_stderr,
-    validate_stderr, write_fill, render_fill, _L1_GOV_BLOCK, _LONG_TEXT,
+    validate_stderr, write_fill, render_fill, _L1_GOV_BLOCK, _LONG_TEXT, v2_fill,
+    prepare_v2_quote, render_v2_fill,
 )
 
 def test_p0_low_quality_not_observation_pool():
@@ -765,3 +766,108 @@ def test_position_card_legend_single_source():
     vc_m = R.compute_valuation_score(mcalc, dict(inputs, consensus_np=80), gap_tier="B")
     card = R.build_valuation_process_card(mcalc, vc_m, inputs)
     assert f"估值分档位：{scoring._V_LEGEND}" in card, "过程卡图例须与常量逐字一致"
+
+
+def test_v1_old_fill_still_renders_without_v2_marker():
+    html = render_fill(minimal_fill())
+    assert 'data-quality-version="1"' in html
+    assert "评分 v2" not in html
+    assert "风险评估（红/黄灯）— 质量轨门禁" in html
+    assert "扣 0.0 分" in html
+    assert "黄灯扣分：无" in html
+    assert '<div class="s-sub">好公司</div>\n          \n        </div>' not in html
+
+
+def test_new_date_requires_explicit_quality_version():
+    expect_valueerror(minimal_fill(date="2026-10-24"), "quality_version", kw="quality_version")
+
+
+def test_v2_rejects_handwritten_scores():
+    fill = v2_fill()
+    fill["scores"] = {key: 7 for key in ("1A", "1B", "1C", "1D", "1E", "1F", "3A", "3B", "3C")}
+    expect_valueerror(fill, "手写 scores", kw="手写")
+
+
+def test_v2_rejects_red_deductions():
+    fill = v2_fill()
+    fill["red_deductions"] = [{"item": "重复扣分", "points": 1}]
+    expect_valueerror(fill, "red_deductions", kw="red_deductions")
+
+
+def test_v2_missing_required_dimension_is_rejected():
+    fill = v2_fill()
+    del fill["score_inputs"]["1D"]
+    expect_valueerror(fill, "1D", kw="1D")
+
+
+def test_v2_render_injects_version_badges_and_rule_details():
+    html = render_v2_fill(v2_fill())
+    assert 'data-quality-version="2"' in html
+    assert "评分 v2" in html
+    assert 'data-dim="1A"' in html
+    assert "1A.MATURE.CHECK" in html
+    assert "1F.ROIC_WACC" in html
+    assert "badge badge-green" in html
+    assert "<!--SCORE_BADGE-->" not in html
+    assert "<!--SCORE_DETAIL-->" not in html
+
+
+def test_v2_red_flags_stay_in_1d_and_two_hits_require_warning():
+    fill = v2_fill()
+    fill["score_inputs"]["1D"]["red_flags"].update(receivables=True, inventory=True)
+    sc = R.compute_scores(fill)
+    assert sc["red_total"] == 2
+    assert sc["dimension_results"]["1D"]["final"] == 7
+    assert sc["dimension_results"]["1C"]["final"] == 9
+    with tempfile.TemporaryDirectory() as d:
+        fill = prepare_v2_quote(fill, d)
+        expect_valueerror(fill, "利润真实性存疑", kw="利润真实性存疑")
+        fill["conclusion_html"] = "利润真实性存疑：应收与存货连续恶化。" + fill["conclusion_html"]
+        R.validate_content(fill, R.compute_valuation(fill), sc)
+
+
+def test_v2_extreme_score_requires_counter_evidence():
+    fill = v2_fill()
+    del fill["score_inputs"]["1C"]["counter_evidence"]
+    with tempfile.TemporaryDirectory() as d:
+        fill = prepare_v2_quote(fill, d)
+        expect_valueerror(fill, "反方证据", kw="反方证据")
+
+
+def test_v2_archive_index_contains_version_and_score_metadata():
+    import json
+    with tempfile.TemporaryDirectory() as d:
+        fill = prepare_v2_quote(v2_fill(), d)
+        path = write_fill(fill, d)
+        R.render(path, out_path=os.path.join(d, "out.html"))
+        row = json.loads(open(os.path.join(d, "_archive", "_index.jsonl"), encoding="utf-8").readline())
+        assert row["quality_version"] == 2
+        assert row["scores"]["1F"] == 9
+        assert row["weights"]["1F"] == 20
+        assert row["layer_share"] == {"L1": 70, "L3": 30}
+
+
+def test_v2_industry_red_flags_derive_warning_without_second_deduction():
+    fill = v2_fill(industry_profile="financial_bank")
+    fill["score_inputs"]["1D"] = {
+        "kind": "industry_checklist",
+        "industry_checks": {"npl_trend": True, "provision_trend": True,
+                            "loan_migration": False, "cet1": False},
+    }
+    fill["score_inputs"]["1B"] = {
+        "cost_strength": "strong", "pricing_strength": "neutral", "bargaining_status": "正常",
+        "customer_concentration": 0.1, "supplier_concentration": 0.1,
+    }
+    fill["score_inputs"]["1F"] = {
+        "return_metric": "ROE_NORMALIZED", "normalized_return": 0.12, "coe": 0.08,
+        "dupont_driver": "净利率",
+    }
+    sc = R.compute_scores(fill)
+    assert len(sc["financial_red_flags"]) == 2
+    assert sc["red_total"] == 0
+    with tempfile.TemporaryDirectory() as d:
+        fill = prepare_v2_quote(fill, d)
+        expect_valueerror(fill, "利润真实性存疑", kw="利润真实性存疑")
+        fill["conclusion_html"] = "利润真实性存疑：资产质量两项恶化。" + fill["conclusion_html"]
+        fill["score_inputs"]["1F"]["counter_evidence"] = "资产质量恶化可能拖累未来资本回报"
+        R.validate_content(fill, R.compute_valuation(fill), sc)

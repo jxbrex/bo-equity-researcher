@@ -15,8 +15,71 @@ from scoring import (
 )
 from conftest import (
     minimal_fill, full_fill, _calc, expect_valueerror, validate_stderr,
-    write_fill, render_fill,
+    write_fill, render_fill, v2_fill, render_v2_fill,
 )
+
+
+def test_v2_critical_weaknesses_only_core_dimensions():
+    for key in ("1C", "1D", "1E", "1F", "3A", "3C"):
+        fill = v2_fill()
+        spec = fill["score_inputs"][key]
+        if key == "1C":
+            spec["moats"] = []
+        elif key == "1D":
+            spec["f_items"] = {name: False for name in spec["f_items"]}
+        elif key == "1E":
+            spec.update(pledge_pct=0.8, reduction_pct=0.03, age=70, penalties=1,
+                        succession_plan=False, dividend={}, buyback={})
+        elif key == "1F":
+            spec["roic"] = 0.01
+        elif key == "3A":
+            spec.update(growth_lo=-1, growth_hi=-0.5, driver_status="未验证")
+        else:
+            spec["events"] = []
+        sc = R.compute_scores(fill)
+        assert sc["dimension_results"][key]["final"] < 4
+        expected = [key] if key in ("1C", "1D", "1E", "1F") else []
+        assert [item["key"] for item in sc["critical_weaknesses"]] == expected
+
+
+def test_critical_weakness_downgrades_each_core_once():
+    for key in ("1C", "1D", "1E", "1F"):
+        label, steps, _slot, _crit = _position_steps(
+            7.5, 8.5, 5.0, _calc(), "", critical=[{"key": key, "score": 3.5}])
+        assert label == "标准仓 ≤10%（重仓 ≤20%·关键短板）"
+        assert sum("关键短板降档" in step for step in steps) == 1
+        assert key in next(step for step in steps if "关键短板降档" in step)
+
+
+def test_critical_applies_last_and_preserves_other_terminal_states():
+    label, steps, _slot, _crit = _position_steps(
+        4.5, 4.5, 5.0, _calc(dispersion=0.50, odds=None, floor_type="net_cash"), "",
+        critical=[{"key": "1D", "score": 3.5}])
+    assert label == "轻仓 ≤5%（标准仓 ≤10%·关键短板）"
+    assert steps[0].startswith("赔率调节") and "关键短板降档" in steps[-1]
+    for quality, valuation, red_flag, expected in (
+            (4.5, 4.5, "", "不建议参与"), (7.5, 3.0, "", "观察池"),
+            (7.5, 8.5, "审计非标", "不建议参与")):
+        label, steps, _slot, _crit = _position_steps(
+            quality, valuation, 3.5 if expected == "不建议参与" and not red_flag else 5.0,
+            _calc(dispersion=0.95 if expected == "不建议参与" and not red_flag else 0.55),
+            red_flag, critical=[{"key": "1D", "score": 3.5}])
+        assert label == expected
+        assert not any("关键短板降档" in step for step in steps)
+
+
+def test_v2_render_applies_critical_without_capping_quality():
+    fill = v2_fill()
+    fill["score_inputs"]["1C"]["moats"] = []
+    sc = R.compute_scores(fill)
+    assert sc["quality"] == 7.74 and sc["dimension_results"]["1C"]["final"] == 2
+    html = render_v2_fill(fill)
+    assert "观察池（轻仓 ≤5%·关键短板）" in html
+    assert "质量分不变" in html and "1C" in html
+    decision = html.split("最终仓位结论：", 1)[1].split("</div>", 1)[0]
+    assert "不建议参与" not in decision
+    assert "badge badge-orange badge-lg\">观察池" in decision
+
 
 # ---------------- v5.0 决策层三机制（临界档透明化 / 乐观税门禁 / 赔率∞地板分级） ----------------
 def test_position_steps_edge_critical():

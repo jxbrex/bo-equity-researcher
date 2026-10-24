@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import render_report as R
 from conftest import (
     minimal_fill, expect_valueerror, validate_stderr, write_fill,
-    _period_ref_file,
+    _period_ref_file, v2_fill, prepare_v2_quote, render_v2_fill,
 )
 
 def test_validate_warns_reach_stderr():
@@ -142,6 +142,21 @@ def test_gap_growth_consensus_validate():
                               {"y": "2025", "np": 12.0}],
                      "fcst": [{"y": "2026E", "np_lo": 5, "np_hi": 10, "np_consensus": 15}]}))
     assert "np_consensus" in warns and "基础情景换算增速" in warns
+
+
+def test_growth_consensus_skips_cumulative_year_ranges():
+    for label in ("2026-27E", "2026-2027E"):
+        fill = minimal_fill(
+            quote={"source_file": _period_ref_file("v512_g", {"consensus_np": 120})},
+            fin_trend={"years": ["2023", "2024", "2025"], "panels": [
+                {"title": "盈利", "bars": [{"name": "归母净利", "unit": "亿", "values": [80.0, 90.0, 100.0]}]},
+                {"title": "营收", "bars": [{"name": "营收", "unit": "亿", "values": [800.0, 900.0, 1000.0]}]},
+                {"title": "毛利", "lines": [{"name": "毛利率", "pct": True, "values": [29.0, 30.0, 31.0]}]}]},
+            growth_plot={"hist": [{"y": "2023", "np": 10.0}, {"y": "2024", "np": 11.0},
+                                  {"y": "2025", "np": 12.0}],
+                         "fcst": [{"y": label, "np_lo": -50, "np_hi": 100, "np_consensus": 56.9}]})
+        out = validate_stderr(fill)
+        assert "np_consensus" not in out and "基础情景换算增速" not in out
 
 
 def test_l4_yellow_points_validate():
@@ -590,3 +605,265 @@ def test_sensitivity_coverage_gate():
     out2 = validate_stderr(allno)
     assert "行缺 gp_pct" in out2, "全行缺 gp_pct 也应告警"
     R.validate_content(allno, R.compute_valuation(allno))
+
+
+def _risk_item(name="应收恶化", rule_id="1D.RED.RECEIVABLES", home="1D", status="hit",
+               impact="quality", evidence="应收周转连续恶化", trigger="周转天数继续上升", source="公司公告"):
+    return {"name": name, "status": status, "evidence": evidence, "impact": impact,
+            "home": home, "trigger": trigger, "source": source, "rule_id": rule_id}
+
+
+def _with_red_flag(fill):
+    fill["score_inputs"]["1D"]["red_flags"]["receivables"] = True
+    return fill
+
+
+def _risk_error(fill):
+    try:
+        R.build_risk_register(fill)
+    except ValueError as exc:
+        return str(exc)
+    raise AssertionError("风险登记应拒绝但未拒绝")
+
+
+def test_risk_register_four_impacts_and_unknown_is_not_pass():
+    fill = _with_red_flag(v2_fill(risk_items=[
+        _risk_item(),
+        _risk_item(name="估值过高", rule_id=None, home="valuation", status="watch", impact="valuation",
+                   evidence="PE高于历史区间", trigger="PE继续上升", source="公开行情"),
+        _risk_item(name="筹码未核实", rule_id=None, home="timing", status="unknown", impact="timing",
+                   evidence="股东户数数据未获取", trigger="等待披露", source="定期报告"),
+        _risk_item(name="原材料上涨", rule_id=None, home="dashboard", status="watch", impact="monitor",
+                   evidence="原料价格上涨", trigger="继续涨价", source="行业数据"),
+    ]))
+    html = R.build_risk_register(fill)
+    assert "质量" in html and "估值" in html and "时机" in html and "仅跟踪" in html
+    assert "未核实" in html
+    assert "通过" not in html
+    assert "风险事实" in html and "证据与当前值" in html and "影响去向" in html and "跟踪指标" in html
+
+
+def test_risk_duplicate_rule_id_is_rejected():
+    fill = _with_red_flag(v2_fill(risk_items=[_risk_item(), _risk_item(name="应收再恶化")]))
+    assert "不得重复" in _risk_error(fill)
+
+
+def test_risk_rule_id_must_match_dimension_and_registry():
+    fill = _with_red_flag(v2_fill(risk_items=[_risk_item(rule_id="1C.MOAT.COUNT", home="1D")]))
+    assert "home" in _risk_error(fill)
+    fill = _with_red_flag(v2_fill(risk_items=[_risk_item(rule_id="1D.NOT_EXIST")]))
+    assert "RULE_REGISTRY" in _risk_error(fill)
+
+
+def test_risk_multiple_hits_require_review_not_red_flag():
+    fill = _with_red_flag(v2_fill(risk_items=[
+        _risk_item(),
+        _risk_item(name="赛道承压", rule_id="1A.MATURE.CHECK", home="1A"),
+        _risk_item(name="产业链承压", rule_id="1B.VALUE_CHAIN", home="1B"),
+        _risk_item(name="护城河承压", rule_id="1C.MOAT.COUNT", home="1C"),
+    ]))
+    assert "red_review" in _risk_error(fill)
+    fill["red_review"] = "复核完成：不升级红灯"
+    html = R.build_risk_register(fill)
+    assert "复核完成：不升级红灯" in html
+    assert R.compute_scores(fill)["red_flag"] == ""
+
+
+def test_risk_register_rejects_invalid_enums():
+    for field, value in (("status", "passed"), ("impact", "quality_and_valuation"), ("home", "2A")):
+        fill = _with_red_flag(v2_fill(risk_items=[_risk_item(**{field: value})]))
+        assert field in _risk_error(fill)
+
+
+def test_risk_register_requires_display_fields():
+    for field in ("name", "evidence", "trigger", "source"):
+        fill = _with_red_flag(v2_fill(risk_items=[_risk_item(**{field: ""})]))
+        assert field in _risk_error(fill)
+
+
+def test_risk_quality_hit_requires_rule_id():
+    fill = _with_red_flag(v2_fill(risk_items=[_risk_item(rule_id=None)]))
+    assert "rule_id" in _risk_error(fill)
+
+
+def test_risk_quality_rule_must_be_in_actual_score_chain():
+    fill = _with_red_flag(v2_fill(risk_items=[_risk_item(rule_id="1D.RED.INVENTORY")]))
+    assert "得分链" in _risk_error(fill)
+
+
+def test_risk_custom_rule_registry_is_per_report():
+    fill = v2_fill(risk_items=[_risk_item(name="客户集中", rule_id="1C.CUSTOM.CUSTOMER", home="1C")])
+    fill["score_inputs"]["1C"]["custom"] = {
+        "id": "1C.CUSTOM.CUSTOMER", "points": -1, "reason": "客户集中", "evidence": "第一大客户占60%"}
+    assert "客户集中" in R.build_risk_register(fill)
+    fill["score_inputs"]["1C"].pop("custom")
+    assert "RULE_REGISTRY" in _risk_error(fill)
+
+
+def test_rule_registry_uses_shared_quality_catalog():
+    import quality_rules
+    import scoring
+    assert scoring.RULE_REGISTRY is quality_rules.RULE_REGISTRY
+
+
+def test_v2_l4_requires_register_anchor():
+    fill = v2_fill()
+    fill["l4_html"] = fill["l4_html"].replace("<!--RISK_REGISTER-->", "")
+    with tempfile.TemporaryDirectory() as d:
+        fill = prepare_v2_quote(fill, d)
+        expect_valueerror(fill, kw="RISK_REGISTER")
+
+
+def test_v2_l4_rejects_legacy_deduction_copy():
+    fill = v2_fill()
+    fill["l4_html"] = fill["l4_html"].replace("<!--RISK_REGISTER-->", "<p>黄灯扣分：无</p>")
+    with tempfile.TemporaryDirectory() as d:
+        fill = prepare_v2_quote(fill, d)
+        expect_valueerror(fill, kw="黄灯扣分")
+
+
+def test_v2_rejects_yellow_deductions():
+    fill = v2_fill(yellow_deductions=[{"label": "旧黄灯", "points": 0.5}])
+    with tempfile.TemporaryDirectory() as d:
+        fill = prepare_v2_quote(fill, d)
+        expect_valueerror(fill, "yellow_deductions", kw="yellow_deductions")
+
+
+def test_red_flag_still_breaks_rendering():
+    fill = v2_fill(red_flag="审计非标")
+    with tempfile.TemporaryDirectory() as d:
+        fill = prepare_v2_quote(fill, d)
+        expect_valueerror(fill, "不建议参与", kw="不建议参与")
+    fill["position_html"] = "<p>不建议参与：审计非标，红灯一票否决。</p>" + fill["position_html"]
+    html = render_v2_fill(fill)
+    assert "不建议参与" in html
+
+
+def test_risk_register_error_is_caught_by_preflight():
+    fill = _with_red_flag(v2_fill(risk_items=[_risk_item(), _risk_item(name="应收再恶化")]))
+    with tempfile.TemporaryDirectory() as d:
+        path = write_fill(prepare_v2_quote(fill, d), d)
+        try:
+            R._preflight(path)
+        except ValueError as exc:
+            assert "不得重复" in str(exc)
+        else:
+            raise AssertionError("预检应拦截重复风险规则")
+
+
+def test_v2_risk_register_render_preserves_hero_and_premortem(capsys):
+    fill = _with_red_flag(v2_fill(risk_items=[_risk_item()]))
+    html = render_v2_fill(fill)
+    assert "风险事实" in html and "证据与当前值" in html and "影响去向" in html
+    assert "flag-hero-card" in html and "pm-grid" in html
+    assert "黄灯扣分" not in html
+    assert "公司公告" in html
+    assert "1D.RED.RECEIVABLES" in html
+    assert "<!--RISK_REGISTER-->" not in html
+    assert "统一风险登记" in html
+    output = capsys.readouterr().out
+    assert "无独立风险扣分" in output
+    assert "黄灯" not in output
+
+
+def _quality_payload(fill):
+    import copy
+    fields = {"1D": ("f_items", "liquidity", "red_flags", "cash_runway_months"),
+              "1F": ("roic", "wacc", "incremental_roic", "roic_period_months",
+                     "roic_basis", "cash_runway_months")}
+    score_inputs = fill["score_inputs"]
+    return {"as_of": fill["date"], "status": "ok",
+            "profile": {"stock_type": fill["stock_type"],
+                        "industry_profile": fill["industry_profile"],
+                        "growth_tier": fill.get("growth_tier")},
+            "1D": {key: copy.deepcopy(score_inputs["1D"][key]) for key in fields["1D"]
+                   if key in score_inputs["1D"]},
+            "1F": {key: copy.deepcopy(score_inputs["1F"][key]) for key in fields["1F"]
+                   if key in score_inputs["1F"]},
+            "coverage": {}, "sources": [{"type": "tushare", "as_of": fill["date"]}],
+            "meta": {"latest_ann_date": fill["date"].replace("-", "")}}
+
+
+def _prepare_quality_quote(fill, d, payload=None):
+    ref = write_fill({"price": fill["price"], "pe_ttm": fill["pe_ttm"],
+                      "quality_inputs": payload or _quality_payload(fill)}, d, name="_em_quality.json")
+    fill["quote"] = {"source_file": ref, "date": fill["date"]}
+    return fill
+
+
+def test_quality_inputs_two_way_copy_checks():
+    with tempfile.TemporaryDirectory() as d:
+        fill = _prepare_quality_quote(v2_fill(), d)
+        assert "quality_inputs" not in validate_stderr(fill)
+    with tempfile.TemporaryDirectory() as d:
+        fill = v2_fill()
+        payload = _quality_payload(fill)
+        payload["1F"]["incremental_roic"] = 0.20
+        fill = _prepare_quality_quote(fill, d, payload)
+        assert "漏抄" in validate_stderr(fill)
+    with tempfile.TemporaryDirectory() as d:
+        fill = v2_fill()
+        payload = _quality_payload(fill)
+        payload["1F"]["roic"] = None
+        fill = _prepare_quality_quote(fill, d, payload)
+        assert "落盘缺失" in validate_stderr(fill)
+    with tempfile.TemporaryDirectory() as d:
+        fill = v2_fill()
+        payload = _quality_payload(fill)
+        payload["1D"]["liquidity"]["short_cover"] = 99
+        payload["1F"]["roic_basis"] = "normalized"
+        fill = _prepare_quality_quote(fill, d, payload)
+        out = validate_stderr(fill)
+        assert "不一致" in out and "short_cover" in out and "roic_basis" in out
+
+
+def test_quality_inputs_profile_and_future_dates_are_rejected():
+    fill = v2_fill()
+    payload = _quality_payload(fill)
+    fill["industry_profile"] = "pharma_device"
+    with tempfile.TemporaryDirectory() as d:
+        fill = _prepare_quality_quote(fill, d, payload)
+        expect_valueerror(fill, kw="industry_profile")
+    fill = v2_fill()
+    payload = _quality_payload(fill)
+    payload["as_of"] = "2026-10-25"
+    with tempfile.TemporaryDirectory() as d:
+        fill = _prepare_quality_quote(fill, d, payload)
+        expect_valueerror(fill, kw="报告日之后")
+    fill = v2_fill()
+    payload = _quality_payload(fill)
+    payload["meta"]["latest_ann_date"] = "20261025"
+    with tempfile.TemporaryDirectory() as d:
+        fill = _prepare_quality_quote(fill, d, payload)
+        expect_valueerror(fill, kw="报告日之后")
+
+
+def test_missing_quality_inputs_package_warns():
+    fill = v2_fill()
+    with tempfile.TemporaryDirectory() as d:
+        ref = write_fill({"price": fill["price"], "pe_ttm": fill["pe_ttm"]}, d, name="_em_quote.json")
+        fill["quote"] = {"source_file": ref, "date": fill["date"]}
+        out = validate_stderr(fill)
+    assert "quality_inputs" in out and "--quality-v2" in out
+
+
+def test_v2_preflight_rejects_single_quoted_data_dim():
+    fill = v2_fill()
+    fill["l1_html"] = fill["l1_html"].replace('data-dim="1A"', "data-dim='1A'")
+    with tempfile.TemporaryDirectory() as d:
+        path = write_fill(prepare_v2_quote(fill, d), d)
+        try:
+            R._preflight(path)
+        except ValueError as exc:
+            assert "data-dim" in str(exc) and "1A" in str(exc)
+        else:
+            raise AssertionError("预检应拒绝单引号 data-dim，而不是等到正式渲染才失败")
+
+
+def test_risk_rule_id_requires_actual_negative_fact():
+    fill = _with_red_flag(v2_fill(risk_items=[
+        _risk_item(name="盈利为负", rule_id="1D.PROFIT_POSITIVE", evidence="本期净利润为负")]))
+    assert "未实际命中" in _risk_error(fill)
+    fill["score_inputs"]["1D"]["f_items"]["profit_positive"] = False
+    html = R.build_risk_register(fill)
+    assert "盈利为负" in html

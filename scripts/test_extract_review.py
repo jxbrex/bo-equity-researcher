@@ -294,6 +294,19 @@ def test_find_prev_report_legacy_naming():
     print("OK find_prev_report 旧 _ 命名（合并口径后覆盖旧一代报告）")
 
 
+def test_extract_quality_versions_and_legacy_single_track():
+    v2_html = FAKE_REPORT.replace('hero-track quality"', 'hero-track quality" data-quality-version="2"')
+    legacy_html = '<h1>中国神华（601088）</h1><div class="hero-score">综合评分 6.72</div>'
+    with tempfile.TemporaryDirectory() as d:
+        v2 = E.extract(_write(d, "测试股份-600000-7.50-6.5-2026-08-08.html", v2_html))
+        v1 = E.extract(_write(d, "测试股份-600000-7.50-6.5-2026-08-09.html", FAKE_REPORT))
+        legacy = E.extract(_write(d, "中国神华_601088_6.72_2024-08-07.html", legacy_html))
+    assert v2["prev"]["quality"] == 7.5 and v2["prev"]["quality_version"] == 2
+    assert v1["prev"]["quality_version"] == 1
+    assert legacy["prev"]["quality_version"] == "legacy-single-track"
+    assert legacy["prev"]["quality"] is None
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

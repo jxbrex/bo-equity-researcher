@@ -133,6 +133,7 @@ from validate_audit import (
     _check_consensus_np,
     _check_growth_consistency,
     _check_quote_present,
+    _check_quality_inputs,
     _PERIOD_LABEL_KEYS,
     _PERIOD_NUM_KEYS,
     _PERIOD_YOY_KEYS,
@@ -156,6 +157,7 @@ from validate_html import (
     _check_peers_plot_target,
     _check_peers_selection,
     _check_timing_table_cells,
+    _check_v2_counter_evidence,
     _check_dim_blocks,
     _check_internal_codes,
     _check_writing_discipline,
@@ -190,7 +192,7 @@ from validate_charts import (
     _check_earnings_stability)
 
 
-def _validate_content_impl(fill: dict, calc: dict, warns: list) -> None:
+def _validate_content_impl(fill: dict, calc: dict, warns: list, sc: dict = None) -> None:
     """validate_content 的执行主体（拆出是为了硬拒前 flush 告警，见包装函数）。"""
     _check_price_date(fill)
     _check_quote_consistency(fill, warns)
@@ -204,13 +206,14 @@ def _validate_content_impl(fill: dict, calc: dict, warns: list) -> None:
     _check_anchor_blind_fly(fill, warns)   # v5.4.0：无历史分位可对账 → 校验盲飞告警
     _check_chart_fields(fill)
     _check_quote_present(fill, warns)   # v4.11.1（审核 D5）：date ≥ 2026-09-02 缺 quote 拒渲染
+    _check_quality_inputs(fill, warns)  # v2：机械输入双向照抄、profile 与披露日对账
     _check_gap_plot(fill, calc, warns)  # v4.11.1：gap_plot 分布图字段校验（可选字段，缺失不查）
     _check_gap_plot_street_source(fill, warns)  # v5.5.1 F2：street 落盘第二照抄源（软告警）
     _check_gap_history(fill, warns)     # v5.6.0：gap_history 态度变化照抄对账（软告警）
     _check_dupont(fill, warns)          # v5.8.0：dupont 杜邦乘积链照抄对账（软告警）
 
     _check_red_flag_breaker(fill)
-    _check_red_flag_conclusion(fill)  # v5.1.2：红旗 ≥2 项 → 首卡首句存疑句硬门禁
+    _check_red_flag_conclusion(fill, sc)  # v5.1.2：红旗 ≥2 项 → 首卡首句存疑句硬门禁
     _check_thesis_consistency(fill, calc)
     _check_content_floor(fill)
     _check_l4_form(fill, warns)
@@ -225,7 +228,8 @@ def _validate_content_impl(fill: dict, calc: dict, warns: list) -> None:
     _check_hero_cross(fill, warns)        # v5.1.2：Hero 与估值结构化字段互查
     _check_growth_consistency(fill, warns)  # v5.1.2：growth_plot 换算对账
     _check_timing_table_cells(fill, warns)
-    _check_dim_blocks(fill, warns)
+    _check_v2_counter_evidence(fill, sc)
+    _check_dim_blocks(fill, warns, sc)
     _check_internal_codes(fill, warns)
     _check_ch11_binding(fill, warns)      # v5.8.2 表驱动：pe_history/price_history/cycle_stages 挂第 11 章
     _check_writing_discipline(fill, warns)
@@ -253,7 +257,7 @@ def _validate_content_impl(fill: dict, calc: dict, warns: list) -> None:
     _check_period_track(fill, warns)      # v5.0：3 章 period_track（照抄落盘交叉校验/判词四选一/年报期整章消失）
 
 
-def validate_content(fill: dict, calc: dict = None) -> None:
+def validate_content(fill: dict, calc: dict = None, sc: dict = None) -> None:
     """内容级校验（成稿前自动复核，借鉴 equity-research 检查器思路）。
     硬错误（拒渲染）：分数越界、valuation_inputs 缺失、valuation 三情景字段不全、
     fin_trend/growth_plot 必填图字段缺失或结构非法（v4.9）、
@@ -262,9 +266,12 @@ def validate_content(fill: dict, calc: dict = None) -> None:
     calc 为 compute_valuation 结果（thesis 一致性校验用）。
     v4.11.1（热核审计 P2-1）：硬拒前先 flush 已积累告警——否则负 profit/存量 quote 豁免等
     提示会随异常湮灭，模型修 fill 丢上下文。"""
+    if sc is None and fill.get("quality_version") == 2:
+        from scoring import compute_scores
+        sc = compute_scores(fill)
     warns = []
     try:
-        _validate_content_impl(fill, calc, warns)
+        _validate_content_impl(fill, calc, warns, sc)
     except ValueError:
         for w in warns:
             print(f"⚠️ 内容校验: {w}", file=sys.stderr)

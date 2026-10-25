@@ -316,7 +316,8 @@ def fetch_consensus(code: str) -> dict:
                 **_e5_render_ready(detail, aim_detail, hist, tp_sorted)}
     except RateLimitError:
         raise  # v5.8.2 硬停纪律：东财一致预期限流不吞成「无覆盖」，穿透至 main 退 2
-    except Exception:
+    except Exception as e:
+        _C._ts_quiet("E5 一致预期（tushare report_rc）", e)
         d = _em_consensus(code)
         if d:
             d["_src"] = "em"

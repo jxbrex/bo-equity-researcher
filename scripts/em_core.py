@@ -214,9 +214,8 @@ def _ts_quiet(label: str, exc: Exception) -> None:
     """tushare 取数点的统一错误政策（v4.10.3 账本第 8 项，收编原六处成对 except）：
     OSError（网络层）静默走降级；RuntimeError（token 未配置/接口报错）打 ⚠️ 到 stderr
     后同样降级。神华事故教训：RuntimeError 曾被裸 except 整段静默吞掉，白走降级链。
-    调用方固定写 `except (OSError, RuntimeError) as e: _ts_quiet(label, e)`——OSError 与
-    RuntimeError 互不继承，合并捕获与原先两个顺序 except 完全等价；其余异常不在捕获
-    范围内，照旧向上抛，本 helper 不吞任何原本会外溢的异常。"""
+    调用方按各自既有降级策略捕获后调用；本 helper 只按异常类型决定是否打印，
+    不决定调用方的捕获范围，也不吞任何原本会外溢的异常。"""
     if not isinstance(exc, OSError):
         print(f"⚠️ {label}: {exc}", file=sys.stderr)
 

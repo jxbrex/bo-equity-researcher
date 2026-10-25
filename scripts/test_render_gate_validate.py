@@ -593,11 +593,16 @@ def test_sensitivity_coverage_gate():
     small = minimal_fill(segments={"items": [{"name": "A", "rev_pct": 60, "gp_pct": 12},
                                              {"name": "B", "rev_pct": 40, "gp_pct": 9}]})
     R.validate_content(small, R.compute_valuation(small))
-    # v5.5.0 P1：有行缺 gp_pct（摘除 gp_pct 绕行）→ 软告警；不阻断渲染
+    # v5.5.0 P1：有行缺 gp_pct → 软告警；诚实缺失不得建议删行、不得破坏收入合计
     f = _cov_fill()
     f["segments"]["items"][0].pop("gp_pct")
+    f["segments"]["note"] = "该分部公开披露无毛利口径，毛利字段留空"
     out = validate_stderr(f)
     assert "行缺 gp_pct" in out and "绕过覆盖闸" in out, "缺 gp_pct 应软告警"
+    assert "或删该行" not in out, "缺毛利不得建议删除收入占比行"
+    assert all(s in out for s in ("保留该行", "毛利留空", "segments.note")), \
+        f"告警应给出诚实缺失的保留+留空+口径注路径: {out}"
+    assert "收入占比合计" not in out, f"完整收入分母不应触发合计告警: {out}"
     R.validate_content(f, R.compute_valuation(f))
     # 全部行都缺 gp_pct（硬闸无从生效）→ 同样告警、仍不拒
     allno = minimal_fill(segments={"items": [{"name": "A", "rev_pct": 60},

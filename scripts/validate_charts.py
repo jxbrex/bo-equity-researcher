@@ -462,7 +462,8 @@ def _check_sensitivity_units(fill: dict, warns: list) -> None:
 def _big_segments(fill: dict) -> list:
     """segments 大分部（v5.5.0 B4）：gp_pct 可解析且 ≥15 的项 → [(分部名, gp_pct)]。
     gp_pct 缺失/不可解析的项跳过（口径=毛利占比，与 segments 利润口径同源）——
-    缺行名单由 _check_sensitivity_coverage 单独软告警（摘除 gp_pct 等于绕过覆盖闸）。"""
+    缺行名单由 _check_sensitivity_coverage 单独软告警（摘除 gp_pct 可能绕过覆盖闸；
+    公开披露确无毛利口径时保留收入行并留空，不得为消告警删行）。"""
     out = []
     for it in (fill.get("segments") or {}).get("items") or []:
         if not isinstance(it, dict):
@@ -481,15 +482,17 @@ def _check_sensitivity_coverage(fill: dict, warns: list) -> None:
     漏圈实证：小米 61% 毛利池（互联网服务+IoT）无变量、三花汽零 37.5% 被一句话打包、
     格林美第三大利润源无变量（27 份存量 fill 平均只圈 3 个变量）。
     跳过口径：segments 缺失/无大分部 → 硬闸整条跳过；gp_pct 缺失的分部不参与——但**只要
-    segments.items 非空就有行缺 gp_pct，一律软告警**（摘 gp_pct = 绕过覆盖闸，缺行不得静默）。"""
+    segments.items 非空就有行缺 gp_pct，一律软告警**（缺失可能绕过覆盖闸，缺行不得静默；
+    公开披露确无毛利口径时保留收入行并留空，不得为消告警删行）。"""
     seg_items = [it for it in (fill.get("segments") or {}).get("items") or [] if isinstance(it, dict)]
     no_gp = [str(it.get("name") or "").strip() or "（未命名）" for it in seg_items
              if _num(it.get("gp_pct")) is None]
     if no_gp:
         head = "、".join(no_gp[:5]) + ("…" if len(no_gp) > 5 else "")
         warns.append(f"segments 有 {len(no_gp)} 行缺 gp_pct（{head}）：覆盖闸只对 gp_pct 可解析且 "
-                     "≥15 的分部生效——缺 gp_pct 的行等于绕过覆盖闸，请补毛利占比（E6 回填）"
-                     "或删该行（v5.5.0 B4）")
+                     "≥15 的分部生效——缺 gp_pct 可能绕过覆盖闸，请补毛利占比（E6 回填）；"
+                     "若该分部确无公开毛利口径，保留该行、毛利留空，并在 segments.note 写明原因"
+                     "（v5.5.0 B4）")
     big = _big_segments(fill)
     if not big:
         return

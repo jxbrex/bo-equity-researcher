@@ -305,6 +305,26 @@ def test_gap_history_gate():
     expect_valueerror(minimal_fill(gap_history=["junk"]), "gap_history 非对象应拒渲染")
 
 
+def test_gap_history_em_source_note_gate():
+    """v5.10.1：东财降级且无逐份研报时，gap_html 缺省说明不得静默漏写；
+    有说明通过，tushare 成功来源不误报。"""
+    with tempfile.TemporaryDirectory() as d:
+        em_ref = write_fill({"price": 10.0, "pe_ttm": 11.0, "e5_source": "em"},
+                            d, name="em_gh_em.json")
+        q = {"source_file": em_ref, "date": "2026-10-25"}
+        out = validate_stderr(minimal_fill(quote=q))
+        assert "E5 东财降级" in out and "gap_html" in out, \
+            f"东财来源且缺省说明漏写应告警: {out}"
+        note = "<!--GAP--><p>券商态度变化图未生成：东财汇总无逐份研报。</p>"
+        out = validate_stderr(minimal_fill(quote=q, gap_html=note))
+        assert "E5 东财降级" not in out, f"已写缺省说明不应告警: {out}"
+        ts_ref = write_fill({"price": 10.0, "pe_ttm": 11.0, "e5_source": "tushare"},
+                            d, name="em_gh_ts.json")
+        out = validate_stderr(minimal_fill(
+            quote={"source_file": ts_ref, "date": "2026-10-25"}))
+        assert "E5 东财降级" not in out, f"tushare 成功来源不应误报: {out}"
+
+
 def test_gap_history_tp_reports_gate():
     """v5.8.1：tp_reports 反向漏抄告警（宁德 300750 复盘 2026-10-21 实证）——
     落盘有目标价研报清单而 fill 缺 tp_reports 且 rows 无 tp 对 → 告警；

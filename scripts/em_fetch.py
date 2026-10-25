@@ -550,6 +550,8 @@ def _sec_e5(pure: str, is_hk: bool) -> list:
     out = []
     try:
         c = fetch_consensus(pure)
+        if c.get("_src") in ("tushare", "em"):
+            _CAPTURE["e5_source"] = c["_src"]
         if c.get("_src") == "tushare":
             lines = [f"## E5 一致预期（tushare 券商研报，近180天{c['orgs']}家/{c['n_reports']}份）"]
             if not c.get("years"):
@@ -624,7 +626,10 @@ def _sec_e5(pure: str, is_hk: bool) -> list:
                        f"{c.get('YEAR3')}{c.get('YEAR_MARK3')}={c.get('EPS3') and round(c['EPS3'], 2)}\n"
                        + ("（当年 EPS 均值已按 ×总股本 换算落盘 consensus_np——第 3 章完成度分母照抄源）\n"
                           if "consensus_eps" in _CAPTURE else "")
-                       + f"行业: {c.get('INDUSTRY_BOARD')} | 概念: {(c.get('CONCEPTINDEX_BOARD') or '')[:80]}\n")
+                       + f"行业: {c.get('INDUSTRY_BOARD')} | 概念: {(c.get('CONCEPTINDEX_BOARD') or '')[:80]}\n"
+                       + "[降级：tushare report_rc 未取到逐份研报，已使用东财汇总口径；"
+                         "无逐份研报可生成券商态度变化图，gap_history 不填；"
+                         "gap_html 必须写明该图未生成及降级原因]\n")
         elif is_hk:
             out.append("## E5 一致预期\n[港股无覆盖（tushare report_rc/东财均空），预期差按档位C处理]\n")
     except RateLimitError:

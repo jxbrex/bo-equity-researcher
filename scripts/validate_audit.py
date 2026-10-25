@@ -304,10 +304,19 @@ def _check_gap_history(fill: dict, warns: list) -> None:
     ① 结构：rows 元素须为 dict、org 非空、np 对/tp 对至少居其一（无效行渲染端静默剔除，
     此处提示等于白填）；② 照抄对账：fill 行须与 quote.source_file 落盘的 gap_history.rows
     同机构同值（容差：相对 1%，下限 0.005，同 street 款）——fill 有行而落盘无 gap_history
-    → 手填嫌疑告警（提示重跑 em_fetch --out）；③ 行内 yr 不一致（混预测年度）→ 提示。
+    → 手填嫌疑告警（提示重跑 em_fetch --out）；③ 行内 yr 不一致（混预测年度）→ 提示；
+    ④ 东财来源且 gap_history 缺失时，gap_html 必须有态度变化图缺省说明（软告警）。
     数值解析用 scoring._num（全仓对账同一尺子，v5.6.0 审核 #3）。"""
     gh = fill.get("gap_history")
     if gh is None:
+        if (_quote_ref(fill) or {}).get("e5_source") == "em":
+            gap_html = fill.get("gap_html") or ""
+            has_note = ("券商态度变化" in gap_html
+                        and any(s in gap_html for s in ("未生成", "不生成", "无法生成"))
+                        and ("东财" in gap_html or "report_rc" in gap_html))
+            if not has_note:
+                warns.append("E5 东财降级：券商态度变化图无逐份研报数据源，gap_html 未写明"
+                             "缺省说明——请标注「券商态度变化图未生成」及原因")
         return
     if not isinstance(gh, dict):
         raise ValueError(f'gap_history 字段需为对象（{{"rows": [...]}}），实际: {type(gh).__name__}')

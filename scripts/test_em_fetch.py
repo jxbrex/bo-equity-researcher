@@ -1120,6 +1120,8 @@ def test_27_tp_reports_hint():
     gh = em._CAPTURE.get("gap_history") or {}
     assert gh.get("tp_reports") == tp_reps, f"落盘应原样带 tp_reports: {gh}"
     assert gh.get("rows") == hist, f"落盘应原样带 rows: {gh}"
+    assert "东财汇总" not in out and "[降级：" not in out, "tushare 成功路径不得出现东财降级提示"
+    assert em._CAPTURE.get("e5_source") == "tushare", "成功来源标记须随 --out 捕获"
     # 清单行 None（条目全缺 tp 的清单形态）→ 不出行，但 tp_reports 仍落盘
     c2 = dict(c, tp_reports_line=None)
     try:
@@ -1177,6 +1179,50 @@ def test_27_tp_reports_hint():
         f"实际 {c4['tp_reports_line']}"
     print("27. E5 目标价研报清单提示行 通过")
 
+
+
+def test_32_e5_em_fallback_visible():
+    """32. E5 东财降级必须可见：report_rc 错误进日志，摘要说明无逐份研报与报告写法。"""
+    import contextlib
+    import io
+    import em_owner
+
+    em_row = {
+        "RATING_ORG_NUM": 20, "RATING_BUY_NUM": 17, "RATING_ADD_NUM": 3,
+        "RATING_NEUTRAL_NUM": 0, "DEC_AIMPRICEMIN": 51.0, "DEC_AIMPRICEMAX": 59.78,
+        "YEAR1": 2025, "YEAR_MARK1": "A", "EPS1": 3.0,
+        "YEAR2": 2026, "YEAR_MARK2": "E", "EPS2": 3.1,
+        "YEAR3": 2027, "YEAR_MARK3": "E", "EPS3": 3.2,
+        "INDUSTRY_BOARD": "煤炭", "CONCEPTINDEX_BOARD": "",
+    }
+    orig_ts, orig_em = em_core.ts_call, em_owner._em_consensus
+    orig_cap = dict(em._CAPTURE)
+    err = io.StringIO()
+
+    def _quota(*args, **kwargs):
+        raise RuntimeError("tushare report_rc: 小时额度耗尽")
+
+    try:
+        em_core.ts_call = _quota
+        em_owner._em_consensus = lambda code: dict(em_row)
+        em._CAPTURE.clear()
+        with contextlib.redirect_stderr(err):
+            out = "\n".join(em._sec_e5("601088", False))
+        captured = dict(em._CAPTURE)
+    finally:
+        em_core.ts_call = orig_ts
+        em_owner._em_consensus = orig_em
+        em._CAPTURE.clear()
+        em._CAPTURE.update(orig_cap)
+
+    log = err.getvalue()
+    assert all(s in log for s in ("⚠️", "report_rc", "小时额度耗尽")), \
+        f"report_rc 原始错误应进 stderr: {log}"
+    assert all(s in out for s in ("东财汇总", "无逐份研报", "gap_history", "gap_html", "未生成")), \
+        f"东财降级摘要应说明图缺省原因与报告写法: {out}"
+    assert "gap_history" not in captured, "东财汇总不得虚构券商态度变化数据"
+    assert captured.get("e5_source") == "em", "东财来源标记须随 --out 捕获供报告缺省校验"
+    print("32. E5 东财降级可见性 通过")
 
 
 if __name__ == "__main__":
@@ -1295,7 +1341,25 @@ def test_28_rate_limit_passthrough():
         em_core.get = _orig_get
         em_market._HK_DAILY_CACHE.clear()
         em_market._HK_DAILY_CACHE.update(_orig_hk)
-    print("28. 限流穿透（段级/summarize 边界/数据层/港股东财分支）通过")
+    # ⑥ E5：report_rc 失败后东财一致预期 429，必须穿透 _sec_e5（真实调用链表征测试）
+    import em_owner
+    _orig_ts_e5, _orig_em_e5 = em_core.ts_call, em_owner._em_consensus
+
+    def _ts_e5_error(*args, **kwargs):
+        raise RuntimeError("tushare report_rc: mock 小时额度耗尽")
+
+    em_core.ts_call = _ts_e5_error
+    em_owner._em_consensus = _boom
+    try:
+        try:
+            em._sec_e5("601088", False)
+            raise AssertionError("E5 东财一致预期 429 不应被吞成无覆盖")
+        except em.RateLimitError:
+            pass
+    finally:
+        em_core.ts_call = _orig_ts_e5
+        em_owner._em_consensus = _orig_em_e5
+    print("28. 限流穿透（段级/summarize 边界/数据层/港股东财分支/E5）通过")
 
 
 

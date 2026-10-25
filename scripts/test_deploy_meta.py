@@ -24,6 +24,18 @@ import pytest
 DEPLOY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "deploy.ps1")
 
 
+def test_bo_identity_matches_deploy_target():
+    root = os.path.dirname(os.path.dirname(DEPLOY))
+    with open(os.path.join(root, "SKILL.md"), encoding="utf-8-sig") as f:
+        skill = f.read()
+    with open(DEPLOY, encoding="utf-8-sig") as f:
+        deploy = f.read()
+    assert re.search(r"(?m)^name: bo-equity-researcher$", skill), \
+        "SKILL frontmatter 应使用内部 ID bo-equity-researcher"
+    assert r".agents\skills\bo-equity-researcher" in deploy, \
+        "部署目标应与内部 ID bo-equity-researcher 一致"
+
+
 def test_deploy_ps1_has_utf8_bom():
     with open(DEPLOY, "rb") as f:
         head = f.read(3)
@@ -68,3 +80,68 @@ def test_deploy_doclines_guard_counts_bad_lines():
     assert r.returncode == 0, f"Test-DocLines 临时脚本失败: {out}"
     assert "超长行 1600 字符" in out, f"超长行明细未输出:\n{out}"
     assert "文档超长行 1 处" in out, f"bad>0 汇总未输出（闸被改哑？）:\n{out}"
+
+
+def _run_move_legacy(legacy, backup):
+    ps = shutil.which("powershell") or shutil.which("pwsh")
+    if not ps:
+        pytest.skip("powershell 不可用，跳过 Move-LegacyDeployment 行为用例")
+    with open(DEPLOY, encoding="utf-8-sig") as f:
+        src = f.read()
+    m = re.search(r"function Move-LegacyDeployment \{.*?\n\}", src, re.S)
+    assert m, "deploy.ps1 缺 Move-LegacyDeployment 定义"
+    script = (f"$LegacyDir = {json.dumps(legacy)}\n"
+              f"$BackupDir = {json.dumps(backup)}\n"
+              "$ErrorActionPreference = 'Stop'\n"
+              + m.group(0)
+              + "\nMove-LegacyDeployment -LegacyDir $LegacyDir -BackupDir $BackupDir\n")
+    with tempfile.TemporaryDirectory() as d:
+        sp = os.path.join(d, "_move_legacy.ps1")
+        with open(sp, "w", encoding="utf-8-sig", newline="") as f:
+            f.write(script)
+        return subprocess.run([ps, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", sp],
+                              capture_output=True, text=True, timeout=120)
+
+
+def test_move_legacy_deployment_preserves_copy():
+    with tempfile.TemporaryDirectory() as d:
+        legacy = os.path.join(d, "legacy")
+        backup = os.path.join(d, "retired", "legacy-backup")
+        os.makedirs(legacy)
+        marker = os.path.join(legacy, "marker.txt")
+        moved_marker = os.path.join(backup, "marker.txt")
+        with open(marker, "w", encoding="utf-8") as f:
+            f.write("旧部署标记")
+        os.chmod(marker, 0o444)
+        try:
+            r = _run_move_legacy(legacy, backup)
+            out = r.stdout + r.stderr
+            assert r.returncode == 0, f"只读旧目录迁移失败: {out}"
+            assert not os.path.exists(legacy), "迁移后旧目录仍存在"
+            with open(moved_marker, encoding="utf-8") as f:
+                assert f.read() == "旧部署标记", "备份中的标记文件内容发生变化"
+        finally:
+            for path in (marker, moved_marker):
+                if os.path.exists(path):
+                    os.chmod(path, 0o666)
+
+
+def test_move_legacy_deployment_refuses_overwrite():
+    with tempfile.TemporaryDirectory() as d:
+        legacy = os.path.join(d, "legacy")
+        backup = os.path.join(d, "retired", "legacy-backup")
+        os.makedirs(legacy)
+        os.makedirs(backup)
+        legacy_marker = os.path.join(legacy, "marker.txt")
+        backup_marker = os.path.join(backup, "marker.txt")
+        with open(legacy_marker, "w", encoding="utf-8") as f:
+            f.write("旧部署标记")
+        with open(backup_marker, "w", encoding="utf-8") as f:
+            f.write("既有备份标记")
+        r = _run_move_legacy(legacy, backup)
+        out = r.stdout + r.stderr
+        assert r.returncode != 0, "备份已存在时迁移必须失败"
+        with open(legacy_marker, encoding="utf-8") as f:
+            assert f.read() == "旧部署标记", "拒绝覆盖后旧目录内容发生变化"
+        with open(backup_marker, encoding="utf-8") as f:
+            assert f.read() == "既有备份标记", "既有备份被覆盖或改写"

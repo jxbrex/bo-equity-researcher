@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-em_misc.py — 预告快报 / 治理 / 披露杂项取数族（stock-deep-analysis skill 取数分块之一，v4.10.3 自 em_data 拆分）
+em_misc.py — 预告快报 / 治理 / 披露杂项取数族（Bo-EquityResearcher skill 取数分块之一，v4.10.3 自 em_data 拆分）
 
 职责：业绩预告与快报（tushare forecast/express）、治理包（质押统计 / 增减持 / 回购）、下一次
 财报披露计划。盈利质量红旗与审计意见归 em_finance.py（不在本块）。

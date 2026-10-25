@@ -6,7 +6,9 @@ param([switch]$Go)
 
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
-$dest = Join-Path $env:USERPROFILE '.agents\skills\stock-deep-analysis'
+$dest = Join-Path $env:USERPROFILE '.agents\skills\bo-equity-researcher'
+$legacy = Join-Path $env:USERPROFILE '.agents\skills\stock-deep-analysis'
+$legacyBackup = Join-Path $env:USERPROFILE '.agents\retired-skills\stock-deep-analysis-pre-bo-equity-researcher'
 # /XD 目录排除：golden=快照测试基线（仅 test_golden.py 消费，运行时零依赖）
 $xd = @('.git', '__pycache__', '.pytest_cache', 'artifacts', 'handoffs', 'tasks', 'golden')
 # /XF 文件排除：测试与维护侧文件（test_*/conftest=pytest 侧；CHANGELOG/README/AGENTS/deploy=仓库维护侧）
@@ -33,9 +35,35 @@ function Show-ExtraLines {
         $hit | ForEach-Object { Write-Host "  $($_.Line.Trim())" }
     }
 }
+
+function Move-LegacyDeployment {
+    param(
+        [string]$LegacyDir,
+        [string]$BackupDir
+    )
+    if (-not (Test-Path -LiteralPath $LegacyDir -PathType Container)) {
+        Write-Host '未发现旧部署目录，无需退休。'
+        return
+    }
+    if (Test-Path -LiteralPath $BackupDir) {
+        throw "备份目录已存在，拒绝覆盖：$BackupDir"
+    }
+    $backupParent = Split-Path -Parent $BackupDir
+    if (-not (Test-Path -LiteralPath $backupParent -PathType Container)) {
+        New-Item -ItemType Directory -Path $backupParent -Force | Out-Null
+    }
+    Move-Item -LiteralPath $LegacyDir -Destination $BackupDir -ErrorAction Stop
+    Write-Host "旧部署目录已迁入备份：$BackupDir"
+}
 Test-DocLines
 
 if (-not $Go) {
+    if (Test-Path -LiteralPath $legacy -PathType Container) {
+        Write-Host "旧部署目录将在新目录部署成功后迁移到：$legacyBackup"
+        if (Test-Path -LiteralPath $legacyBackup) {
+            Write-Host '注意：备份目录已存在，正式部署将拒绝覆盖且不会退休旧目录。'
+        }
+    }
     $out = robocopy $repo $dest /MIR /L /XD $xd /XF $xf /NJH
     $rc = $LASTEXITCODE
     Show-ExtraLines $out
@@ -52,5 +80,12 @@ $rc = $LASTEXITCODE
 Show-ExtraLines $out
 if ($rc -ge 8) { Write-Host "robocopy 部署失败 (code $rc)，只读未恢复"; exit 1 }
 attrib +R "$dest\*" /S /D | Out-Null
-Write-Host '部署完成，部署目录已恢复只读。'
+try {
+    Move-LegacyDeployment -LegacyDir $legacy -BackupDir $legacyBackup
+}
+catch {
+    Write-Host "新目录已部署、旧目录尚未退休：$($_.Exception.Message)"
+    exit 1
+}
+Write-Host '部署完成，新部署目录已恢复只读。'
 exit 0

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-em_finance.py — E3 财务取数族（stock-deep-analysis skill 取数分块之一，v4.10.3 自 em_data 拆分）
+em_finance.py — E3 财务取数族（Bo-EquityResearcher skill 取数分块之一，v4.10.3 自 em_data 拆分）
 
 职责：年报/季报三表与财务指标（tushare income/cashflow/balancesheet/fina_indicator 优先，东财
 F10 兜底）、港股年报、审计意见、无风险利率、TTM 股息率、有息负债，以及盈利质量红旗与

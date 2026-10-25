@@ -1,7 +1,7 @@
-# stock-deep-analysis 仓库守则
+# Bo-EquityResearcher 仓库守则
 
-本仓库是 stock-deep-analysis skill 的唯一源真相。已部署的运行副本位于
-`C:\Users\rexji\.agents\skills\stock-deep-analysis`，它是只读的输出端：
+本仓库是 Bo-EquityResearcher（内部 ID：`bo-equity-researcher`）skill 的唯一源真相。已部署的运行副本位于
+`C:\Users\rexji\.agents\skills\bo-equity-researcher`，它是只读的输出端：
 任何会话中都不得直接读写、编辑、删除其中的文件（该目录已设只读属性，
 不要试图解除——`scripts/deploy.ps1` 会在部署时自行处理）。
 

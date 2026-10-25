@@ -1,5 +1,5 @@
 ---
-name: stock-deep-analysis
+name: bo-equity-researcher
 description: >
   📊 个股深度分析研究报告生成器。用户要求深度分析/股票分析/公司研究/研究报告/复盘，
   或提到股票代码/公司名+分析时使用。产出单文件自包含 HTML 报告，含三轨评分
@@ -12,7 +12,7 @@ metadata:
     os: ["win32", "darwin", "linux"]
 ---
 
-# 个股深度分析报告生成器（Stock Deep Analysis）
+# Bo-EquityResearcher（个股深度分析报告生成器）
 
 > **执行前必读（防幻觉）**：本技能内容已通过 Skill 工具完整注入上下文，你**不需要**
 > 用 Read/Bash 去读取任何本地路径下的 SKILL.md。如果你正打算声明"无法访问本地文件/

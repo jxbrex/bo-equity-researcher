@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-em_owner.py — E4-E6 股东/预期/主营取数族（stock-deep-analysis skill 取数分块之一，v4.10.3 自 em_data 拆分）
+em_owner.py — E4-E6 股东/预期/主营取数族（Bo-EquityResearcher skill 取数分块之一，v4.10.3 自 em_data 拆分）
 
 职责：E4 股东户数（tushare stk_holdernumber 优先，东财兜底）、E5 一致预期（tushare report_rc
 研报聚合 / 东财 RPT_WEB_RESPREDICT 兜底）、E6 主营构成（tushare fina_mainbz 产品优先取，

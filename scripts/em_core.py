@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-em_core.py — 传输/缓存/映射/格式化核心层（stock-deep-analysis skill 专用，v4.10.3 自 em_fetch 拆出）
+em_core.py — 传输/缓存/映射/格式化核心层（Bo-EquityResearcher skill 专用，v4.10.3 自 em_fetch 拆出）
 
 职责（以下能力的唯一持有者）：
 - 传输：tushare ts_call（进程内缓存 + per-key 锁）与东财 get（curl 优先 / urllib 兜底）；

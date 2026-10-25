@@ -1,4 +1,4 @@
-# stock-deep-analysis — 个股深度分析技能
+# Bo-EquityResearcher — 个股深度分析技能
 
 基于「质量 × 估值 × 时机」三轨评分框架的个股深度分析技能（Kimi Code / ZCode 通用）。
 一键取数、脚本拼装，产出单文件自包含 HTML 研究报告。
@@ -154,7 +154,7 @@ F 式九项支撑 1D 趋势档，G-Score 只作成长补充检查，不另起评
 
 ### 安装
 
-将 `stock-deep-analysis/` 目录放入技能目录：
+将 `bo-equity-researcher/` 目录放入技能目录：
 
 - 用户级：`~/.agents/skills/` 或 `~/.zcode/skills/`
 - 项目级：`<project>/.agents/skills/`
@@ -213,7 +213,7 @@ python "<技能目录>/scripts/monthly_checkup.py"     # 月度体检：到期�
 ## 目录结构
 
 ```
-stock-deep-analysis/
+bo-equity-researcher/
 ├── SKILL.md                    # 技能入口：工作流骨架 + 硬规则 + 分型表 + 参考文件索引
 ├── CHANGELOG.md                # 规则典故档案（每条规则的事故来历）+ 版本历史
 ├── references/

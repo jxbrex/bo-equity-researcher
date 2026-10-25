@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-em_market.py — 行情 / 月K 取数族（stock-deep-analysis skill 取数分块之一，v4.10.3 自 em_data 拆分）
+em_market.py — 行情 / 月K 取数族（Bo-EquityResearcher skill 取数分块之一，v4.10.3 自 em_data 拆分）
 
 职责：E1 行情（tushare daily_basic 优先、东财 push2 兜底）、E2 月线（tushare 前复权 / 港股日线
 聚合，东财 kline 兜底）、PE/PB 历史分位带、时机素材（MA60/MA120/52 周高低）。进程内日线序列

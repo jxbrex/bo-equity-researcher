@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-em_fetch.py — 批量取数脚本（stock-deep-analysis skill 专用，v4.8.3 起拆分为多模块）
+em_fetch.py — 批量取数脚本（Bo-EquityResearcher skill 专用，v4.8.3 起拆分为多模块）
 
 模块分工：
     em_fetch.py   宿主：E7 定性站内搜索与输出组装（search_e7/_sec_*/summarize/main/CLI）。

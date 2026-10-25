@@ -202,6 +202,21 @@
 
 ## 版本历史
 
+### V0.9.0（2026-10-26）— Bo-EquityResearcher 更名与旧部署安全退休
+
+> 由 v5.10.1 重置发布编号，不是评分口径回退。九维评分、风险登记、估值、时机及
+> `quality_version: 2` 均保持不变；旧 v5.x 版本历史与旧报告继续保留。
+
+- **身份统一**：对外品牌改为 `Bo-EquityResearcher`，SKILL frontmatter、部署目录和调用 ID
+  改为 `bo-equity-researcher`；README、AGENTS 与当前模块描述同步，本地仓库名和报告目录不改。
+  `RENDERER_VERSION` 由 v5.10.1 调整为 v0.9.0。
+- **旧部署安全退休**：部署脚本新增 `Move-LegacyDeployment`，正式部署先同步新目录并恢复只读，
+  再把旧目录移至 `~/.agents/retired-skills/stock-deep-analysis-pre-bo-equity-researcher`；
+  备份已存在则拒绝覆盖，迁移失败不得报告完全成功。预览只报告迁移计划，不读取旧目录内容。
+- **验证**：身份、渲染与 golden 定向 23 项通过；部署守卫与迁移 6 项通过；全套 **466 passed**，
+  golden 12 项无意外差异。真实旧报告 `宝丰能源-600989-6.32-8.8-复盘-2026-10-23.html`
+  仍可由 `extract_review --find` 命中并进入回测模式。1.0 整案验收与姊妹 skill 迁移不在本版范围。
+
 ### V5.10.1（2026-10-25）— 业务构成缺毛利口径与 E5 降级可见性修复
 
 > 缘起：东方财富业务构成告警把“缺 gp_pct”导向删行，剩余收入占比仅 21.7%；中国神华

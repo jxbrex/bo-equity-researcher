@@ -247,6 +247,8 @@ def test_07_disk_cache():
 
     _net = {"n": 0}
     _orig_open = em_core.urllib.request.urlopen
+    _orig_token = em_core._tushare_token
+    em_core._tushare_token = lambda: "test-token"
     em_core.urllib.request.urlopen = lambda *a, **k: (_net.__setitem__("n", _net["n"] + 1),
                                                  _Resp({"code": 0, "data": {"fields": ["a"],
                                                                             "items": [[1]]}}))[1]
@@ -275,6 +277,7 @@ def test_07_disk_cache():
         assert _net["n"] == 3, "NO_CACHE 旁路必须强制走网络"
     finally:
         em_core.urllib.request.urlopen = _orig_open
+        em_core._tushare_token = _orig_token
         em_core._CACHE_DIR, em_core._NO_CACHE = _orig_dir, _orig_no
         em_core._TS_CACHE.clear()
     print("7. 磁盘缓存（命中 / TTL 过期重取 / NO_CACHE 旁路）通过")
@@ -565,8 +568,8 @@ def test_15_e4_empty_hints():
             f"A股全空应有降级提示，实际：{out!r}"
         em_fetch.fetch_holders = lambda code: [
             {"END_DATE": "2026-06-30", "HOLDER_NUM": 100, "HOLDER_NUM_RATIO": None}]
-        em_fetch.fetch_holders_quarterly = staticmethod(lambda code: [
-            {"END_DATE": "2026-06-30", "HOLDER_NUM": 100, "HOLDER_NUM_RATIO": None}])
+        em_fetch.fetch_holders_quarterly = lambda code: [
+            {"END_DATE": "2026-06-30", "HOLDER_NUM": 100, "HOLDER_NUM_RATIO": None}]
         out = "\n".join(em_fetch._sec_e4("600000", False))
         assert "季度序列不足 3 期" in out, f"季度序列 <3 期应提示，实际：{out!r}"
     finally:

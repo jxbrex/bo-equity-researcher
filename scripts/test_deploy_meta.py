@@ -69,13 +69,14 @@ def test_deploy_doclines_guard_counts_bad_lines():
         os.makedirs(os.path.join(d, "references"))
         with open(os.path.join(d, "references", "bad.md"), "w", encoding="utf-8") as f:
             f.write("x" * 1600 + "\n")   # 超 1500 字符闸值一行
-        script = f"$repo = {json.dumps(d)}\n" + m.group(0) + "\nTest-DocLines\n"
+        script = ("[Console]::OutputEncoding = [System.Text.Encoding]::UTF8\n"
+                  + f"$repo = {json.dumps(d)}\n" + m.group(0) + "\nTest-DocLines\n")
         sp = os.path.join(d, "_t.ps1")
         # 必须带 BOM 落盘：PS 5.1 对无 BOM 中文 .ps1 按 ANSI 解码 → ParserError（同 BOM 断言）
         with open(sp, "w", encoding="utf-8-sig", newline="") as f:
             f.write(script)
         r = subprocess.run([ps, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", sp],
-                           capture_output=True, text=True, timeout=120)
+                           capture_output=True, text=True, encoding="utf-8", timeout=120)
     out = r.stdout + r.stderr
     assert r.returncode == 0, f"Test-DocLines 临时脚本失败: {out}"
     assert "超长行 1600 字符" in out, f"超长行明细未输出:\n{out}"
@@ -90,7 +91,8 @@ def _run_move_legacy(legacy, backup):
         src = f.read()
     m = re.search(r"function Move-LegacyDeployment \{.*?\n\}", src, re.S)
     assert m, "deploy.ps1 缺 Move-LegacyDeployment 定义"
-    script = (f"$LegacyDir = {json.dumps(legacy)}\n"
+    script = ("[Console]::OutputEncoding = [System.Text.Encoding]::UTF8\n"
+              + f"$LegacyDir = {json.dumps(legacy)}\n"
               f"$BackupDir = {json.dumps(backup)}\n"
               "$ErrorActionPreference = 'Stop'\n"
               + m.group(0)
@@ -100,7 +102,7 @@ def _run_move_legacy(legacy, backup):
         with open(sp, "w", encoding="utf-8-sig", newline="") as f:
             f.write(script)
         return subprocess.run([ps, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", sp],
-                              capture_output=True, text=True, timeout=120)
+                              capture_output=True, text=True, encoding="utf-8", timeout=120)
 
 
 def test_move_legacy_deployment_preserves_copy():

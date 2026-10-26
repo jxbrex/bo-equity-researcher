@@ -161,3 +161,17 @@ def test_scalar_placeholders_escaped():
     """P0-3：15 个标量占位键统一 _esc——next_review 带 < 渲染后 HTML 含 &lt; 不含裸 <。"""
     html = render_fill(minimal_fill(next_review="2026-11-27<"))
     assert "2026-11-27&lt;" in html and "2026-11-27<" not in html
+
+
+def test_soft_warnings_are_visible_in_final_html():
+    html = render_fill(minimal_fill())
+    assert "口径与复核限制" in html and "drivers 字段未填" in html
+    assert R._build_audit_html([]) == "", "无软告警时不应生成限制区"
+
+
+def test_timing_copy_does_not_claim_position_adjustment():
+    html = render_fill(minimal_fill())
+    assert "微调 ±1 档" not in html
+    assert "时机分 5.00 微调" not in html
+    assert '时机分 <span class="tv">5.00</span> · 独立参考，不调节仓位' in html
+    assert "时机分 5.00（独立参考）" in html

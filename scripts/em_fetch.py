@@ -24,7 +24,7 @@ tushare 不可用时自动回落东财野生端点（curl 传输，防 TLS 指�
 
 用法:
     python em_fetch.py 600989                    # 目标公司全量取数
-    python em_fetch.py 600989 --peers=600309,002001   # 目标 + 可比公司
+    python em_fetch.py 600989 --peers=600309,002001,600426   # 目标 + ≥3 家可比公司
     python em_fetch.py 600989 --kline-years=5    # 月K线回溯年数（默认5）
     python em_fetch.py 600989 --search="收购,减持,新华三"  # E7 定性站内搜索（可多关键词，逗号分隔）
     python em_fetch.py 600989 --out=_em_600989_quote.json  # E1 源头数字落盘（fill.quote 防伪引用）
@@ -142,7 +142,7 @@ def search_e7(keyword: str) -> dict:
 
 # ---------------- 汇总输出 ----------------
 
-def _sec_e1(secid: str, is_hk: bool, pure: str) -> list:
+def _sec_e1(secid: str, is_hk: bool, pure: str, monthly_rows=None) -> list:
     """E1 行情估值段：报价、PE/PB 带、披露计划、无风险利率、TTM股息率。"""
     out = []
     try:
@@ -204,13 +204,27 @@ def _sec_e1(secid: str, is_hk: bool, pure: str) -> list:
         # 时机分素材（v4.8）：现价/MA60/MA120/52周高低出自日线序列，随 --out 落盘，
         # fill 时机判定小表的技术面信号一律取自本行，禁止手估（神华假 MA60 同源修复）；
         # 月收序列不在此重复——归 E2 月线输出（月度收盘/月末PE，price_history 的 pe 字段照抄 E2）
-        tm = fetch_timing_material(pure, is_hk)
+        tm = fetch_timing_material(pure, is_hk, monthly_rows)
         if tm:
             _CAPTURE["timing"] = tm
             out.append(f"时机素材: 现价{tm['price']} | MA60 {tm.get('ma60')} / "
                        f"MA120 {tm.get('ma120') or '—'} | 52周高低 {tm['high_52w']}/{tm['low_52w']}"
                        f"（{tm['n']}个交易日，日线序列计算——技术面信号一律取自本行，禁止手估；"
                        f"月收序列见 E2，勿在本行重建口径）\n")
+            tech = tm["technical"]
+            macd = tech["macd"]
+            show = lambda value, suffix="": "数据不足" if value is None else f"{value}{suffix}"
+            out.append(f"技术事实: RSI14 {show(tech['rsi14'])} | ATR14% {show(tech['atr14_pct'], '%')} | "
+                       f"MACD(DIF/DEA/柱×2) {show(macd['dif'])}/{show(macd['dea'])}/{show(macd['hist'])} | "
+                       f"20日量比 {show(tech['volume_ratio_20'], '×')} | "
+                       f"MA60/120的20日斜率 {show(tech['ma60_slope_20d_pct'], '%')}/"
+                       f"{show(tech['ma120_slope_20d_pct'], '%')} | "
+                       f"52周位置 {show(tech['position_52w_pct'], '%')}（只作事实，不进评分）\n")
+            levels = tm.get("consensus_levels")
+            if levels:
+                out.append(f"近3年历史价位: 月末收盘高/低 {levels['close_high']}/{levels['close_low']} | "
+                           f"盘中高/低 {show(levels['intraday_high'])}/{show(levels['intraday_low'])}"
+                           f"（与估值三情景并列；非券商目标价，两种口径不混用）\n")
         else:
             out.append("时机素材: [未获取到（日线序列失败或不足60个交易日），"
                        "技术面信号须注明手工口径与来源；月收序列仍以 E2 月线输出为准]\n")
@@ -414,13 +428,13 @@ def _sec_quality(pure: str, annual: list) -> list:
     return out
 
 
-def _sec_e2(secid: str, years: int, is_hk: bool) -> list:
+def _sec_e2(secid: str, years: int, is_hk: bool, monthly_rows=None) -> list:
     """E2 月线段：区间、最低/最高/最新、近12月收盘/月末PE(TTM)序列。
     v4.11.0：增全序列行（天齐 09-13 实证——近12月之外拿不到月末 PE，price_history 只能
     填近一年且过半缺 PE，图降级单线；全序列约 2KB，模型照抄即可填满 5 年窗口）。"""
     out = []
     try:
-        kl = fetch_kline_monthly(secid, years, is_hk)
+        kl = monthly_rows if monthly_rows is not None else fetch_kline_monthly(secid, years, is_hk)
         if kl:
             closes = [k["close"] for k in kl]
             # v4.11.0：全序列带 OHLC（季K 蜡烛四值来源）：YYYY-MM=开,高,低,收[/月末PE]
@@ -724,14 +738,15 @@ def summarize(code: str, years: int, searches: list = None) -> str:
     mkt = "港股" if is_hk else "A股"
     out = [f"# {pure} 数据摘要（{mkt}）\n"]
 
-    # E1 并入并发池（v4.8.3 评估）：原「E1 先跑供 K 线缩放校准」的理由不成立——E2 东财兜底
-    # _em_kline_monthly 在函数内自调 fetch_quote 取价校准，不依赖 E1 先行；_CAPTURE 仅
-    # _sec_e1 写入、main 在线程池 join（with 块退出）后才读，无时序竞态；map 保序使 E1 输出
-    # 仍居首。E1 入池后其串行的 6 个取数与其余章节并行，缩短整段等待；同冷键并发由
-    # ts_call per-key 锁兜底（quote 先拉 430 天 daily、timing 同 E1 job 内串行复用不受影响）。
-    # 唯一新增并发面：tushare 全失败降级东财时 E2 校准的 fetch_quote 与 E1 东财 quote 同 URL，
-    # 罕见且 get 有 2h 磁盘缓存兜底，可接受。
-    jobs = [lambda: _sec_e1(secid, is_hk, pure)]
+    # 同一月线对象供 E1 三年区间与 E2 图表，禁止各发一次请求；失败保留各节原有降级。
+    # E1 内部 quote/timing 仍共用日线；其余章节并发与 map 保序不变。
+    try:
+        monthly_rows = fetch_kline_monthly(secid, years, is_hk)
+    except RateLimitError:
+        raise
+    except Exception:
+        monthly_rows = None
+    jobs = [lambda: _sec_e1(secid, is_hk, pure, monthly_rows)]
     if is_hk:
         jobs.append(lambda: _sec_e3_hk(pure))
     else:
@@ -739,7 +754,7 @@ def summarize(code: str, years: int, searches: list = None) -> str:
             e3_out, annual = _sec_e3(pure, secucode)
             return e3_out + _sec_quality(pure, annual)
         jobs.append(_e3_and_quality)
-    jobs.append(lambda: _sec_e2(secid, years, is_hk))
+    jobs.append(lambda: _sec_e2(secid, years, is_hk, monthly_rows))
     jobs.append(lambda: _sec_e4(pure, is_hk))
     if not is_hk:
         jobs.append(lambda: _sec_forecast(pure))
@@ -838,6 +853,27 @@ def main():
             os.replace(_tmp_out, opts["out"])
             print(f"[E1 已落盘] {opts['out']}（fill 的 quote.source_file 引用此文件）",
                   file=sys.stderr)
+            timing = _CAPTURE.get("timing")
+            if timing:
+                evidence = {
+                    "code": str(_CAPTURE.get("code") or args[0]).split(".")[0],
+                    "date": _CAPTURE["fetched_at"],
+                    "technical": timing.get("technical"),
+                    "consensus_levels": timing.get("consensus_levels"),
+                    "chips": {"average_cost": None, "profit_ratio": None},
+                    "capital": {"main_net_inflow": None, "southbound": None, "margin": None},
+                    "sources": {"technical": "em_fetch.py 同源日线",
+                                "consensus_levels": "em_fetch.py 同源月线"},
+                }
+                evidence_path = os.path.join(
+                    os.path.dirname(opts["out"]) or ".",
+                    f"_timing_{evidence['code']}_{evidence['date']}.json")
+                evidence_tmp = f"{evidence_path}.{os.getpid()}.tmp"
+                with open(evidence_tmp, "w", encoding="utf-8") as handle:
+                    json.dump(evidence, handle, ensure_ascii=False, indent=2)
+                os.replace(evidence_tmp, evidence_path)
+                print(f"[时机证据已落盘] {evidence_path}（fill 的 timing_facts.source_file 引用此文件；"
+                      "筹码/资金单项查证后补齐，缺项保持 null）", file=sys.stderr)
     for peer in (opts.get("peers") or "").split(","):
         peer = peer.strip()
         if peer:

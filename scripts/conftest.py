@@ -130,7 +130,7 @@ def minimal_fill(**over):
                       '<tr><th>指标</th><th>当前值</th><th>触发阈值</th><th>触发后操作</th>'
                       '<th>数据来源</th><th>更新频率</th></tr>'
                       '<tr><td>毛利率</td><td>34%</td><td>≥36%</td>'
-                      '<td>加仓至标配（需要一段足够长的操作说明文字来验证长文列换行样式）</td>'
+                      '<td>复核估值假设（需要一段足够长的研究说明文字来验证长文列换行样式）</td>'
                       '<td>E3 年表</td><td>季度</td></tr></table></div>'
                       '<span class="source">数据来源：测试</span>'),
         "position_html": "<p>时机判定与决策逻辑。" * 12 + "</p>",
@@ -322,7 +322,7 @@ def full_fill(**over):
                        '<tr><th>技术面</th><td class="num">5.0</td><td>站上 60 日线</td></tr>'
                        '<tr><th>时机分合计</th><td class="num">5.0</td>'
                        '<td>筹码面×67% + 技术面×33%</td></tr></tbody></table>'
-                       '<span class="source">时机判定：中性 5 分起始，逐条信号加减（微调 ±1 档）。</span>'
+                       '<span class="source">时机判定：中性 5 分起始，逐条信号加减（独立参考，不调节仓位）。</span>'
                        + '<p>时机判定与决策逻辑。' * 12 + '</p>'),
         consensus={"lo": 9, "hi": 13},
         triggers=[{"cond": "提价兑现", "metric": "26H2 毛利率", "target": "≥46%｜实际 47.2%", "status": "hit"},
@@ -571,5 +571,46 @@ def period_fill(variant="h1", **over):
     pt = copy.deepcopy(_PERIOD_VARIANTS[variant])  # 浅拷贝会共享嵌套 list，用例间互相污染
     fill = minimal_fill(period_track=pt,
                         quote={"source_file": _period_ref_file(variant, pt), "date": "2026-08-27"})
+    fill.update(over)
+    return fill
+
+
+def cycle_valuation_case():
+    return {
+        "profit_regime": "high",
+        "price_regime": "mid",
+        "regime_evidence": {
+            "profit": "2026前三季归母90.59亿、全年基础118亿，高于80-90亿正常化区间",
+            "price": "现价24.9元较阶段高价30.3元回撤17.8%，不把利润高位等同股价高位",
+        },
+        "profit_period": "2027E归母净利",
+        "period_alignment": "2027E年度利润用于2026-10-17起12个月目标，须对齐2026Q4与2027Q1-Q3",
+        "normalized_profit": [80, 90],
+        "normalized_pe": [9, 11],
+        "normalized_basis": "2024-2025价差与新产能部分对冲的80-90亿元假设",
+        "sample_years": 2,
+        "bridge": {
+            "start_profit": 85,
+            "items": [{
+                "kind": "price_spread",
+                "amount": 33,
+                "evidence": "118−(80+90)/2=33亿元；Q3乙烯-乙烷价差803美元/吨、环比收窄141美元，"
+                            "高景气价差贡献与新产能对冲是情景假设，不是实测产量拆分",
+                "source": "2026三季报；申万宏源2026-10-15；卫星化学2026-10-17归档fill",
+            }],
+        },
+    }
+
+
+def satellite_cycle_fill(**over):
+    fill = minimal_fill(
+        price="24.9",
+        valuation={"shares": 33.69, "horizon": "12个月", "scenarios": [
+            {"key": "pess", "label": "悲观", "trigger": "价差回落", "profit": 80, "pe": [7, 8]},
+            {"key": "base", "label": "基础", "trigger": "价差中高位", "profit": 118, "pe": [9, 11]},
+            {"key": "opt", "label": "乐观", "trigger": "量价齐升", "profit": 145, "pe": [11, 13]},
+        ]},
+        cycle_valuation=cycle_valuation_case(),
+    )
     fill.update(over)
     return fill

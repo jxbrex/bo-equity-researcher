@@ -3,6 +3,9 @@
 基于「质量 × 估值 × 时机」三轨评分框架的个股深度分析技能（Kimi Code / ZCode 通用）。
 一键取数、脚本拼装，产出单文件自包含 HTML 研究报告。
 
+当前发布：**v0.11.0**（2026-10-26）。由 v5.10.1 重置发布编号，不是评分口径回退；
+`quality_version: 2` 保持不变。
+
 > ⚠️ 本技能产出的报告为 AI 生成的研究笔记，不构成投资建议。
 
 ## 整体逻辑
@@ -21,7 +24,7 @@
 |----|---------|---------|
 | **质量分** | 这家公司值不值得长期拥有 | 能不能买（资格） |
 | **估值分** | 现在这个价格贵不贵 | 买多少 / 等不等 |
-| **时机分** | 市场情绪与筹码状态 | ±1 档微调，不跨「买/不买」门槛 |
+| **时机分** | 市场情绪与筹码状态 | 独立参考，不进入仓位计算 |
 
 决策主轴 = 质量分 × 估值分。「好公司太贵」的正确结论是「等」，不是扣质量分——
 估值分永远不进质量分。红灯直接熔断；非致命风险列示跟踪，不再从质量分重复扣减。
@@ -108,23 +111,30 @@
   （找 2-3 个增速/规模/宏观相似的历史时段取 PE 区间，利润规模上量级要折价；v5.4.0 起
   校准时段 ≥2 个须标 `calib` 并写明相似度/折价理由）；三情景围绕 1-2 个关键驱动定义，
   v5.5.0 起毛利占比 ≥15% 的分部（`sensitivity_meta.coverage`）须逐条映射敏感性变量或
-  写**带数字**的排除理由，缺一拒渲染；
+  写**带数字**的排除理由，缺一拒渲染；公开披露确无毛利口径时，保留收入占比行、
+  毛利留空并在 `segments.note` 写明原因，不得为消告警删行；
 - **估值分四件套**（脚本算，不可手填）：中枢期望收益 40% + 赔率（盈亏比）25% +
   合理倍数 25% + 税后股息 10%；
-- **估值锚纪律**（v5.1.0 起，渲染器硬校验）：增量证据锁死 PE 带（无新增基本面证据
-  不许移动，价格与卖方观点双向禁用）、回滚条款前置（v5.4.0 起首版同样生效、
+- **估值锚纪律**（v5.1.0 起，渲染器硬校验）：增量证据锁死 PE 带（无新增基本面或市场参数证据
+  不许移动，市场参数仅限系统性估值调整；价格与卖方观点双向禁用）、回滚条款前置（v5.4.0 起首版同样生效、
   合理带与基础情景带双尺偏离同时看守）、锚移动上账（复盘章台账）、
   尺子一致性声明——治「估值锚跟着市价滑动」这个左侧信号的头号杀手；
+- **周期估值三账**（v0.11.0）：新周期报告必须显式声明利润位置；基础利润、正常化利润和现价隐含利润同字段同源；利润与价格
+  位置分别留证据，桥接加总必须等于基础情景利润。正常化价格与现价隐含利润由脚本计算，
+  分歧大不取平均，利润高位不推出股价必跌；
 - **行业方法**按附录替换：地产 NAV、创新药 rNPV、平台互联网 SOTP、金融 PB-ROE/DDM
   （v5.5.0 起 DDM 折现用的**股权成本 r** 立分型参考带，超带写理由，且 WACC 不得高于 r）；
 - **预期差拆解**：无预期差 = 无超额收益——必须回答「我的模型和卖方一致预期分歧在哪」；
   逐机构分布图只照抄 E5 明细，港股无逐机构明细时调研所得须先落盘
-  `_street_{code}_{date}.json` 再由 `gap_plot.source_file` 指向（v5.5.1 防手填小门）。
+  `_street_{code}_{date}.json` 再由 `gap_plot.source_file` 指向（v5.5.1 防手填小门）；
+  E5 走东财汇总且没有逐份研报时，不生成券商态度变化图，`gap_history` 不填，
+  `gap_html` 必须写明该图未生成及原因。
 
 ### 决策层：矩阵落位 + 三机制防自欺欺人
 
-- **决策矩阵**（质量 × 估值落仓位）：重仓的唯一入口是「质量 ≥7 × 估值 ≥8」直接落位，
-  任何调节链不得把轻仓推成重仓；前置两道门禁——红灯熔断、中枢为负拦截器；
+- **决策矩阵**（质量 × 估值落仓位）：时机分只作独立参考，不再进入仓位计算，也不输出分批买卖节奏；
+  重仓的唯一入口是「质量 ≥7 × 估值 ≥8」直接落位，任何调节链不得把轻仓推成重仓；
+  前置两道门禁——红灯熔断、中枢为负拦截器；
 - **机制一·临界档透明化**：分数距决策边界 ≤0.3 → 仓位按相邻两档孰低执行 + 升档路径
   挂跟踪仪表盘（「错过」变「推迟+验证路径」）；±0.3 经存量报告漂移实测校准
   （`score_drift.py`：同股两版质量分漂移 P50=0.38，收窄到 0.1 被数据否定）；
@@ -159,8 +169,13 @@ F 式九项支撑 1D 趋势档，G-Score 只作成长补充检查，不另起评
 - 用户级：`~/.agents/skills/` 或 `~/.zcode/skills/`
 - 项目级：`<project>/.agents/skills/`
 
-依赖：Python 3.8+、curl（Windows 10+ 自带）。tushare token 可选
+依赖：Python 3.9+、curl（Windows 10+ 自带）。tushare token 可选
 （`TUSHARE_TOKEN` 环境变量自动发现；无 token 自动走东方财富公开接口）。
+
+从旧 `stock-deep-analysis` 目录升级时，在仓库根目录先运行
+`powershell -File scripts/deploy.ps1` 预览，确认无异常后再加 `-Go` 正式部署。
+脚本同步 `bo-equity-researcher` 后，将旧目录移到
+`~/.agents/retired-skills/stock-deep-analysis-pre-bo-equity-researcher`；备份已存在时拒绝覆盖。
 
 ### 触发
 
@@ -171,7 +186,7 @@ F 式九项支撑 1D 趋势档，G-Score 只作成长补充检查，不另起评
 
 ```bash
 # 1. 一键取数（tushare 优先、东财兜底；A 股 6 位代码、港股 5 位代码自动识别）
-python "<技能目录>/scripts/em_fetch.py" 600989 --peers=600309,002001
+python "<技能目录>/scripts/em_fetch.py" 600989 --peers=600309,002001,600426
 
 # 新报告同时取九维机械输入（分型按标的实际替换；旧命令不加 quality-v2 时输出不变）
 python "<技能目录>/scripts/em_fetch.py" 600989 --quality-v2 --stock-type=成长型 --growth-tier=mid --industry-profile=generic --out=_em_600989_quote.json
@@ -234,11 +249,17 @@ bo-equity-researcher/
 │   ├── em_market.py            # E1 行情 / E2 月线 / PE-PB 分位带 / 时机素材（取数块，只依赖 em_core）
 │   ├── em_finance.py           # E3 财务年表与季度指标 + 审计/无风险利率/股息率/有息负债 + 盈利质量红旗
 │   ├── em_owner.py             # E4 股东户数 / E5 一致预期 / E6 主营构成
+│   ├── org_tier.py             # 头部/外资券商清单与机构名归一（取数与图表共用）
 │   ├── em_misc.py              # 业绩预告快报 / 治理包 / 披露计划
 │   ├── em_cache.py             # 磁盘缓存原语 + TTL 分档常量（em_fetch 拆分模块）
 │   ├── render_report.py        # fill JSON → 最终 HTML（评分计算+图形生成+校验+自动命名）
 │   ├── align_fix.py            # 表格对齐自动修正机（渲染末道 transform）+ 时机小表自动补类
-│   ├── validate.py             # fill 内容校验：全部 _check_* 硬校验/告警项（render_report 拆分模块）
+│   ├── validate.py             # fill 内容校验总入口 + 跨域公共层（调度清单/re-export）
+│   ├── validate_audit.py       # 照抄对账/落盘防伪/质量输入与预期差校验
+│   ├── validate_charts.py      # 图字段、复盘结构、周期与敏感性覆盖校验
+│   ├── validate_html.py        # 正文 HTML 纪律与写作/结构校验
+│   ├── validate_typing.py      # 分型判据与权重/证据校验
+│   ├── validate_valuation.py   # 估值四件套/三情景/估值锚/DCF 校验
 │   ├── visual_check.py         # 渲染后视觉审计：双视口（1280/390）查横向溢出/折行/裁切
 │   ├── scoring.py              # 评分与估值公共基座：维度/权重常量 + compute_scores + compute_valuation 估值轨
 │   ├── quality_rules.py        # 九维规则目录与纯函数评分引擎（档位/得分链/关键短板）
@@ -256,14 +277,20 @@ bo-equity-researcher/
 │   ├── score_calibration.py    # 评分统计校准：存量报告三轨分 vs 报告日后实际收益
 │   ├── score_drift.py          # 同股相邻两版分数漂移分布（机制一临界宽度实测校准，v5.2.0）
 │   ├── monthly_checkup.py      # 月度体检：到期复盘提醒 + 评分校准复跑
-│   ├── deploy.ps1              # 技能部署脚本（dry-run 预览 / -Go 实际部署）
+│   ├── deploy.ps1              # 技能部署脚本（预览/实际部署 + 旧目录备份退休）
 │   ├── golden/                 # 渲染输出 golden 快照基准（test_golden 逐字节比对底稿）
 │   ├── conftest.py             # pytest 共享夹具：minimal_fill/render_fill/capture_stderr 等
 │   ├── test_quality_rules.py   # 九维规则/行业映射/去重与短板回归
 │   ├── test_quality_inputs.py  # 披露截止、行业 profile 与机械输入回归
 │   ├── test_score_dist.py      # 分布、历史去重、漂移与版本隔离回归
-│   ├── test_render_gate.py     # 门禁校验回归（拒渲染/防伪/L4 硬门禁/仓位决策链）
-│   ├── test_render_charts.py   # 图表生成回归（各 build_* 图 / 对齐机）
+│   ├── test_render_gate_core.py # 仓位卡/估值/quote 防伪/拒渲染与内容告警回归
+│   ├── test_render_gate_period.py # 第3章/period_track/3B与折现率回归
+│   ├── test_render_gate_position.py # 临界档/乐观税/赔率地板/估值锚回归
+│   ├── test_render_gate_source.py # 来源照抄/复盘锚/最终 HTML 来源注回归
+│   ├── test_render_gate_typing_anchor.py # 分型判据/估值锚/校准与 peer 选取回归
+│   ├── test_render_gate_validate.py # 内容校验与 sensitivity 业务线覆盖回归
+│   ├── test_render_charts.py   # 图表生成回归（各 build_* 图）
+│   ├── test_align_fix.py       # 表格对齐机回归（类修复/高亮存活/整列判左）
 │   ├── test_render_e2e.py      # 端到端回归（render 全流程 / 归档 / 回测模式）
 │   ├── test_em_fetch.py        # em_fetch 取数链路回归测试
 │   ├── test_extract_review.py  # extract_review 回测触发/锚点提取回归测试
@@ -271,7 +298,7 @@ bo-equity-researcher/
 │   ├── test_golden.py          # 渲染器端到端 golden 快照测试（无网络，逐字节比对）
 │   ├── test_calibration.py     # score_calibration 纯函数回归测试
 │   ├── test_monthly_checkup.py # monthly_checkup 月度体检回归测试
-│   ├── test_deploy_meta.py     # 部署元数据守卫（deploy.ps1 排除清单 / UTF-8 BOM 断言 / 超长行闸）
+│   ├── test_deploy_meta.py     # 部署守卫（身份/迁移 / 排除清单 / UTF-8 BOM / 超长行闸）
 │   ├── test_visual_check.py    # visual_check 视觉审计降级路径回归测试
 │   └── test_score_drift.py     # score_drift 分数漂移分布回归测试
 ├── handoffs/                   # 版本交接文档：最外层只留最新版，旧版归 supercede/
@@ -292,14 +319,14 @@ python -m pytest scripts/ -q    # 全部回归（门禁/图表/端到端/golden/
 
 ```bash
 cd scripts
-python -m pytest test_render_gate.py test_render_charts.py test_render_e2e.py  # 渲染门禁/图表/端到端
+python -m pytest test_render_gate_core.py test_render_gate_period.py test_render_gate_position.py test_render_gate_source.py test_render_gate_typing_anchor.py test_render_gate_validate.py test_render_charts.py test_align_fix.py test_render_e2e.py  # 渲染门禁/图表/对齐/端到端
 python test_em_fetch.py         # 市场映射 / 闰日 / 同比文字化 / 429 硬停
 python test_extract_review.py   # 回测触发判定 / 锚点提取
 python test_mcap_mode.py        # 市值口径渲染
 python test_golden.py           # 渲染器端到端 golden 快照（minimal/full/mcap 三份主干 fill + 报告期四态，产物与入库快照逐字节比对）
 python test_calibration.py      # score_calibration 纯函数回归（文件名解析 / 分桶边界 / 同股去重）
 python test_monthly_checkup.py  # monthly_checkup 月度体检回归（scan_reports 合并口径 / --disclosure 市场映射）
-python test_deploy_meta.py      # 部署元数据守卫（deploy.ps1 排除清单 / UTF-8 BOM 断言 / 超长行闸扫描行为）
+python test_deploy_meta.py      # 部署守卫（身份/迁移 / 排除清单 / UTF-8 BOM / 超长行闸）
 python test_visual_check.py     # visual_check 视觉审计降级路径（无浏览器跳过 / 坏 --chrome 路径）
 python test_score_drift.py      # score_drift 分数漂移回归（_pctile / 配对与跨代隔离）
 ```

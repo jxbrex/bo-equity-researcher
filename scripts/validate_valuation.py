@@ -15,6 +15,7 @@ from scoring import (
     _plain_text,
     _SCENARIO_NAMES,
     _parse_prev_scenarios,
+    _parse_horizon_months,
     REGIME_DEV_THRESHOLD,
     regime_scale_devs)
 from validate import (
@@ -89,6 +90,7 @@ def _check_valuation_scenarios(fill: dict, warns: list) -> None:
             mids[str(s.get("key") or "").lower()] = profit * (pe_lo + pe_hi) / 2 / shares_n
         if not str(s.get("horizon") or v.get("horizon") or "").strip():
             raise ValueError(f"valuation.scenarios[{slab}] 缺时间维度（horizon，可放情景级或 valuation 级）")
+    _check_scenario_horizons(fill, warns)
     if len(modes) > 1:
         raise ValueError("valuation.scenarios 口径混用：profit+pe 与 mcap 三情景必须统一口径")
     if not {"pess", "base", "opt"} <= skeys:
@@ -99,6 +101,29 @@ def _check_valuation_scenarios(fill: dict, warns: list) -> None:
             raise ValueError(f"valuation 三情景中枢跨档倒挂：悲观 {mids['pess']:.2f} / 基础 {mids['base']:.2f} / "
                              f"乐观 {mids['opt']:.2f}（目标价口径，需 悲观≤基础≤乐观）——请检查各情景 "
                              f"profit/pe/mcap 假设是否填反（倒挂会产生负离散度假信号，污染仓位决策链）")
+
+
+def _check_scenario_horizons(fill: dict, warns: list) -> None:
+    """新报告的三情景共用单一明确期限；旧报告的混用/区间期限只告警兼容。"""
+    v = fill.get("valuation") or {}
+    parsed = [(str(s.get("horizon") or v.get("horizon") or "").strip(),
+               _parse_horizon_months(s.get("horizon") or v.get("horizon"), strict=True))
+              for s in v.get("scenarios") or []]
+    strict_date = str(fill.get("date") or "") >= "2026-10-26"
+    invalid = [raw for raw, months in parsed if months is None]
+    if invalid:
+        kind = "区间期限" if any(re.search(r"\d\s*[-–—~～]\s*\d", raw) for raw in invalid) else "非法期限"
+        msg = f"估值情景存在{kind}（{'、'.join(invalid)}）：只接受单一年/月数值，且三情景须同一时间尺"
+        if strict_date:
+            raise ValueError(msg)
+        warns.append(f"旧报告兼容：{msg}；本版仍按原计算口径，后续新报告会拒渲染")
+        return
+    months = {round(months, 8) for _raw, months in parsed}
+    if len(months) > 1:
+        msg = f"三情景期限不一致（{'、'.join(raw for raw, _months in parsed)}）：中枢、赔率与离散度必须使用同一时间尺"
+        if strict_date:
+            raise ValueError(msg)
+        warns.append(f"旧报告兼容：{msg}；后续新报告会拒渲染")
 
 
 def _check_odds_floor(fill: dict, warns: list, calc=None) -> None:
@@ -176,7 +201,7 @@ def _check_anchor_discipline(fill: dict, warns: list) -> None:
     均为存量——悲观 PE 带却 35-40→26-32，驱动量只有股价与卖方研报，循环论证）：
     ①回测模式 prev.scenarios 必填（锚移动台账数据源，照抄 extract_review 输出禁手改）；
     ②增量证据锁死：基础情景 PE 带相对上版移动 → valuation.pe_band_evidence 必填且至少
-      一条 type=基本面；带未移动 → 该键须缺席/空（防口径漂移）。价格/卖方观点不构成
+      一条 type=基本面或市场参数；带未移动 → 该键须缺席/空（防口径漂移）。价格/卖方观点不构成
       移动理由（双向禁用：跌不许下修、涨不许上修）；上版解析失败降级告警不拒；
     ③回滚条款前置（v5.4.0 双尺全量生效）：合理带与基础情景带任一中枢偏离历史 P25-P75
       中枢 >15%（重构声明）→ valuation.rollback_html 必填——首版（无 prev）同样执行；
@@ -214,11 +239,11 @@ def _check_anchor_discipline(fill: dict, warns: list) -> None:
                                 f"——四选一：{'/'.join(_ANCHOR_EVIDENCE_TYPES)}")
                         if not str(e.get("note") or "").strip():
                             raise ValueError(f"pe_band_evidence[{i}].note 为空——证据须写明可核查内容")
-                    if not any(e["type"] == "基本面" for e in ev):
+                    if not any(e["type"] in ("基本面", "市场参数") for e in ev):
                         raise ValueError(
-                            f"pe_band_evidence 无「基本面」类条目（现有："
-                            f"{'/'.join(e['type'] for e in ev)}）——PE 带移动必须锚定新增基本面证据，"
-                            f"纯价格/卖方观点触发不合法；若无新增基本面证据，请将 PE 带锁回上版数值")
+                            f"pe_band_evidence 无「基本面」或「市场参数」类条目（现有："
+                            f"{'/'.join(e['type'] for e in ev)}）——PE 带移动必须锚定新增基本面或市场参数证据"
+                            f"（基本面|市场参数），纯价格/卖方观点触发不合法；若两类证据均无，请将 PE 带锁回上版数值")
                 elif ev:
                     raise ValueError("PE 带与上版一致，pe_band_evidence 应缺席（画蛇添足防口径漂移）")
         elif ev:
@@ -412,8 +437,8 @@ def _discount_premium_cap(fill: dict):
 
 def _check_dcf(fill: dict, warns: list) -> None:
     """v4.11.3：DCF 双卡字段校验（dcf，软告警迁移期——缺失不拒）。
-    强制分型（v5.4.1 归一判定）：**成长型·中速层/未声明 high**（含旧名「稳健成长股」）与
-    **稳定价值（非金融）**缺 dcf → 告警；成长型·高速层（含旧名「快速成长」）走远期 PE 折现、
+    强制分型（v5.4.1 归一判定）：**成长型·中速层/未声明 high**（含旧名「稳健成长股」）、
+    **稳定价值（非金融）与成熟/停滞**缺 dcf → 告警；成长型·高速层（含旧名「快速成长」）走远期 PE 折现、
     金融类稳定价值走 PB-ROE/DDM，均不强制（子类判定走 _fin_subclass 单源）。填了 →
     八键齐全性 + value/implied_g/wacc/growth_5y/g_perp 可解析性 + verdict ≥40 字；
     valuation_html 仍手写 DCF 表 → 重复告警。
@@ -431,6 +456,10 @@ def _check_dcf(fill: dict, warns: list) -> None:
                          "承载（v4.11.3 起；原「稳健成长」改名后于 v5.4.1 重新对齐；"
                          "value/fcf0/growth_5y/g_perp/wacc/net_cash/implied_g/verdict 八键，"
                          "现价比价脚本算，valuation_html 不再手写 DCF 表）")
+        elif std == "成熟/停滞":
+            warns.append("dcf 字段未填：成熟/停滞分型 DCF 强制三行由 dcf 字段承载"
+                         "（与成长型·中速层、稳定价值（非金融）同口径；"
+                         "value/fcf0/growth_5y/g_perp/wacc/net_cash/implied_g/verdict 八键）")
         elif std == "稳定价值" and not _fin_subclass(st):
             # v5.1.5（热核 P0-6，用户拍板补校验）：fill-schema/SKILL 承诺「稳定价值（非金融）
             # 必填」此前零执行——与成长型·中速层同态（软告警）；金融类稳定价值股豁免
@@ -475,3 +504,88 @@ def _check_dcf(fill: dict, warns: list) -> None:
     vh = fill.get("valuation_html") or ""
     if "<table" in vh and re.search(r">[^<]*DCF", vh):
         warns.append("valuation_html 仍含手写 DCF 表：v4.11.3 起 DCF 由 dcf 字段承载，请删除手写表")
+
+
+def _check_cycle_valuation(fill: dict, calc: dict, warns: list) -> None:
+    """周期三账证据与利润桥；新报告硬拒，旧 fill 仅告警兼容。"""
+    cv = fill.get("cycle_valuation")
+    is_new = str(fill.get("date") or "") >= "2026-10-26"
+    stock_type, _tier, _legacy = _resolve_type_tier(fill)
+
+    def problem(message):
+        if is_new:
+            raise ValueError(f"cycle_valuation: {message}")
+        warns.append(f"旧 fill 兼容：cycle_valuation {message}")
+
+    if cv is None:
+        if is_new and stock_type == "周期股":
+            problem("周期股新报告必须显式给出 profit_regime 与 cycle_valuation；"
+                    "高位更不得缺少正常化锚和利润桥")
+        return
+    if not isinstance(cv, dict):
+        problem("必须为对象")
+        return
+    if cv.get("profit_regime") not in ("high", "normal", "low"):
+        problem("profit_regime 必须为 high/normal/low")
+    if cv.get("price_regime") not in ("high", "mid", "low", "unknown"):
+        problem("price_regime 必须为 high/mid/low/unknown；只描述位置，不推断涨跌")
+    evidence = cv.get("regime_evidence")
+    if not isinstance(evidence, dict):
+        problem("regime_evidence 须分别记录利润与价格证据")
+        evidence = {}
+    for key in ("profit", "price"):
+        if not str(evidence.get(key) or "").strip():
+            problem(f"regime_evidence.{key} 缺失")
+    for key in ("profit_period", "period_alignment", "normalized_basis"):
+        if not str(cv.get(key) or "").strip():
+            problem(f"{key} 缺失")
+    if type(cv.get("sample_years")) is not int or cv["sample_years"] < 1:
+        problem("sample_years 必须是实际样本年数（正整数）")
+
+    def pair(key, positive=False):
+        raw = cv.get(key)
+        if not isinstance(raw, (list, tuple)) or len(raw) != 2:
+            problem(f"{key} 必须为 [低,高]")
+            return None
+        values = [_num(value) for value in raw]
+        if None in values or values[0] > values[1] or (positive and values[0] <= 0):
+            problem(f"{key} 数值或顺序非法")
+            return None
+        return values
+
+    pair("normalized_profit")
+    pair("normalized_pe", positive=True)
+    base = _scenario_by_key((fill.get("valuation") or {}).get("scenarios"), "base")
+    base_profit = _num((base or {}).get("profit"))
+    if base_profit is None:
+        problem("基础情景 profit 缺失")
+        return
+    bridge = cv.get("bridge")
+    if not isinstance(bridge, dict):
+        problem("bridge 缺失")
+        return
+    start = _num(bridge.get("start_profit"))
+    if start is None:
+        problem("bridge.start_profit 缺失")
+        start = 0
+    items = bridge.get("items")
+    if not isinstance(items, list) or not items:
+        problem("bridge.items 至少一条")
+        items = []
+    total = start
+    for item in items:
+        if not isinstance(item, dict):
+            problem("bridge.items 每项必须为对象")
+            continue
+        if not str(item.get("kind") or "").strip():
+            problem("bridge.items.kind 缺失")
+        amount = _num(item.get("amount"))
+        if amount is None:
+            problem("bridge.items.amount 必须为数字")
+            amount = 0
+        total += amount
+        for key in ("evidence", "source"):
+            if not str(item.get(key) or "").strip():
+                problem(f"bridge.items.{key} 缺失；金额为 0 也必须有证据")
+    if abs(total - base_profit) > 0.01:
+        problem(f"利润桥加总 {total:g} 与基础情景利润 {base_profit:g} 不一致")

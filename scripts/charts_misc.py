@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """charts_misc.py — 杂货图族（v4.9 从 charts.py 拆出；v5.1.5 拆出 gap 族 → charts_gap.py、
 报告期族 → charts_period.py）：5.1 利润增长图（build_growth_plot，含 5 章锚点注入
-_inject_l3_charts）/ 12 股东户数趋势（build_holders_plot）/ 13 回测锚移动台账与三轨哑铃
+_inject_l3_charts）/ 12 股东户数趋势（build_holders_plot）与技术事实卡（build_timing_facts）/ 13 回测锚移动台账与三轨哑铃
 （build_anchor_ledger / build_review_dumbbell）/ 14 触发条件状态条（build_triggers_strip）
 / 2 驱动卡与 11 阶段卡（build_driver_cards / build_cycle_stages）。依赖 charts_base 与 scoring。"""
 
@@ -109,6 +109,79 @@ def build_growth_plot(fill: dict) -> str:
         '取历史年报同比），区间竖条=本文净利增速预测区间，◆=卖方一致预期（券商研报汇总）；'
         f'预期差（本文中枢−一致预期）：{"；".join(diffs)}；全图为中性色，红涨绿跌仅用于股价方向'))
     return "".join(parts)
+
+
+def build_timing_facts(fill: dict, calc: dict = None) -> str:
+    """技术、筹码、资金事实表；只展示证据，不产生评分或仓位。"""
+    facts = fill.get("timing_facts")
+    if not facts:
+        return ""
+    rows = []
+
+    def add(label, value, note):
+        rows.append(f'<tr><th scope="row">{_esc(label)}</th><td>{_esc(value)}</td>'
+                    f'<td>{_esc(note)}</td></tr>')
+
+    def number(value, suffix=""):
+        return "数据不足" if value is None else f"{_fmt(value)}{suffix}"
+
+    tech = facts.get("technical") or {}
+    for key, label, suffix in (("rsi14", "RSI14", ""),
+                               ("atr14_pct", "ATR14%", "%"),
+                               ("volume_ratio_20", "20 日量比", "×"),
+                               ("ma60_slope_20d_pct", "MA60 的 20 日斜率", "%"),
+                               ("ma120_slope_20d_pct", "MA120 斜率（20 日）", "%"),
+                               ("position_52w_pct", "52 周价格位置", "%")):
+        add(label, number(tech.get(key), suffix), "同源日线；只作事实，不作涨跌预测")
+    macd = tech.get("macd") or {}
+    macd_text = "数据不足" if any(macd.get(key) is None for key in ("dif", "dea", "hist")) else (
+        f"DIF {_fmt(macd['dif'])} / DEA {_fmt(macd['dea'])} / 柱 {_fmt(macd['hist'])}")
+    add("MACD（12,26,9，柱×2）", macd_text, "同源日线；指数移动平均")
+
+    levels = facts.get("consensus_levels")
+    if levels:
+        years = levels.get("window_years", 3)
+        add(f"近 {years} 年月末收盘高低",
+            f"{_fmt(levels.get('close_high'))} / {_fmt(levels.get('close_low'))}",
+            f"{levels.get('months', '—')} 个月；与盘中高低不同口径")
+        add(f"近 {years} 年盘中高低",
+            f"{_fmt(levels.get('intraday_high'))} / {_fmt(levels.get('intraday_low'))}"
+            if levels.get("intraday_high") is not None else "数据不足",
+            f"OHLC 完整月数 {levels.get('ohlc_months', 0)}；不是券商目标价")
+    else:
+        add("近 3 年价格区间", "数据不足", "月线缺失；不手工补高低点")
+
+    labels = {"average_cost": "平均成本", "profit_ratio": "盈利比率",
+              "main_net_inflow": "主力净流入", "southbound": "南向持股",
+              "margin": "两融"}
+    sources = []
+    for group in ("chips", "capital"):
+        for key, record in (facts.get(group) or {}).items():
+            label = labels.get(key, key)
+            if record is None:
+                add(label, "数据不足", "未获取；不得按中性分处理")
+                continue
+            value = f"{_fmt(record.get('value'))}{record.get('unit', '')}"
+            note = f"；{record['note']}" if record.get("note") else ""
+            add(label, value, f"{record.get('date', '—')}；{record.get('source', '—')}{note}")
+            sources.append(f"{label}：{record.get('source', '—')}，{record.get('date', '—')}，"
+                           f"原查询：{record.get('query', '—')}")
+    if calc and calc.get("rows"):
+        names = ("悲观", "基础", "乐观")
+        add("估值三情景对照", " / ".join(
+            f"{name} {_fmt_px(row['low'])}-{_fmt_px(row['high'])}"
+            for name, row in zip(names, calc["rows"])),
+            "目标价与历史价位并列，不把历史高低当目标")
+    source = "技术与历史区间：Tushare 日线/月线，东方财富兜底；" + (
+        "；".join(sources) if sources else "无可用筹码/资金单项证据")
+    evidence = facts.get("source_file")
+    if evidence:
+        source += f"；证据文件：{evidence}"
+    return ('<span class="section-tag">技术、筹码与资金事实</span>'
+            '<div class="table-scroll" tabindex="0" role="region" aria-label="技术、筹码与资金事实">'
+            '<table><thead><tr><th>指标</th><th>观测值</th><th>口径</th></tr></thead><tbody>'
+            + "".join(rows) + '</tbody></table></div>'
+            + f'<span class="source">{_esc(source)}；只作事实，不进入评分或仓位。</span>')
 
 
 def build_holders_plot(fill: dict) -> str:
@@ -237,12 +310,14 @@ def build_anchor_ledger(fill: dict, calc: dict) -> str:
             f'{_esc(str(e.get("note") or ""))}</li>'
             for e in ev if isinstance(e, dict))
         ev_html = ('<div class="info-card"><strong>锚移动增量证据</strong>（两版报告间的新增信息；'
-                   '无新增基本面证据时 PE 带不得移动——估值锚纪律一，价格与卖方观点不构成理由）：'
+                   '无新增基本面或市场参数证据时 PE 带不得移动，市场参数仅限系统性估值调整——'
+                   '价格与卖方观点不构成理由）：'
                    f'<ul>{lis}</ul></div>')
     src = _chart_source(
         "锚移动台账", "上版报告情景锚点（照录原文）与本版计算值",
         '中枢=目标价区间中点（上版为报告显示口径中点），Δ=本版中枢÷'
-        '上版中枢−1；锚的每次移动必须归因到上方增量证据清单，写不出基本面增量的移动不合法'
+        '上版中枢−1；锚的每次移动必须归因到上方增量证据清单，写不出基本面/市场参数增量的移动不合法；'
+        '市场参数仅限系统性估值调整'
         + ('；上版含解析降级行（旧版格式或市值口径），以原文对照为准' if degraded else ''))
     return (f'<span class="section-tag">估值锚移动台账（较上版 '
             f'{_esc(str(prev.get("date") or "—"))}）</span>'

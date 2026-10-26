@@ -37,13 +37,14 @@ from scoring import (
     _esc, _cn_placeholders, compute_scores, _quality_version,
     build_score_summary, build_valuation_process_card, build_position_card,
     _quality_verdict, _valuation_verdict,
-    compute_valuation, compute_valuation_score, build_dcf_cards, build_regime_note,
+    compute_valuation, compute_cycle_valuation, compute_valuation_score, build_dcf_cards, build_regime_note,
     _edge_info, build_edge_upgrade_rows, _matrix_applies,
 )
 from quality_rules import F_ITEM_IDS
 from charts_base import _fmt_px, _prev_track_rows, _SOURCE_BANNED_RE
 from charts_scenario import (
     build_scenario_spectrum, build_scenario_block, build_peers_plot,
+    build_cycle_valuation, build_cycle_valuation_reference,
 )
 from charts_score import build_score_bars, build_sensitivity_tornado
 from charts_l1 import _inject_l1_charts
@@ -51,6 +52,7 @@ from charts_cycle import build_pe_band, build_price_history
 from charts_misc import (
     build_holders_plot, build_review_dumbbell, _inject_l3_charts, build_triggers_strip,
     build_driver_cards, build_cycle_stages, build_anchor_ledger, build_cycle_position,
+    build_timing_facts,
 )
 from charts_gap import _inject_gap_chart
 from charts_period import (
@@ -62,7 +64,7 @@ from validate import validate_content
 
 # 渲染器版本：嵌入输出 HTML 尾部注释，事后可 grep 验证报告确由本脚本渲染
 # （防"render 报错后手写全文 HTML 绕行"，巨石 2026-08-23 实证）
-RENDERER_VERSION = "v0.9.0"
+RENDERER_VERSION = "v0.11.0"
 
 # Windows 文件名非法字符：\ / : * ? " < > | 及 ASCII 控制字符（\x00-\x1f）
 _WIN_ILLEGAL = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
@@ -409,6 +411,16 @@ def _inject_dimension_scores(frag: str, dimension_results: dict) -> str:
     return frag
 
 
+def _build_audit_html(warnings) -> str:
+    """把软告警原样带入最终报告，让读者看到口径限制；硬拒规则与 stderr 文案不变。"""
+    warnings = list(warnings or [])
+    if not warnings:
+        return ""
+    items = "".join(f"<li>{_esc(str(w))}</li>" for w in warnings)
+    return ('<div class="audit-note warning-card"><strong>口径与复核限制：</strong>'
+            f'本报告有 {len(warnings)} 项校验提示，结论须结合以下限制阅读。<ul>{items}</ul></div>')
+
+
 # v5.8.2：_build_repl_map 的 15 个散装形参收拢为 RenderContext（render 组装一次传入）——
 # 形参每加一项要同步改两处签名，上下文对象随 render 流水线天然同生共灭
 RenderContext = namedtuple("RenderContext", [
@@ -524,7 +536,7 @@ def _build_repl_map(ctx: "RenderContext") -> dict:
         # v4.11.3：周期阶段卡（cycle_stages 字段，垫在手写 cycle_html 前；空串替换）
         "CYCLE_STAGES_HTML": build_cycle_stages(fill),
         # v5.2.0：当前周期位置刻度条（cycle_position 字段，垫在阶段卡与手写 cycle_html 之间）
-        "CYCLE_POSITION_HTML": build_cycle_position(fill),
+        "CYCLE_POSITION_HTML": build_cycle_position(fill) + build_cycle_valuation(fill, calc),
         "CYCLE_HTML": fill.get("cycle_html", ""),
         "NEXT_REVIEW": _esc(fill.get("next_review", "—")),
         # v4.9：触发条件状态条（triggers 可选字段，脚本生成，垫在手写仪表盘前）
@@ -554,10 +566,12 @@ def _build_repl_map(ctx: "RenderContext") -> dict:
         # 附 rollback_html 回滚条款）拼在估值分过程卡后
         "VALUATION_PROCESS_HTML": build_valuation_process_card(calc, valuation_calc,
                                                                fill.get("valuation_inputs") or {})
-                                  + build_regime_note(fill),
-        "POSITION_CARD_HTML": build_position_card(quality, valuation, timing, calc, red_flag,
-                                                  floor_uplift=valuation_calc.get("floor_uplift"),
-                                                  critical=sc.get("critical_weaknesses")),
+                                  + build_regime_note(fill)
+                                  + build_cycle_valuation_reference(fill),
+        "POSITION_CARD_HTML": build_timing_facts(fill, calc)
+                              + build_position_card(quality, valuation, timing, calc, red_flag,
+                                                    floor_uplift=valuation_calc.get("floor_uplift"),
+                                                    critical=sc.get("critical_weaknesses")),
 
         # 回测模式（prev 存在时生效，否则条件块自动删除）
         "PREV_HTML": build_prev_strip(prev, quality, valuation, timing, target_range,
@@ -566,6 +580,7 @@ def _build_repl_map(ctx: "RenderContext") -> dict:
         "REVIEW_HTML": review_html,
         "GEN_TIME": _esc(fill.get("gen_time", date)),
         "CALIB_NOTE": _esc(fill.get("calib_note", "")),
+        "AUDIT_HTML": _build_audit_html(sc.get("audit_warnings")),
         # v1 保留黄灯扣分；v2 的质量分只由九维加权，此处仅兼容旧模板徽章
         "YELLOW_TOTAL": f"{yellow_total:.1f}",
         "QUALITY_SCORE": f"{quality:.2f}",
@@ -578,8 +593,8 @@ def _build_repl_map(ctx: "RenderContext") -> dict:
         "VALUATION_BADGE_CLASS": valuation_badge_class(valuation),
         "VALUATION_VALUE_CLASS": ("score-good" if valuation >= 8 else "score-mid" if valuation >= 4 else "score-bad"),
 
-        # 时机分（微调）
-        "TIMING_SCORE": (f"{timing:.2f}" if timing is not None else "—"),
+        # 时机分（独立参考，不调节仓位）
+        "TIMING_SCORE": (f"{timing:.2f}" if timing is not None else "数据不足"),
         "RED_FLAG_HTML": (f'<div class="danger-card">🔴 <strong>红灯回避</strong>：{_esc(red_flag)}</div>' if red_flag else ""),
         "L1_SCORE": f"{layer_scores['L1']:.2f}", "L1_W": f"{layer_share['L1']:.0f}",
         "L3_SCORE": f"{layer_scores['L3']:.2f}", "L3_W": f"{layer_share['L3']:.0f}",
@@ -826,7 +841,7 @@ def _preflight(fill_path: str):
     calc = compute_valuation(fill)
     if _quality_version(fill) == 2:
         sc = compute_scores(fill)
-        validate_content(fill, calc, sc)
+        audit_warnings = validate_content(fill, calc, sc)
         build_risk_register(fill)
         dimension_html = fill.get("l1_html", "") + fill.get("l3_html", "")
         missing = [key for key in sc["dimension_results"] if f'data-dim="{key}"' not in dimension_html]
@@ -835,8 +850,9 @@ def _preflight(fill_path: str):
         _inject_dimension_scores(fill.get("l1_html", ""), sc["dimension_results"])
         _inject_dimension_scores(fill.get("l3_html", ""), sc["dimension_results"])
     else:
-        validate_content(fill, calc)
+        audit_warnings = validate_content(fill, calc)
         sc = compute_scores(fill)
+    sc["audit_warnings"] = audit_warnings
     valuation, valuation_calc = _apply_valuation_score(fill, calc, sc["valuation"])
     return fill, calc, sc, valuation, valuation_calc
 

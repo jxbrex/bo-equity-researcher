@@ -276,3 +276,61 @@ def build_peers_plot(fill: dict) -> str:
         '虚线为低/中/高分带；左上绿底=优质低估区，右下红底=低质高估区' + size_note + '；'
         '目标公司与同业须同口径（A/H 股、IFRS/经调整），混排须在上方同业口径说明中注明'))
     return "".join(parts)
+
+
+def build_cycle_valuation(fill: dict, calc: dict) -> str:
+    """周期三账同一份结构字段；隐含利润与正常化价格只由脚本计算。"""
+    from scoring import compute_cycle_valuation
+
+    cv = fill.get("cycle_valuation")
+    result = compute_cycle_valuation(fill, calc)
+    if not cv or result is None:
+        return ""
+
+    def f2(value):
+        value = _num(value)
+        return "数据不足" if value is None else f"{value:.2f}"
+
+    rows = []
+
+    def add(label, value, note):
+        rows.append(f'<tr><th scope="row">{_esc(label)}</th><td>{_esc(value)}</td>'
+                    f'<td>{_esc(note)}</td></tr>')
+
+    evidence = cv.get("regime_evidence") or {}
+    add("利润位置（profit_regime）", str(cv.get("profit_regime")),
+        f"{cv.get('profit_period')}；{evidence.get('profit', '')}")
+    add("价格位置（price_regime）", str(cv.get("price_regime")), evidence.get("price", ""))
+    add("利润期间对齐", str(cv.get("period_alignment")), "年度利润不默认等于未来12个月")
+    bridge = cv.get("bridge") or {}
+    add("利润桥起点", f2(bridge.get("start_profit", 0)) + "亿元", "正常化中值或注明口径")
+    for item in bridge.get("items") or []:
+        add(f"桥接：{item.get('kind')}", f"{_num(item['amount']):+.2f}亿元",
+            f"{item.get('evidence')}｜来源：{item.get('source')}")
+    add("桥接合计", f2(result["bridge_end"]) + "亿元", "必须等于基础情景利润")
+    add("现价隐含利润", f"{f2(result['implied_profit'][0])}-{f2(result['implied_profit'][1])}亿元",
+        "现价×总股本÷正常化PE高/低；不是预测")
+    add("基础情景目标价", f"{f2(result['base_target'][0])}-{f2(result['base_target'][1])}元",
+        "基础利润×基础PE÷总股本")
+    add("正常化估值区间", f"{f2(result['normalized_target'][0])}-{f2(result['normalized_target'][1])}元",
+        f"{cv.get('normalized_profit')}亿×{cv.get('normalized_pe')}倍；{cv.get('normalized_basis')}；"
+        f"实际样本 {cv.get('sample_years')} 年")
+    comparison = f"基础中枢 {f2(result['base_mid'])} vs 正常化中枢 {f2(result['normalized_mid'])}"
+    if result["divergence"]:
+        comparison += "；方法分歧大，不取平均、不显示高置信"
+    else:
+        comparison += "；差异须由利润桥解释"
+    if result["dcf_value"] is not None:
+        comparison += f"；DCF {f2(result['dcf_value'])}元"
+    add("方法对照", comparison, "不机械推成顶部必跌")
+    return ('<span class="section-tag">周期估值三账</span>'
+            '<div class="table-scroll" id="cycle-valuation" tabindex="0" role="region" '
+            'aria-label="周期估值三账"><table><thead><tr><th>账目</th><th>数值</th>'
+            '<th>证据与口径</th></tr></thead><tbody>' + "".join(rows) + '</tbody></table></div>')
+
+
+def build_cycle_valuation_reference(fill: dict) -> str:
+    if not fill.get("cycle_valuation"):
+        return ""
+    return ('<span class="source"><a href="#cycle-valuation">第11章查看利润桥与正常化估值三账</a>；'
+            '同一 cycle_valuation，不另设利润口径。</span>')

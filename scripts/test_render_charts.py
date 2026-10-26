@@ -18,7 +18,81 @@ from charts_l1 import build_segments_plot, build_chain_plot, build_fin_trend
 from charts_misc import build_growth_plot
 from conftest import (
     minimal_fill, expect_valueerror, capture_stderr, capture_stderr_value, render_fill,
+    satellite_cycle_fill,
 )
+
+
+def test_timing_facts_card_has_sources_and_valuation_context():
+    import charts_misc as charts
+
+    fill = minimal_fill(timing_facts={
+        "source_file": "_timing_600000_2026-08-27.json",
+        "technical": {"rsi14": 55.5, "atr14_pct": 2.4,
+                      "macd": {"dif": 0.2, "dea": 0.1, "hist": 0.2},
+                      "volume_ratio_20": 1.3, "ma60_slope_20d_pct": 2.5,
+                      "ma120_slope_20d_pct": None, "position_52w_pct": 70.0},
+        "consensus_levels": {"window_years": 3, "close_high": 15, "close_low": 8,
+                             "intraday_high": 16, "intraday_low": 7, "months": 36},
+        "chips": {"average_cost": {"value": 11.2, "unit": "元", "date": "2026-08-27",
+                                      "source": "妙想", "query": "平均成本 <script>"}},
+        "capital": {"main_net_inflow": None,
+                    "margin": {"value": 36.33, "unit": "亿元", "date": "2026-08-27",
+                               "source": "东方财富妙想", "query": "融资与融券余额",
+                               "note": "融资余额36.33亿元；融券余额492.7万元"}},
+    })
+    html = charts.build_timing_facts(fill, R.compute_valuation(fill))
+    for text in ("技术、筹码与资金事实", "RSI14", "55.5", "ATR14%", "MACD",
+                 "20 日量比", "MA120 斜率", "数据不足", "近 3 年月末收盘高低",
+                 "近 3 年盘中高低", "平均成本", "11.2元", "主力净流入",
+                 "悲观 6.40-8.00 / 基础 10-12 / 乐观 14-17", "只作事实，不进入评分或仓位",
+                 "技术与历史区间：Tushare 日线/月线，东方财富兜底"):
+        assert text in html, text
+    repeating = minimal_fill()
+    repeating["valuation"]["shares"] = 73.33
+    assert "13.6364" not in charts.build_timing_facts(repeating, R.compute_valuation(repeating))
+    assert "融券余额492.7万元" in html
+    assert "平均成本 &lt;script&gt;" in html and "平均成本 <script>" not in html
+    assert charts.build_timing_facts(minimal_fill()) == ""
+
+
+def test_cycle_valuation_card_and_reference():
+    import charts_scenario as charts
+
+    fill = satellite_cycle_fill()
+    calc = R.compute_valuation(fill)
+    html = charts.build_cycle_valuation(fill, calc)
+    for text in ("现价隐含利润", "76.26-93.21亿元", "基础情景目标价", "31.52-38.53元",
+                 "正常化估值区间", "21.37-29.39元", "85.00亿元", "+33.00亿元",
+                 "方法分歧大", "不取平均", "profit_regime", "price_regime"):
+        assert text in html, text
+    assert "不显示高置信" in html and "高置信度" not in html
+    assert "不把利润高位等同股价高位" in html
+    reference = charts.build_cycle_valuation_reference(fill)
+    assert 'href="#cycle-valuation"' in reference and "同一 cycle_valuation" in reference
+    assert charts.build_cycle_valuation(minimal_fill(), None) == ""
+
+
+def test_cycle_valuation_bad_legacy_bridge_is_safe():
+    import charts_scenario as charts
+
+    bad = satellite_cycle_fill()
+    bad["cycle_valuation"]["bridge"]["items"] = [None]
+    assert charts.build_cycle_valuation(bad, R.compute_valuation(bad)) == ""
+    numeric_strings = satellite_cycle_fill()
+    numeric_strings["cycle_valuation"]["bridge"]["start_profit"] = "85"
+    numeric_strings["cycle_valuation"]["bridge"]["items"][0]["amount"] = "33"
+    html = charts.build_cycle_valuation(numeric_strings, R.compute_valuation(numeric_strings))
+    assert "85.00亿元" in html and "+33.00亿元" in html
+
+
+def test_cycle_valuation_zero_dcf_still_diverges():
+    fill = satellite_cycle_fill()
+    cv = fill["cycle_valuation"]
+    cv["normalized_profit"] = [118, 118]
+    cv["bridge"]["start_profit"] = 118
+    cv["bridge"]["items"][0]["amount"] = 0
+    fill["dcf"] = {"value": 0}
+    assert R.compute_cycle_valuation(fill, R.compute_valuation(fill))["divergence"] is True
 
 
 def test_nice_ticks():

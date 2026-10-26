@@ -10,8 +10,86 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import render_report as R
 from conftest import (
-    minimal_fill, mcap_fill, expect_valueerror, validate_stderr,
+    minimal_fill, mcap_fill, expect_valueerror, validate_stderr, satellite_cycle_fill,
+    v2_fill, render_v2_fill,
 )
+import validate_valuation as valuation
+
+
+def _check_cycle_valuation(*args):
+    return valuation._check_cycle_valuation(*args)
+
+
+def _expect_cycle_error(fill, keyword):
+    try:
+        _check_cycle_valuation(fill, R.compute_valuation(fill), [])
+    except ValueError as exc:
+        assert keyword in str(exc), str(exc)
+    else:
+        raise AssertionError(f"应拒绝周期估值输入: {keyword}")
+
+
+def test_cycle_valuation_requires_bridge_and_evidence():
+    fill = satellite_cycle_fill(date="2026-10-26")
+    missing_bridge = satellite_cycle_fill(date="2026-10-26")
+    del missing_bridge["cycle_valuation"]["bridge"]
+    _expect_cycle_error(missing_bridge, "bridge")
+    wrong_sum = satellite_cycle_fill(date="2026-10-26")
+    wrong_sum["cycle_valuation"]["bridge"]["items"][0]["amount"] = 32
+    _expect_cycle_error(wrong_sum, "加总")
+    for key, value in (("sample_years", 0), ("normalized_basis", "")):
+        bad = satellite_cycle_fill(date="2026-10-26")
+        bad["cycle_valuation"][key] = value
+        _expect_cycle_error(bad, key)
+    bad = satellite_cycle_fill(date="2026-10-26")
+    bad["cycle_valuation"]["bridge"]["items"][0]["source"] = ""
+    _expect_cycle_error(bad, "source")
+    bad = satellite_cycle_fill(date="2026-10-26")
+    bad["cycle_valuation"]["regime_evidence"]["price"] = ""
+    _expect_cycle_error(bad, "price")
+    _check_cycle_valuation(fill, R.compute_valuation(fill), [])
+    missing = minimal_fill(date="2026-10-26", cycle_position={"stage": "本轮高景气"})
+    _expect_cycle_error(missing, "cycle_valuation")
+    legacy = satellite_cycle_fill(cycle_valuation={"profit_regime": "high"})
+    warnings = []
+    _check_cycle_valuation(legacy, R.compute_valuation(legacy), warnings)
+    assert warnings and "兼容" in warnings[0]
+
+
+def test_cycle_valuation_yun_profit_period_and_direction():
+    fill = satellite_cycle_fill(date="2026-10-26")
+    cv = fill["cycle_valuation"]
+    cv.update(profit_period="2026E归母净利", normalized_profit=[95, 105], sample_years=5,
+              normalized_basis="2021-2025完整年度，保留亏损年",
+              period_alignment="")
+    cv["bridge"]["start_profit"] = 100
+    cv["bridge"]["items"][0].update(
+        amount=45, evidence="145−100=45亿元，铝价与成本高位是情景假设",
+        source="云铝2026-09-06报告的三情景与周期分析")
+    fill["valuation"]["scenarios"][1]["profit"] = 145
+    _expect_cycle_error(fill, "period_alignment")
+    cv["period_alignment"] = "2026E年度利润用于2026-09-06起12个月目标，须另行对齐2026Q4与2027Q1-Q3"
+    _check_cycle_valuation(fill, R.compute_valuation(fill), [])
+    cv["bridge"]["start_profit"] = 85
+    cv["bridge"]["items"][0]["amount"] = -5
+    fill["valuation"]["scenarios"][1]["profit"] = 80
+    _check_cycle_valuation(fill, R.compute_valuation(fill), [])
+
+
+def test_new_cycle_requires_structured_regime_without_high_stage():
+    fill = v2_fill()
+    fill.update(date="2026-10-26", stock_type="周期股",
+                cycle_position={"stage": "上行期后段", "implication": "利润距顶比距底更近"},
+                cycle_html="<p>当前利润处于高位，但未提供三账。</p>")
+    fill["score_inputs"]["1F"].update(
+        roic=0.14, roic_basis="normalized", roic_normalized_components=[0.12, 0.14, 0.16])
+    try:
+        render_v2_fill(fill)
+    except ValueError as exc:
+        assert "cycle_valuation" in str(exc), str(exc)
+    else:
+        raise AssertionError("非高/顶阶段名不得绕过周期三账")
+
 
 def test_typing_v2_stock_type_enum():
     """v5.3.0 判据 v2：stock_type 枚举标准化——标准值放行、旧名映射告警、无法映射拒渲染。"""

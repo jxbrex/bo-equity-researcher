@@ -97,8 +97,8 @@ def _check_chart_fields(fill: dict) -> None:
 _CH11_BINDINGS = (
     ("pe_history",
      lambda fill: (fill.get("pe_history") or {}).get("hist_lo") is not None,
-     "PE 历史带图挂第 11 章，整章被删后图不显示——v4.7.1 起四类分型"
-     "（周期/稳健成长/稳定价值/困境反转）应写第 11 章，或删除 pe_history"),
+     "PE 历史带图挂第 11 章，整章被删后图不显示——周期/成长/稳定价值/成熟·停滞/困境反转"
+     "应写第 11 章，或删除 pe_history"),
     ("price_history",
      lambda fill: bool((fill.get("price_history") or {}).get("series")),
      "股价/PE 发丝图挂第 11 章，整章被删后图不显示——与 pe_history 同规则（v4.7.1 绑定关系）"),
@@ -113,6 +113,14 @@ def _check_ch11_binding(fill: dict, warns: list) -> None:
     触发谓词逐处保留原口径——pe_history 认 hist_lo 非 None（空串也算已填）、
     price_history 认 series 真值（空列表不算）、cycle_stages 认列表非空。"""
     if (fill.get("cycle_html") or "").strip():
+        return
+    std, _tier, _legacy = _resolve_type_tier(fill)
+    if std in ("周期股", "成长型", "稳定价值", "成熟/停滞", "困境反转"):
+        msg = (f"cycle_html 缺失：{std} 第 11 章周期分析为必做"
+               "（成长型含高速/中速层、成熟·停滞均按此口径），请补 cycle_html 或调整分型")
+        if str(fill.get("date") or "") >= "2026-10-26":
+            raise ValueError(msg)
+        warns.append(msg)
         return
     for key, triggered, msg in _CH11_BINDINGS:
         if triggered(fill):

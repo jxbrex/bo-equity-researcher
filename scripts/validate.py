@@ -126,6 +126,7 @@ from validate_audit import (
     _check_price_date,
     _check_quote_consistency,
     _check_score_ranges,
+    _check_timing_facts,
     _check_gap_plot,
     _check_gap_plot_street_source,
     _check_gap_history,
@@ -148,7 +149,8 @@ from validate_valuation import (
     _check_thesis_consistency,
     _check_hero_cross,
     _check_hero_band_claims,
-    _check_dcf)
+    _check_dcf,
+    _check_cycle_valuation)
 from validate_html import (
     _check_red_flag_breaker,
     _check_content_floor,
@@ -157,6 +159,7 @@ from validate_html import (
     _check_peers_plot_target,
     _check_peers_selection,
     _check_timing_table_cells,
+    _check_research_actions,
     _check_v2_counter_evidence,
     _check_dim_blocks,
     _check_internal_codes,
@@ -197,9 +200,11 @@ def _validate_content_impl(fill: dict, calc: dict, warns: list, sc: dict = None)
     _check_price_date(fill)
     _check_quote_consistency(fill, warns)
     _check_score_ranges(fill)
+    _check_timing_facts(fill, warns)
 
     _check_valuation_inputs(fill)
     _check_valuation_scenarios(fill, warns)
+    _check_cycle_valuation(fill, calc, warns)
     _check_odds_floor(fill, warns, calc)  # v5.0 机制三：赔率 ∞ 须配悲观地板证据（floor）
     _check_consensus_np(fill, warns)    # v5.0 机制二：乐观税一致预期照抄交叉校验
     _check_anchor_discipline(fill, warns)  # v5.1.0 估值锚纪律：增量证据锁死+回滚条款前置（v5.4.0 双尺）
@@ -228,6 +233,7 @@ def _validate_content_impl(fill: dict, calc: dict, warns: list, sc: dict = None)
     _check_hero_cross(fill, warns)        # v5.1.2：Hero 与估值结构化字段互查
     _check_growth_consistency(fill, warns)  # v5.1.2：growth_plot 换算对账
     _check_timing_table_cells(fill, warns)
+    _check_research_actions(fill, warns)
     _check_v2_counter_evidence(fill, sc)
     _check_dim_blocks(fill, warns, sc)
     _check_internal_codes(fill, warns)
@@ -257,7 +263,7 @@ def _validate_content_impl(fill: dict, calc: dict, warns: list, sc: dict = None)
     _check_period_track(fill, warns)      # v5.0：3 章 period_track（照抄落盘交叉校验/判词四选一/年报期整章消失）
 
 
-def validate_content(fill: dict, calc: dict = None, sc: dict = None) -> None:
+def validate_content(fill: dict, calc: dict = None, sc: dict = None) -> list:
     """内容级校验（成稿前自动复核，借鉴 equity-research 检查器思路）。
     硬错误（拒渲染）：分数越界、valuation_inputs 缺失、valuation 三情景字段不全、
     fin_trend/growth_plot 必填图字段缺失或结构非法（v4.9）、
@@ -278,3 +284,4 @@ def validate_content(fill: dict, calc: dict = None, sc: dict = None) -> None:
         raise
     for w in warns:
         print(f"⚠️ 内容校验: {w}", file=sys.stderr)
+    return warns

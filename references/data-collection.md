@@ -14,7 +14,7 @@
 
 ```bash
 python "<技能目录>\scripts\em_fetch.py" [代码] --peers=[peer1],[peer2],[peer3],[peer4]
-# 例: python "<技能目录>\scripts\em_fetch.py" 600989 --peers=600309,002001
+# 例: python "<技能目录>\scripts\em_fetch.py" 600989 --peers=600309,002001,600426
 
 # 新报告同时取九维机械输入（分型按标的实际替换，--out 必须保留）
 python "<技能目录>\scripts\em_fetch.py" 600989 --quality-v2 --stock-type=成长型 --growth-tier=mid --industry-profile=generic --out=_em_600989_quote.json
@@ -31,7 +31,7 @@ python "<技能目录>\scripts\em_fetch.py" 600989 --quality-v2 --stock-type=成
 中位数一致；`latest` 必须显式给 3/6/9/12 个月，缺组成、期间或不一致均不得评分。
 
 **妙想 MCP 直调补充**（如 `mcp__mx-ds-mcp-stdio__mx_*` 在工具列表且未明确额度耗尽，脚本盲区/增强项；**MCP 缺席或返回明确积分/额度耗尽提示时，改用 Skill 工具调 `mx-data` skill**，同一东财妙想 API、独立额度，下列定量查询等价适用）：
-- **筹码分布（筹码面）**：tushare `cyq_*` 无权限 → `mx_ashare_finance_data(query="[公司] 最新获利比例、90%成本区间、平均成本、筹码集中度")`（实测返回平均成本/集中度）
+- **筹码分布（筹码面）**：tushare `cyq_*` 无权限 → `mx_ashare_finance_data`。获利比例/平均成本逐项单独查询并注明日期；获利比例可能返回为「盈利比率」，不得把股东户数当替代字段。90%成本区间与集中度若未返回则标缺失，不编造。
 - **行业估值水位（估值轨参考）**：`mx_index_block_finance_data(query="[申万煤炭/对应行业] 最新 PE PB 及历史分位")`——从"跟自己历史比"升级为"跟行业当前比"
 - **大宗商品价格（P0 第一变量）**：`mx_macro_data(query="[动力煤/布伦特原油/对应品种] 最新价格及近30日走势")`
 - **港股盈利预测（E5 港股补位）**：`mx_hk_finance_data(query="[公司] 券商盈利预测 目标价")`
@@ -45,8 +45,12 @@ cmd 下用 `dir /s`），修正路径后重跑。**禁止因路径问题放弃�
 全套低效降级链。
 
 脚本一次输出：E1 行情估值（A股附 PE/PB 5年带与当前分位、PE P25-P75 分位区、下次财报披露计划日、
-**时机素材一行**：现价/MA60/MA120/52 周高低，全部日线序列计算并随 `--out` 落盘 `timing` 字段——
-**12 章时机判定小表的技术面信号一律取自落盘 `timing`，禁止手估**（神华假 MA60 同源修复））、
+**时机素材与技术事实行**：现价/MA60/MA120/52 周高低、RSI14、ATR14%、MACD、20 日量比、
+均线斜率与 52 周位置，全部日线 OHLCV 计算并随 `--out` 落盘 `timing` 字段；E1/E2 共用同一次
+月线，另出近三年月末收盘与盘中高低（两种口径不得混用）。**12 章时机判定小表及 `timing_facts`
+一律照抄落盘，禁止手估**（神华假 MA60 同源修复）。`--out` 同时生成 `_timing_{code}_{date}.json`，
+`chips.average_cost/profit_ratio` 与 `capital.main_net_inflow/southbound/margin` 按市场可得性逐项查证；
+每项保留数值、单位、日期、真实来源和原查询，缺项保持 null，不把未验证接口写成可用，不改 67/33 权重）、
 E3 五年财务年表（v4.9.1 起含扣非净利列与应收/存货周转天数逐年行——分别回填 fin_trend 归母净利+扣非双柱面板与周转天数纯线面板）+红旗四项判定（三态输出，判定口径见 scoring.md「1D 盈利质量红旗清单」）+ 有息负债与短债覆盖行、
 审计意见 tushare 自动填（供 L4 红灯 a 判定）、
 E2 月线区间 + 「全序列」行（前复权 OHLC + 月末 PE(TTM)，回填 `price_history` 图字段，v4.11.0 季K 化）、E4 股东户数 + 「季度序列」行（季末近 12 期，回填 `holders` 图字段，v4.11.0 起）、业绩预告/快报、1E 治理包（质押/增减持/回购）、

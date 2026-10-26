@@ -192,6 +192,20 @@ def _scenario_numbers(s: dict):
     return profit, pe_lo, pe_hi, mc_lo, mc_hi
 
 
+def _parse_horizon_months(value, strict=False):
+    """把年/月期限解析为月数；strict=True 时只接受单一数值，拒绝区间与修饰文本。"""
+    text = str(value or "").strip()
+    match = (re.fullmatch(r"(\d+(?:\.\d+)?)\s*(年|个月|月)", text) if strict
+             else re.search(r"(\d+\.?\d*)", text))
+    if not match:
+        return None
+    try:
+        months = float(match.group(1)) * (12 if "年" in text else 1)
+    except (TypeError, ValueError):
+        return None
+    return months if months > 0 else None
+
+
 # 情景语义名（评分/估值层固有映射；可视化配色在 charts_base._SCENARIO_COLORS，按 key 查）
 _SCENARIO_NAMES = {"pess": "悲观", "base": "基础", "opt": "乐观"}
 
@@ -276,6 +290,57 @@ def compute_valuation(fill: dict):
             "odds": odds, "dispersion": dispersion, "base_lo": base["low"], "base_hi": base["high"],
             "horizon": horizon, "price": price, "pess_floor": pess_floor,
             "mode": "mcap" if rows[0]["mcap_lo"] is not None else "pe"}
+
+
+def compute_cycle_valuation(fill: dict, calc: dict):
+    """周期三账只读计算：基础、正常化与现价隐含假设，不进入评分或仓位。"""
+    cv = fill.get("cycle_valuation")
+    if not isinstance(cv, dict) or not calc:
+        return None
+    profit = cv.get("normalized_profit") or []
+    multiple = cv.get("normalized_pe") or []
+    shares = _num((fill.get("valuation") or {}).get("shares"))
+    if len(profit) != 2 or len(multiple) != 2 or not shares or shares <= 0:
+        return None
+    profit = [_num(value) for value in profit]
+    multiple = [_num(value) for value in multiple]
+    if None in profit or None in multiple or any(value <= 0 for value in multiple):
+        return None
+    base = next((row for row in calc.get("rows", []) if row.get("key") == "base"), None)
+    if not base:
+        return None
+    market_cap = calc["price"] * shares
+    implied = [market_cap / multiple[1], market_cap / multiple[0]]
+    normalized = [profit[0] * multiple[0] / shares, profit[1] * multiple[1] / shares]
+    bridge = cv.get("bridge") or {}
+    start = _num(bridge.get("start_profit"))
+    if start is None or not isinstance(bridge.get("items"), list):
+        return None
+    if any(not isinstance(item, dict) for item in bridge["items"]):
+        return None
+    amounts = [_num(item.get("amount")) for item in bridge["items"]]
+    if any(value is None for value in amounts):
+        return None
+
+    def far(left, right):
+        if left == right:
+            return False
+        if left == 0 or right == 0:
+            return True
+        denominator = min(abs(left), abs(right))
+        return abs(left - right) / denominator > 0.30
+
+    normalized_mid = sum(normalized) / 2
+    methods = [base["mid"], normalized_mid]
+    dcf_value = _num((fill.get("dcf") or {}).get("value"))
+    if dcf_value is not None:
+        methods.append(dcf_value)
+    divergence = any(far(left, right) for i, left in enumerate(methods)
+                     for right in methods[i + 1:])
+    return {"implied_profit": implied, "normalized_target": normalized,
+            "base_target": [base["low"], base["high"]], "base_mid": base["mid"],
+            "normalized_mid": normalized_mid, "dcf_value": dcf_value,
+            "divergence": divergence, "bridge_end": start + sum(amounts)}
 
 
 def _lookup(val, pairs, default):
@@ -498,21 +563,22 @@ def _compute_scores_v2(fill):
         if not 0 <= valuation <= 10:
             raise ValueError(f"valuation_score = {valuation} 超出 0-10 范围")
     t_scores = fill.get("timing_scores")
-    if not isinstance(t_scores, dict) or not t_scores:
-        raise ValueError("timing_scores 为必填字段")
-    miss_t = [k for k, _n, _w in TIMING_DIMS if k not in t_scores]
-    if miss_t:
-        raise ValueError(f"timing_scores 缺维度: {miss_t}")
-    bad_t = [k for k in t_scores if k not in {d[0] for d in TIMING_DIMS}]
-    if bad_t:
-        raise ValueError(f"timing_scores 含非法键名 {bad_t}")
-    tw_raw = fill.get("timing_weights") or {}
-    if not isinstance(tw_raw, dict):
-        raise ValueError("timing_weights 需为对象")
-    t_weights = {k: float(tw_raw.get(k, dw)) for k, _n, dw in TIMING_DIMS}
-    if abs(sum(t_weights.values()) - 100.0) > 0.01:
-        raise ValueError("时机层权重总和必须为 100")
-    timing = sum(float(t_scores[k]) * t_weights[k] for k, _n, _w in TIMING_DIMS) / 100.0
+    if t_scores is None:
+        timing = None
+    else:
+        if not isinstance(t_scores, dict) or not t_scores:
+            raise ValueError("timing_scores 为必填字段；整体缺失可填 null 表示数据不足")
+        bad_t = [k for k in t_scores if k not in {d[0] for d in TIMING_DIMS}]
+        if bad_t:
+            raise ValueError(f"timing_scores 含非法键名 {bad_t}")
+        tw_raw = fill.get("timing_weights") or {}
+        if not isinstance(tw_raw, dict):
+            raise ValueError("timing_weights 需为对象")
+        t_weights = {k: float(tw_raw.get(k, dw)) for k, _n, dw in TIMING_DIMS}
+        if abs(sum(t_weights.values()) - 100.0) > 0.01:
+            raise ValueError("时机层权重总和必须为 100")
+        timing = (None if any(t_scores.get(k) is None for k, _n, _w in TIMING_DIMS)
+                  else sum(float(t_scores[k]) * t_weights[k] for k, _n, _w in TIMING_DIMS) / 100.0)
     rule_registry = {rule_id: rule["home"] for rule_id, rule in RULE_REGISTRY["rules"].items()}
     for key, dimension in dimension_results.items():
         for step in dimension["rule_steps"]:
@@ -531,7 +597,7 @@ def _compute_scores_v2(fill):
 def compute_scores(fill: dict):
     if _quality_version(fill) == 2:
         return _compute_scores_v2(fill)
-    """v4.0 三轨：质量分（L1 六维 + L3 三维，不含估值）+ 估值分（独立）+ 时机分（微调）。
+    """v4.0 三轨：质量分（L1 六维 + L3 三维，不含估值）+ 估值分（独立）+ 时机分（独立参考）。
     返回 dict：layer_scores / layer_share / pre_risk_quality /
     yellow_total / quality（质量分）/ valuation（估值分）/ timing（时机分）/ red_flag。
     校验：L1 六维层内权重和=100；L3 三维层内权重和=100；layer_share 两值和=100；
@@ -628,25 +694,24 @@ def compute_scores(fill: dict):
         if not (0 <= valuation <= 10):
             raise ValueError(f"valuation_score = {valuation} 超出 0-10 范围")
 
-    # 时机分（筹码面 67% + 技术面 33%；只算分值，时机轨表在 11 由模型呈现，09 只给小结）
-    # timing_scores 为必填键：缺失或缺维度即拒渲染（不允许静默按 0 计入，消除 get(k,0) 兜底）
+    # 67/33 只在两子维都可评分时使用；缺任一子维不拿中性分合成总分
     t_scores = fill.get("timing_scores")
-    if not isinstance(t_scores, dict) or not t_scores:
-        raise ValueError("timing_scores 为必填字段：时机层得分对象（筹码面/技术面），缺失即拒渲染")
-    miss_t = [k for k, _n, _w in TIMING_DIMS if k not in t_scores]
-    if miss_t:
-        raise ValueError(f"timing_scores 缺维度: {miss_t}（筹码面/技术面缺一不可，不接受缺维按 0 计）")
-    bad_t = [k for k in t_scores if k not in {d[0] for d in TIMING_DIMS}]
-    if bad_t:
-        raise ValueError(f"timing_scores 含非法键名 {bad_t}：只接受 筹码面/技术面（2B/2C 旧键名兼容已移除）")
-    tw_raw = fill.get("timing_weights") or {}
-    if not isinstance(tw_raw, dict):
-        raise ValueError(f"timing_weights 需为对象（{{\"筹码面\": 权重, \"技术面\": 权重}}），实际: {type(tw_raw).__name__}")
-    t_weights = {k: float(tw_raw.get(k, dw)) for k, _n, dw in TIMING_DIMS}
-    tw_sum = sum(t_weights.values())
-    if abs(tw_sum - 100.0) > 0.01:
-        raise ValueError(f"时机层权重总和 = {tw_sum}，必须为 100")
-    timing = sum(float(t_scores[k]) * t_weights[k] for k, _n, _w in TIMING_DIMS) / 100.0
+    if t_scores is None:
+        timing = None
+    else:
+        if not isinstance(t_scores, dict) or not t_scores:
+            raise ValueError("timing_scores 为必填字段；整体缺失可填 null 表示数据不足")
+        bad_t = [k for k in t_scores if k not in {d[0] for d in TIMING_DIMS}]
+        if bad_t:
+            raise ValueError(f"timing_scores 含非法键名 {bad_t}：只接受 筹码面/技术面（2B/2C 旧键名兼容已移除）")
+        tw_raw = fill.get("timing_weights") or {}
+        if not isinstance(tw_raw, dict):
+            raise ValueError(f"timing_weights 需为对象（{{\"筹码面\": 权重, \"技术面\": 权重}}），实际: {type(tw_raw).__name__}")
+        t_weights = {k: float(tw_raw.get(k, dw)) for k, _n, dw in TIMING_DIMS}
+        if abs(sum(t_weights.values()) - 100.0) > 0.01:
+            raise ValueError("时机层权重总和必须为 100")
+        timing = (None if any(t_scores.get(k) is None for k, _n, _w in TIMING_DIMS)
+                  else sum(float(t_scores[k]) * t_weights[k] for k, _n, _w in TIMING_DIMS) / 100.0)
 
     red_flag = (fill.get("red_flag") or "").strip()
     return {
@@ -1045,22 +1110,23 @@ def _apply_critical(label, critical):
             _POS_LABEL[5]: "观察池"}.get(label, label)
 
 
-def _position_steps(quality: float, valuation: float, timing, calc: dict, red_flag: str,
+def _position_steps(quality: float, valuation: float, calc: dict, red_flag: str,
                     floor_uplift: dict = None, critical=None):
     """仓位决策链纯函数（12 卡逻辑体，v4.9 从 build_position_card 抽出便于直接单测；
-    HTML 渲染留在卡片函数）。输入 质量/估值/时机分、估值 calc、红灯 → 返回
+    HTML 渲染留在卡片函数）。输入 质量/估值、估值 calc、红灯 → 返回
     (final_label, steps, slot_txt, crit)：steps 为轨迹文案列表（只列实际触发条目），
     slot_txt 为矩阵落位说明（非矩阵路径为 None），crit 为档位临界列表
     （v5.0 机制一；非矩阵路径——红灯熔断/中枢为负拦截——为空列表，仓位未走矩阵不挂临界）。
+    时机分只作独立参考，不进入仓位计算。
     floor_uplift（v5.0.0 F3）：传估值过程卡的 vc["floor_uplift"]——net_cash 硬地板上浮
     恰落 8.0 时估值轨豁免临界判定（落点是机制产物非测量噪声），票面 8.0 不挂临界徽章、
     矩阵按 8.0 落 ≥8 列、上浮不冻结；与 render 层 14 章升档行同口径（同传一份）。
-    决策优先级固定：红灯熔断 > 中枢为负拦截器 > 矩阵落位 > 时机分调节 > 离散度调节
+    决策优先级固定：红灯熔断 > 中枢为负拦截器 > 矩阵落位 > 离散度调节
     > 赔率 ∞ 上浮 > 关键短板降档。上浮类合计净效应 ≤ +1 档且不进 20 档（重仓唯一入口是矩阵直落）。
     v5.0 机制一：矩阵落位对原分与 _edge_info 有效分两侧各落一次、取保守度孰低
     （_POS_RANK；临界轨压到边界下侧只是候选之一——质量 5.5 行非单调，v<6 时下侧
     反而更高，只算一侧会抬档），
-    crit 非空时上浮类调节（时机≥6/离散度<40%/赔率∞）一律冻结，下调照常——
+    crit 非空时上浮类调节（离散度<40%/赔率∞）一律冻结，下调照常——
     防「降一档再浮一档」自我抵消。
     v5.0 机制三：赔率 ∞ 上浮一档仅当 calc["pess_floor"]["type"]=="net_cash"（硬地板）；
     dividend 软地板只保送估值分（+1 封顶 7.5），调节链不上浮；floor 缺失不上浮
@@ -1115,14 +1181,6 @@ def _position_steps(quality: float, valuation: float, timing, calc: dict, red_fl
                 elif idx + 1 < len(_POS_LADDER):  # 落位已在顶格时不重复解释
                     blocked_by_cap.append(cap_tag if cap_tag is not None else detail)
 
-            # 时机分调节（≥6 上浮一档 / <4 下调一档；0 兜底）
-            if timing is not None and timing >= 6:
-                try_up("时机分", f"时机分 {timing:.2f} ≥ 6")
-            elif timing is not None and timing < 4:
-                new_idx = max(idx - 1, 0)
-                steps.append(f"时机分调节：时机分 {timing:.2f} < 4 → 下调一档"
-                             f"（{_POS_LABEL[_POS_LADDER[idx]]}→{_POS_LABEL[_POS_LADDER[new_idx]]}）")
-                idx = new_idx
             # 离散度调节（>90% 下调一档 / <40% 上浮一档；60% 旧阈值在 20 份报告中触发率 70%，
             # 形同普遍降档，已按经验分布收紧到极端档）
             # v4.11.1（审核 D2）：dispersion < 0 = 三情景倒挂的衍生假信号（校验层漏网时的
@@ -1149,14 +1207,9 @@ def _position_steps(quality: float, valuation: float, timing, calc: dict, red_fl
         elif pos == 0:
             final_label = _LABEL_REFUSE
         else:
-            # 观察池：不因时机/赔率上浮；时机 <4 或离散度 >90% 下调为不建议参与
-            down = []
-            if timing is not None and timing < 4:
-                down.append(f"时机分 {timing:.2f} < 4")
+            # 观察池：不因赔率上浮；离散度 >90% 下调为不建议参与
             if calc and calc["dispersion"] > 0.90:
-                down.append(f"离散度 {calc['dispersion'] * 100:.1f}% > 90%")
-            if down:
-                steps.append(f"{'；'.join(down)} → 观察池下调为不建议参与")
+                steps.append(f"离散度 {calc['dispersion'] * 100:.1f}% > 90% → 观察池下调为不建议参与")
                 final_label = _LABEL_REFUSE
             else:
                 final_label = "观察池"
@@ -1185,7 +1238,7 @@ def build_position_card(quality: float, valuation: float, timing,
     parts = ['<span class="section-tag">三轨判定与仓位结论</span>']
 
     # 决策链先行（① 的临界徽章依赖 crit）：逻辑在 _position_steps（纯函数，规则注释见其 docstring）
-    final_label, steps, slot_txt, crit = _position_steps(quality, valuation, timing, calc, red_flag,
+    final_label, steps, slot_txt, crit = _position_steps(quality, valuation, calc, red_flag,
                                                          floor_uplift, critical)
 
     # ① 三轨判定行
@@ -1202,8 +1255,9 @@ def build_position_card(quality: float, valuation: float, timing,
             q_sub += note
         else:
             v_sub += note
-    t_txt = f"{timing:.2f}" if timing is not None else "—"
-    t_verdict = _timing_verdict(timing) if timing is not None else "—"
+    t_txt = f"{timing:.2f}" if timing is not None else "数据不足"
+    t_verdict = (_timing_verdict(timing) + "（≥6 好时机 / 4-5.9 中性 / &lt;4 差时机）"
+                 if timing is not None else "独立参考，不调节仓位；缺子维不合成总分")
     parts.append(
         '<div class="metric-row">'
         f'<div class="metric-card"><div class="label">质量分</div>'
@@ -1211,8 +1265,7 @@ def build_position_card(quality: float, valuation: float, timing,
         f'<div class="metric-card"><div class="label">估值分</div>'
         f'<div class="value">{valuation:.1f}</div><div class="sub">{v_sub}</div></div>'
         f'<div class="metric-card"><div class="label">时机分</div>'
-        f'<div class="value">{t_txt}</div><div class="sub">{t_verdict}'
-        f'（≥6 好时机 / 4-5.9 中性 / &lt;4 差时机）</div></div>'
+        f'<div class="value">{t_txt}</div><div class="sub">{t_verdict}</div></div>'
         '</div>')
 
     # ② 调节轨迹

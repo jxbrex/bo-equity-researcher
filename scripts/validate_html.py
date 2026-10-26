@@ -115,7 +115,7 @@ def _check_thesis_info_floor(fill: dict, warns: list) -> None:
         th_rest = len(_plain_text(th_no_price))
         if th_txt_len < 60 or th_rest < 20:
             warns.append(f"thesis_html 信息量不足（纯文本 {th_txt_len} 字，剥掉三情景价后仅 {th_rest} 字）："
-                         f"一句话结论 = 论点 + 关键证据 + 三情景价 + 操作结论，不能只塞目标价")
+                         f"一句话结论 = 论点 + 关键证据 + 三情景价 + 研究结论，不能只塞目标价")
 
 
 def _check_peers_plot_target(fill: dict, warns: list) -> None:
@@ -306,6 +306,12 @@ def _check_peers_selection(fill: dict, warns: list) -> None:
                      f"（在 valuation_html 写明溢价来源：护城河/成长差/资产质量）")
 
 
+def _report_rule_problem(fill: dict, warns: list, message: str) -> None:
+    if str(fill.get("date") or "") >= "2026-10-26":
+        raise ValueError(message)
+    warns.append(f"旧 fill 兼容：{message}")
+
+
 def _check_timing_table_cells(fill: dict, warns: list) -> None:
     """时机判定小表单元格超长告警（长句塞格会溢出横向滚动；长解释应挪到表下 .source 行）。
     v5.1.2：小表「筹码面/技术面」得分 vs timing_scores 数值比对（>0.1 告警）；技术面信号中的
@@ -320,17 +326,27 @@ def _check_timing_table_cells(fill: dict, warns: list) -> None:
                 warns.append("时机判定小表存在 >40 字单元格：只写短语（≤15 字/条），"
                              "长解释与降级说明挪到表下 .source 行（fill-schema 固定 4 行 3 列格式）")
                 break
-        # v5.1.2：得分比对（固定行形态：维度 ｜ 得分 ｜ 命中信号与加减）
+        # 缺子维时整轨缺分；小表该行与合计都不得保留中性数值
         ts = fill.get("timing_scores") or {}
+        dims = ("筹码面", "技术面")
+        missing_total = any(ts.get(dim) is None for dim in dims)
         for tr in _iter_rows(tbl):
             cells = [_plain_text(c) for c in _row_cells(tr)]
-            if len(cells) < 2 or "合计" in cells[0]:
+            if len(cells) < 2:
                 continue
-            for dim in ("筹码面", "技术面"):
+            if "合计" in cells[0]:
+                if missing_total and re.search(r"\d", cells[1]):
+                    _report_rule_problem(fill, warns, "时机判定小表合计在缺子维时仍写数值分，"
+                                                      "总分必须为数据不足")
+                continue
+            for dim in dims:
                 if dim in cells[0]:
                     sm = re.search(r"\d+(?:\.\d+)?", cells[1])
                     ref_s = _num(ts.get(dim))
-                    if sm and ref_s is not None and abs(float(sm.group(0)) - ref_s) > 0.1:
+                    if sm and ref_s is None:
+                        _report_rule_problem(fill, warns, f"时机判定小表「{dim}」缺数据却仍写数值分，"
+                                                           "应改为数据不足")
+                    elif sm and ref_s is not None and abs(float(sm.group(0)) - ref_s) > 0.1:
                         warns.append(f"时机判定小表「{dim}」得分（{sm.group(0)}）与 timing_scores"
                                      f"（{ref_s:g}）不一致（>0.1）：两处应同源（v5.1.2）")
         # v5.1.2：信号数字/方向 vs 落盘 timing（神华假 MA60 同源修复闭环）
@@ -377,6 +393,25 @@ def _check_timing_table_cells(fill: dict, warns: list) -> None:
             if down and rp > rv and _now(down):
                 warns.append(f"时机小表信号「{label} 下方/跌破」与落盘矛盾：现价 {rp:g} > "
                              f"{label} {rv:g}（v5.1.2）")
+
+
+def _check_research_actions(fill: dict, warns: list) -> None:
+    """新报告不给加减仓或分批节奏；旧正文保留但显示兼容提示。"""
+    for field in ("dash_html", "position_html", "thesis_html"):
+        text = _plain_text(fill.get(field) or "")
+        matched = False
+        for term in ("加仓", "减仓", "满仓", "清仓", "分批"):
+            for match in re.finditer(term, text):
+                prefix = text[max(0, match.start() - 4):match.start()]
+                if not prefix.endswith(("不", "禁止", "不得", "勿", "避免", "不宜", "不采用", "不建议")):
+                    matched = True
+                    break
+            if matched:
+                break
+        if matched:
+            _report_rule_problem(fill, warns,
+                f"{field} 含交易节奏：研究动作只能写复核、证伪或重估，"
+                "不写加仓/减仓/分批买卖")
 
 
 def _check_v2_counter_evidence(fill: dict, sc: dict = None) -> None:
@@ -497,7 +532,7 @@ def _check_writing_discipline(fill: dict, warns: list) -> None:
 def _check_required_fields(fill: dict, warns: list) -> None:
     """fill-schema 标 ✓ 但渲染器原零校验的必填字段缺失告警（v5.8.2 合并 _check_missing_required_warns：
     thesis_html 与 misc 各字段单源）。全部软告警不拒——缺失只会让对应章节标题/指标卡
-    显示空白或占位符（timing_scores/yellow_deductions 缺项由 compute_scores 硬拒，不在此列）。"""
+    显示空白或占位符（yellow_deductions 缺项由 compute_scores 硬拒；时机缺子维显示数据不足，不在此列）。"""
     th = fill.get("thesis_html", "")
     if not th.strip():
         warns.append("thesis_html 缺失：Hero 一句话结论为空")

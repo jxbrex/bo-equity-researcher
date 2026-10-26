@@ -8,7 +8,7 @@
   本模板由 scripts/render_report.py 渲染，占位符为双花括号唯一键（形如 COMPANY、DATE）。
   章节正文的 HTML 结构骨架见 references/fill-schema.md（dim-block/table/deduction/badge 等写法）。
   条件章节：IF:PERIOD_KPI_HTML / IF:CYCLE_HTML / IF:REVIEW_HTML 包裹的块在对应键为空时整块删除。
-  三轨制：质量分（L1 六维 + L3）/ 估值分（独立价格轨）/ 时机分（微调）。
+  三轨制：质量分（L1 六维 + L3）/ 估值分（独立价格轨）/ 时机分（独立参考，不调节仓位）。
 -->
 <style>
 /* v5.0 色值 token 化：全部色值收敛为 :root 语义变量，样式表内不再出现字面 hex。
@@ -414,7 +414,7 @@ td.rev, th.rev { padding: 8px 12px; }
           <div class="s-sub">{{VALUATION_WORD}}</div>
         </div>
       </div>
-      <div class="hero-timing-mini">时机分 <span class="tv">{{TIMING_SCORE}}</span> · 微调 ±1 档</div>
+      <div class="hero-timing-mini">时机分 <span class="tv">{{TIMING_SCORE}}</span> · 独立参考，不调节仓位</div>
     </div>
   </div>
   <div class="hero-data-strip">
@@ -612,7 +612,7 @@ td.rev, th.rev { padding: 8px 12px; }
   <div class="section-header">
     <span class="section-num">12</span>
     <span class="section-title">仓位与时机决策</span>
-    <span class="section-meta">质量分 {{QUALITY_SCORE}} × 估值分 {{VALUATION_SCORE}} ｜ 时机分 {{TIMING_SCORE}} 微调</span>
+    <span class="section-meta">质量分 {{QUALITY_SCORE}} × 估值分 {{VALUATION_SCORE}} ｜ 时机分 {{TIMING_SCORE}}（独立参考）</span>
   </div>
   <div class="section-body">
     {{HOLDERS_PLOT_HTML}}{{POSITION_HTML}}
@@ -648,6 +648,8 @@ td.rev, th.rev { padding: 8px 12px; }
     {{DASH_HTML}}
   </div>
 </div>
+
+{{AUDIT_HTML}}
 
 <!-- Disclaimer -->
 <div class="disclaimer">

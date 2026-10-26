@@ -15,8 +15,52 @@ from scoring import (
 )
 from conftest import (
     minimal_fill, full_fill, _calc, expect_valueerror, validate_stderr,
-    write_fill, render_fill, v2_fill, render_v2_fill,
+    write_fill, render_fill, v2_fill, render_v2_fill, satellite_cycle_fill,
 )
+
+
+def _position_label(html):
+    return html.split('badge-lg">', 1)[1].split("</span>", 1)[0]
+
+
+def test_timing_score_does_not_change_position():
+    calc = _calc(dispersion=0.50)
+    low = R.build_position_card(4.5, 4.5, 0.0, calc, "")
+    high = R.build_position_card(4.5, 4.5, 10.0, calc, "")
+    assert _position_label(low) == _position_label(high) == "轻仓 ≤5%"
+    assert "时机分调节" not in low and "时机分调节" not in high
+    low_obs = R.build_position_card(7.5, 3.0, 0.0, calc, "")
+    high_obs = R.build_position_card(7.5, 3.0, 10.0, calc, "")
+    assert _position_label(low_obs) == _position_label(high_obs) == "观察池"
+
+
+def test_cycle_valuation_satellite_three_accounts_and_single_source():
+    fill = satellite_cycle_fill()
+    calc = R.compute_valuation(fill)
+    result = R.compute_cycle_valuation(fill, calc)
+    assert [round(value, 2) for value in result["normalized_target"]] == [21.37, 29.39]
+    assert [round(value, 2) for value in result["implied_profit"]] == [76.26, 93.21]
+    assert result["divergence"] is True
+    assert result["bridge_end"] == 118
+
+    full = v2_fill()
+    full.update(price=fill["price"], valuation=fill["valuation"],
+                cycle_valuation=fill["cycle_valuation"], date="2026-10-26",
+                stock_type="周期股", cycle_position={"stage": "本轮高景气"},
+                cycle_html="<p>正常化利润80-90亿元；利润位置与价格位置分别留证据。</p>")
+    full["score_inputs"]["1F"].update(
+        roic=0.14, roic_basis="normalized", roic_normalized_components=[0.12, 0.14, 0.16])
+    calc = R.compute_valuation(full)
+    prices = {row["key"]: f'{row["mid"]:.2f}' for row in calc["rows"]}
+    full["thesis_html"] = ("周期三账同源且证据可复算，现价隐含利润、基础情景与正常化估值并列，"
+                            f'<span class="scenario-pess">{prices["pess"]}</span>/'
+                            f'<span class="scenario-base">{prices["base"]}</span>/'
+                            f'<span class="scenario-opt">{prices["opt"]}</span>元；不机械推断涨跌。')
+    html = render_v2_fill(full)
+    assert html.count('id="cycle-valuation"') == 1
+    assert html.count('href="#cycle-valuation"') == 1
+    assert html.count('aria-label="周期估值三账"') == 1
+    assert "76.26" in html and "29.39" in html and "方法分歧大" in html
 
 
 def test_v2_critical_weaknesses_only_core_dimensions():
@@ -45,7 +89,7 @@ def test_v2_critical_weaknesses_only_core_dimensions():
 def test_critical_weakness_downgrades_each_core_once():
     for key in ("1C", "1D", "1E", "1F"):
         label, steps, _slot, _crit = _position_steps(
-            7.5, 8.5, 5.0, _calc(), "", critical=[{"key": key, "score": 3.5}])
+            7.5, 8.5, _calc(), "", critical=[{"key": key, "score": 3.5}])
         assert label == "标准仓 ≤10%（重仓 ≤20%·关键短板）"
         assert sum("关键短板降档" in step for step in steps) == 1
         assert key in next(step for step in steps if "关键短板降档" in step)
@@ -53,7 +97,7 @@ def test_critical_weakness_downgrades_each_core_once():
 
 def test_critical_applies_last_and_preserves_other_terminal_states():
     label, steps, _slot, _crit = _position_steps(
-        4.5, 4.5, 5.0, _calc(dispersion=0.50, odds=None, floor_type="net_cash"), "",
+        4.5, 4.5, _calc(dispersion=0.50, odds=None, floor_type="net_cash"), "",
         critical=[{"key": "1D", "score": 3.5}])
     assert label == "轻仓 ≤5%（标准仓 ≤10%·关键短板）"
     assert steps[0].startswith("赔率调节") and "关键短板降档" in steps[-1]
@@ -61,7 +105,7 @@ def test_critical_applies_last_and_preserves_other_terminal_states():
             (4.5, 4.5, "", "不建议参与"), (7.5, 3.0, "", "观察池"),
             (7.5, 8.5, "审计非标", "不建议参与")):
         label, steps, _slot, _crit = _position_steps(
-            quality, valuation, 3.5 if expected == "不建议参与" and not red_flag else 5.0,
+            quality, valuation,
             _calc(dispersion=0.95 if expected == "不建议参与" and not red_flag else 0.55),
             red_flag, critical=[{"key": "1D", "score": 3.5}])
         assert label == expected
@@ -84,31 +128,31 @@ def test_v2_render_applies_critical_without_capping_quality():
 # ---------------- v5.0 决策层三机制（临界档透明化 / 乐观税门禁 / 赔率∞地板分级） ----------------
 def test_position_steps_edge_critical():
     """v5.0 机制一（临界档透明化）：距最近边界 ≤0.3 → 有效分压到边界下侧（相邻两档孰低），
-    上浮类调节（时机≥6/离散度<40%/赔率∞）一律冻结、下调照常；slot_txt 带临界说明。"""
-    # q=7.2 临界（距 7.0 边界 0.2）→ 降档落 10 档（中上·好价格）；三条上浮路径全冻结
+    上浮类调节（离散度<40%/赔率∞）一律冻结、下调照常；时机不再参与仓位；slot_txt 带临界说明。"""
+    # q=7.2 临界（距 7.0 边界 0.2）→ 降档落 10 档（中上·好价格）；离散度/赔率两条上浮路径全冻结
     label, steps, slot, crit = _position_steps(
-        7.2, 8.5, 7.0, _calc(dispersion=0.30, odds=None, floor_type="net_cash"), "")
+        7.2, 8.5, _calc(dispersion=0.30, odds=None, floor_type="net_cash"), "")
     assert label == "标准仓 ≤10%", f"临界降档+上浮冻结应止步标准仓，实际 {label}"
     assert [c["track"] for c in crit] == ["质量"] and abs(crit[0]["dist"] - 0.2) < 1e-9
     assert "档位临界：质量分 7.20 距 7.0 边界 0.20，按相邻两档孰低降档执行" in slot
-    assert sum("上浮冻结" in s for s in steps) == 3, f"三条上浮路径应全冻结：{steps}"
+    assert sum("上浮冻结" in s for s in steps) == 2, f"两条上浮路径应全冻结：{steps}"
     assert "重仓" not in label
     # q=7.0 恰在边界（dist=0）→ 同样降档
-    label, steps, slot, crit = _position_steps(7.0, 8.5, 5.0, _calc(), "")
+    label, steps, slot, crit = _position_steps(7.0, 8.5, _calc(), "")
     assert label == "标准仓 ≤10%" and crit and crit[0]["dist"] == 0.0
     # v=8.2 临界 → 落「中上·合理偏便宜」5 档（质量 5.5-7 行 × 估值 6-8 列）
-    label, steps, slot, crit = _position_steps(6.0, 8.2, 5.0, _calc(), "")
+    label, steps, slot, crit = _position_steps(6.0, 8.2, _calc(), "")
     assert label == "轻仓 ≤5%" and [c["track"] for c in crit] == ["估值"]
     assert "估值分 8.20 距 8.0 边界 0.20" in slot
-    # 临界 + 时机 3.5 → 下调照常（10 档 → 5 档），无冻结噪音
-    label, steps, slot, crit = _position_steps(7.2, 8.5, 3.5, _calc(), "")
-    assert label == "轻仓 ≤5%", f"下调照常应落轻仓，实际 {label}"
-    assert any("下调一档" in s for s in steps) and not any("上浮冻结" in s for s in steps)
+    # 临界时只有离散度/赔率可下调，时机不再额外降档
+    label, steps, slot, crit = _position_steps(7.2, 8.5, _calc(), "")
+    assert label == "标准仓 ≤10%", f"时机解耦后应只剩临界降档，实际 {label}"
+    assert not any("时机分调节" in s for s in steps) and not any("上浮冻结" in s for s in steps)
     # 非临界对照：7.5×8.5 直落重仓，crit 为空
-    label, steps, slot, crit = _position_steps(7.5, 8.5, 5.0, _calc(), "")
+    label, steps, slot, crit = _position_steps(7.5, 8.5, _calc(), "")
     assert label == "重仓 ≤20%" and crit == []
     # 双轨同时临界：7.2×8.2 → 双双降档（中上·合理偏便宜 5 档）
-    label, steps, slot, crit = _position_steps(7.2, 8.2, 5.0, _calc(), "")
+    label, steps, slot, crit = _position_steps(7.2, 8.2, _calc(), "")
     assert label == "轻仓 ≤5%" and len(crit) == 2
 
 
@@ -116,15 +160,15 @@ def test_position_steps_odds_floor_gate():
     """v5.0 机制三（调节链侧）：赔率 ∞ 上浮一档仅硬地板=net_cash 享受；dividend 软地板
     记「估值分 +1 封顶 7.5，调节链不上浮」；floor 缺失不上浮（防御，validate 已硬拒）。"""
     label, steps, _s, _c = _position_steps(
-        4.5, 4.5, 5.0, _calc(dispersion=0.50, odds=None, floor_type="net_cash"), "")
+        4.5, 4.5, _calc(dispersion=0.50, odds=None, floor_type="net_cash"), "")
     assert label == "标准仓 ≤10%"
     assert steps == ["赔率调节：赔率 ∞（悲观仍正收益） → 上浮一档（轻仓 ≤5%→标准仓 ≤10%）"], steps
     label, steps, _s, _c = _position_steps(
-        4.5, 4.5, 5.0, _calc(dispersion=0.50, odds=None, floor_type="dividend"), "")
+        4.5, 4.5, _calc(dispersion=0.50, odds=None, floor_type="dividend"), "")
     assert label == "轻仓 ≤5%"
     assert steps == ["赔率 ∞（软地板=保底分红折现）：估值分 +1 封顶 7.5，调节链不上浮"], steps
     label, steps, _s, _c = _position_steps(
-        4.5, 4.5, 5.0, _calc(dispersion=0.50, odds=None), "")
+        4.5, 4.5, _calc(dispersion=0.50, odds=None), "")
     assert label == "轻仓 ≤5%" and steps == ["矩阵落位直接生效，无调节项触发"], steps
 
 
@@ -346,24 +390,24 @@ def test_net_cash_floor_edge_exemption():
     calc = _calc(dispersion=0.50, odds=None, floor_type="net_cash")
     fu = {"type": "net_cash", "before": 6.8, "after": 8.0}
     # 底分 6.8 上浮 8.0 + 质量 7.5 → 矩阵直落「好公司·好价格」重仓，crit 空、无徽章
-    label, steps, slot, crit = _position_steps(7.5, 8.0, 5.0, calc, "", floor_uplift=fu)
+    label, steps, slot, crit = _position_steps(7.5, 8.0, calc, "", floor_uplift=fu)
     assert label == "重仓 ≤20%" and crit == [], f"豁免后应直落重仓，实际 {label}/{crit}"
     assert "档位临界" not in slot
     # 对照：不传 floor_uplift（旧行为）→ 恰落 8.0 判临界，降档 10 档 + 上浮冻结
-    label2, steps2, slot2, crit2 = _position_steps(7.5, 8.0, 5.0, calc, "")
+    label2, steps2, slot2, crit2 = _position_steps(7.5, 8.0, calc, "")
     assert label2 == "标准仓 ≤10%" and [c["track"] for c in crit2] == ["估值"]
     assert "估值分 8.00 距 8.0 边界 0.00" in slot2
     # 质量轨临界 + 估值轨豁免 → 只质量降档（中上·好价格 10 档）
-    label3, _s3, slot3, crit3 = _position_steps(7.2, 8.0, 5.0, calc, "", floor_uplift=fu)
+    label3, _s3, slot3, crit3 = _position_steps(7.2, 8.0, calc, "", floor_uplift=fu)
     assert label3 == "标准仓 ≤10%" and [c["track"] for c in crit3] == ["质量"]
     assert "估值分 8.00 距" not in slot3, "估值轨豁免后不挂临界说明"
     # dividend 软地板落 7.5 → 不豁免（本就不临界），落 6-7.9 列行为不变
     fu_d = {"type": "dividend", "before": 6.8, "after": 7.5}
-    label4, _s4, _sl4, crit4 = _position_steps(7.5, 7.5, 5.0, _calc(odds=None, floor_type="dividend"),
+    label4, _s4, _sl4, crit4 = _position_steps(7.5, 7.5, _calc(odds=None, floor_type="dividend"),
                                                "", floor_uplift=fu_d)
     assert label4 == "标准仓 ≤10%" and crit4 == []
     # 赔率 ∞ 上浮生效轨迹（不被没收）：质量 4.5 落轻仓 → 硬地板上浮标准仓
-    label5, steps5, _sl5, _c5 = _position_steps(4.5, 8.0, 5.0, calc, "", floor_uplift=fu)
+    label5, steps5, _sl5, _c5 = _position_steps(4.5, 8.0, calc, "", floor_uplift=fu)
     assert label5 == "标准仓 ≤10%"
     assert any("赔率调节" in s and "上浮一档" in s for s in steps5), f"上浮轨迹应出现：{steps5}"
     # _edge_info 直测：豁免后 crit 空且有效分保持 8.0（矩阵按 ≥8 列落位）
@@ -379,21 +423,21 @@ def test_position_edge_true_min():
     """临界孰低必须两侧实算（热核审计发现）：矩阵质量 5.5 行非单调（v<6 时上侧=观察池、
     下侧=质地一般 5），只算压边界一侧会把观察池抬成轻仓——违反「降档不抬档」。"""
     # 5.5 边界 + v<6：原落位观察池，压边界后 5 → 孰低=观察池（修复前误抬轻仓）
-    label, steps, slot, crit = _position_steps(5.6, 5.0, 5.0, None, "")
+    label, steps, slot, crit = _position_steps(5.6, 5.0, None, "")
     assert label == "观察池" and "中上·差价格" in slot and "观察池" in slot, \
         f"孰低应保观察池，实际 {label}/{slot}"
     assert [c["track"] for c in crit] == ["质量"] and "孰低" in slot
     # 同边界 + v≥8：原 10、压边界 5 → 孰低=5（正常降档方向不受影响）
-    label2, _s2, _sl2, _c2 = _position_steps(5.6, 8.5, 5.0, None, "")
+    label2, _s2, _sl2, _c2 = _position_steps(5.6, 8.5, None, "")
     assert label2 == "轻仓 ≤5%", f"实际 {label2}"
     # 下侧临界（6.8 近 7.0）：两侧同行，落位不变
-    label3, _s3, _sl3, crit3 = _position_steps(6.8, 8.5, 5.0, None, "")
+    label3, _s3, _sl3, crit3 = _position_steps(6.8, 8.5, None, "")
     assert label3 == "标准仓 ≤10%" and [c["track"] for c in crit3] == ["质量"]
     # 4.0 边界上侧（4.15）：原轻仓 5、压边界 0 → 孰低=不建议参与（设计内陡降，钉住）
-    label4, _s4, _sl4, _c4 = _position_steps(4.15, 5.0, 5.0, None, "")
+    label4, _s4, _sl4, _c4 = _position_steps(4.15, 5.0, None, "")
     assert label4 == "不建议参与", f"实际 {label4}"
     # 非临界对照（5.9 距 5.5 为 0.4）：观察池、无临界
-    label5, _s5, _sl5, crit5 = _position_steps(5.9, 5.0, 5.0, None, "")
+    label5, _s5, _sl5, crit5 = _position_steps(5.9, 5.0, None, "")
     assert label5 == "观察池" and crit5 == []
 
 
@@ -447,3 +491,16 @@ def test_anchor_discipline():
     R.validate_content(f, R.compute_valuation(f))   # 不抛即过
     # ⑦ 首版（无 prev）与市值口径不受门禁约束
     R.validate_content(minimal_fill(), R.compute_valuation(minimal_fill()))
+
+
+def test_anchor_market_parameter_can_move_without_fundamental():
+    f = full_fill()
+    f["valuation"]["pe_band_evidence"] = [
+        {"type": "市场参数", "note": "中债10年期国债收益率上行（2026-10-26），全体折现率需同步调整"}
+    ]
+    R.validate_content(f, R.compute_valuation(f))  # 市场参数本身即可构成合法移动理由
+    html = render_fill(f)
+    assert "市场参数仅限系统性估值调整" in html
+    assert "写不出基本面增量的移动不合法" not in html
+    f["valuation"]["pe_band_evidence"] = [{"type": "价格", "note": "股价一个月下跌16.6%"}]
+    expect_valueerror(f, kw="基本面|市场参数")

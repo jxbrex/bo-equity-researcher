@@ -4,8 +4,8 @@
 em_market.py — 行情 / 月K 取数族（Bo-EquityResearcher skill 取数分块之一，v4.10.3 自 em_data 拆分）
 
 职责：E1 行情（tushare daily_basic 优先、东财 push2 兜底）、E2 月线（tushare 前复权 / 港股日线
-聚合，东财 kline 兜底）、PE/PB 历史分位带、时机素材（MA60/MA120/52 周高低）。进程内日线序列
-缓存 _HK_DAILY_CACHE/_A_DAILY_CACHE 随本块持有（E1 与 E2 共用同一次拉取）。
+聚合，东财 kline 兜底）、PE/PB 历史分位带、时机素材（MA60/MA120/52 周高低、技术指标、
+三年价格区间）。进程内日线序列缓存 _HK_DAILY_CACHE/_A_DAILY_CACHE 随本块持有（E1 与 E2 共用同一次拉取）。
 
 与其他块的边界（重要）：
 - 只依赖 em_core.py，绝不 import 其他取数块（em_finance/em_owner/em_misc 同理）。
@@ -301,31 +301,151 @@ def fetch_kline_monthly(secid: str, years: int, is_hk: bool = False) -> list:
         return _em_kline_monthly(secid, years, is_hk)
 
 
-def fetch_timing_material(code: str, is_hk: bool = False):
-    """时机分素材（v4.8，技术面六信号数据源唯一化——神华事故里假 MA60/假月线的产生环节
-    正是「模型手拼」，与 quote 防伪同源）：现价/MA60/MA120/52 周高低，全部出自日线序列
-    （A股 tushare daily 近 430 天；港股复用 hk_daily 缓存）。失败返回 None。"""
+def _rsi_wilder(closes, period=14):
+    if len(closes) < period + 1:
+        return None
+    changes = [b - a for a, b in zip(closes, closes[1:])]
+    gains = [max(change, 0) for change in changes]
+    losses = [max(-change, 0) for change in changes]
+    gain = sum(gains[:period]) / period
+    loss = sum(losses[:period]) / period
+    for up, down in zip(gains[period:], losses[period:]):
+        gain = (gain * (period - 1) + up) / period
+        loss = (loss * (period - 1) + down) / period
+    if loss == 0:
+        return 100.0 if gain > 0 else 50.0
+    return 100 - 100 / (1 + gain / loss)
+
+
+def _atr_wilder(rows, period=14):
+    ranges = []
+    for i, row in enumerate(rows):
+        try:
+            high, low = float(row["high"]), float(row["low"])
+            current = float(row["close"])
+            previous = float(rows[i - 1]["close"]) if i else current
+            ranges.append(max(high - low, abs(high - previous), abs(low - previous)))
+        except (KeyError, TypeError, ValueError):
+            ranges.append(None)
+    if len(ranges) < period or any(value is None for value in ranges[-period:]):
+        return None
+    atr = sum(ranges[:period]) / period
+    for value in ranges[period:]:
+        if value is not None:
+            atr = (atr * (period - 1) + value) / period
+    return atr
+
+
+def _macd(closes, fast=12, slow=26, signal=9):
+    """DIF 在第 26 个有效收盘价形成，DEA 从该值起算；柱=2×(DIF−DEA)。"""
+    def next_ema(values, period):
+        alpha = 2 / (period + 1)
+        ema = values[0]
+        return [ema := value * alpha + ema * (1 - alpha) for value in values[1:]]
+
+    if len(closes) < slow:
+        return {"dif": None, "dea": None, "hist": None}
+    fast_line, slow_line = next_ema(closes, fast), next_ema(closes, slow)
+    dif = [a - b for a, b in zip(fast_line, slow_line)]
+    dea = next_ema(dif[slow - 2:], signal)
+    return {"dif": round(dif[-1], 6), "dea": round(dea[-1], 6),
+            "hist": round(2 * (dif[-1] - dea[-1]), 6)}
+
+
+def _ma_slope(closes, window, lag=20):
+    if len(closes) < window + lag:
+        return None
+    current = sum(closes[-window:]) / window
+    previous = sum(closes[-window - lag:-lag]) / window
+    return round((current / previous - 1) * 100, 2) if previous else None
+
+
+def compute_technical_facts(rows):
+    """由同一日线 OHLCV 序列计算事实，不给出买卖信号，也不参与评分。"""
+    rows = sorted((row for row in rows or []
+                   if row.get("trade_date") and row.get("close") is not None),
+                  key=lambda row: row["trade_date"])
+    closes = [float(row["close"]) for row in rows]
+    result = {"as_of": rows[-1]["trade_date"] if rows else None,
+              "sample_days": len(rows), "rsi14": None, "atr14_pct": None,
+              "macd": _macd(closes), "volume_ratio_20": None,
+              "ma60_slope_20d_pct": _ma_slope(closes, 60),
+              "ma120_slope_20d_pct": _ma_slope(closes, 120),
+              "position_52w_pct": None}
+    rsi = _rsi_wilder(closes)
+    if rsi is not None:
+        result["rsi14"] = round(rsi, 2)
+    atr = _atr_wilder(rows)
+    if atr is not None and closes[-1] > 0:
+        result["atr14_pct"] = round(atr / closes[-1] * 100, 2)
+    if len(rows) >= 21:
+        volumes = []
+        for row in rows[-21:-1]:
+            try:
+                volumes.append(float(row["vol"]))
+            except (KeyError, TypeError, ValueError):
+                volumes.append(None)
+        base = sum(volumes) / 20 if all(value is not None for value in volumes) else None
+        try:
+            latest_volume = float(rows[-1]["vol"])
+        except (KeyError, TypeError, ValueError):
+            latest_volume = None
+        if base and latest_volume is not None:
+            result["volume_ratio_20"] = round(latest_volume / base, 2)
+    window = closes[-250:]
+    if window and max(window) > min(window):
+        result["position_52w_pct"] = round(
+            (window[-1] - min(window)) / (max(window) - min(window)) * 100, 2)
+    return result
+
+
+def consensus_price_levels(monthly_rows, years=3):
+    """历史月末/盘中价格区间；不是券商目标价，也不构成价位预测。"""
+    rows = []
+    for row in monthly_rows or []:
+        try:
+            day = date.fromisoformat(str(row["date"])[:10])
+            rows.append((day, row))
+        except (KeyError, TypeError, ValueError):
+            continue
+    if not rows:
+        return None
+    rows.sort(key=lambda item: item[0])
+    latest = rows[-1][0]
     try:
-        if is_hk:
-            rows = _hk_daily_series(f"{code}.HK")
-            closes = [float(r["close"]) for r in rows
-                      if r.get("close") is not None and r.get("trade_date")]
-        else:
-            # 与 fetch_quote 同源，统一走 _a_daily_series（v4.10.3 Step 5）：命中即省一发，
-            # miss 则现拉并回填 _A_DAILY_CACHE——同进程再读不再重拉（旧实现只读不回填）
-            rows = _a_daily_series(to_ts_code(code))
-            rows = sorted((r for r in rows if r.get("trade_date") and r.get("close") is not None),
-                          key=lambda x: x["trade_date"])
-            closes = [float(r["close"]) for r in rows]
+        cutoff = latest.replace(year=latest.year - years)
+    except ValueError:
+        cutoff = latest.replace(year=latest.year - years, day=28)
+    selected = [row for day, row in rows if day >= cutoff]
+    closes = [float(row["close"]) for row in selected]
+    ohlc = [row for row in selected
+            if row.get("high") is not None and row.get("low") is not None]
+    complete = len(ohlc) == len(selected)
+    return {"window_years": years, "start_date": str(selected[0]["date"])[:10],
+            "end_date": str(selected[-1]["date"])[:10], "months": len(selected),
+            "ohlc_months": len(ohlc), "close_high": max(closes), "close_low": min(closes),
+            "intraday_high": max(float(row["high"]) for row in ohlc) if complete else None,
+            "intraday_low": min(float(row["low"]) for row in ohlc) if complete else None}
+
+
+def fetch_timing_material(code: str, is_hk: bool = False, monthly_rows=None):
+    """原有价格/均线键不变，新增 technical 与月线 consensus_levels。"""
+    try:
+        rows = (_hk_daily_series(f"{code}.HK") if is_hk
+                else _a_daily_series(to_ts_code(code)))
+        rows = sorted((r for r in rows if r.get("trade_date") and r.get("close") is not None),
+                      key=lambda x: x["trade_date"])
+        closes = [float(r["close"]) for r in rows]
         if len(closes) < 60:
             return None
 
         def _ma(n):
             return round(sum(closes[-n:]) / n, 2) if len(closes) >= n else None
-        win = closes[-250:]  # 52 周 ≈ 250 个交易日
+        win = closes[-250:]
         return {"price": round(closes[-1], 2), "ma60": _ma(60), "ma120": _ma(120),
                 "high_52w": round(max(win), 2), "low_52w": round(min(win), 2),
-                "n": len(closes)}
+                "n": len(closes), "technical": compute_technical_facts(rows),
+                "consensus_levels": consensus_price_levels(monthly_rows)}
     except Exception as e:
         print(f"⚠️ fetch_timing_material({code}): {e}", file=sys.stderr)
         return None

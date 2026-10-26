@@ -19,6 +19,35 @@ from conftest import (
     prepare_v2_quote, render_v2_fill,
 )
 
+def test_missing_timing_is_visible_and_does_not_change_position():
+    fill = minimal_fill(timing_scores={"筹码面": None, "技术面": 5.0})
+    sc = R.compute_scores(fill)
+    assert sc["timing"] is None
+    html = render_fill(fill)
+    assert '时机分 <span class="tv">数据不足</span>' in html
+    baseline = R.compute_scores(minimal_fill())
+    baseline_calc = R.compute_valuation(minimal_fill())
+    baseline_vc = R.compute_valuation_score(baseline_calc, minimal_fill()["valuation_inputs"], "B")
+    expected_card = R.build_position_card(baseline["quality"], baseline_vc["score"], baseline["timing"],
+                                         baseline_calc, "")
+    expected_label = expected_card.split('badge-lg">', 1)[1].split("</span>", 1)[0]
+    assert f'badge-lg">{expected_label}</span>' in html
+    assert "时机分调节" not in html
+    assert "≥6 好时机" not in html.split("三轨判定与仓位结论", 1)[1]
+    card = R.build_position_card(4.5, 4.5, None, _calc(dispersion=0.5), "")
+    assert "数据不足" in card and 'badge-lg">轻仓 ≤5%</span>' in card
+    v2 = v2_fill()
+    v2["timing_scores"] = {"筹码面": 5.0}
+    assert R.compute_scores(v2)["timing"] is None
+    assert "数据不足" in render_v2_fill(v2)
+    for invalid in ({}, {"筹码面": "数据不足", "技术面": 5.0}):
+        try:
+            R.compute_scores(minimal_fill(timing_scores=invalid))
+            raise AssertionError(f"非法时机输入不应静默放行: {invalid}")
+        except ValueError:
+            pass
+
+
 def test_p0_low_quality_not_observation_pool():
     """P0 回归：quality <4 时最终仓位结论必须是「不建议参与」。"""
     html = R.build_position_card(quality=3.5, valuation=5.0,
@@ -43,8 +72,8 @@ def test_uplift_cap_blocks_heavy_from_light():
 
 
 def test_down_floors_at_zero():
-    """下调兜底：轻仓落位 + 时机差(<4)降一档到 0 后，高离散度再触发下调必须
-    兜底在 0，不得经 Python 负索引回卷成重仓 ≤20%。"""
+    """下调兜底：轻仓落位 + 高离散度降一档到 0 后，继续下调必须兜底在 0，
+    不得经 Python 负索引回卷成重仓 ≤20%；时机只作展示，不参与这条链。"""
     html = R.build_position_card(quality=4.5, valuation=4.5,
                                  timing=3.5, calc=_calc(dispersion=0.95),
                                  red_flag="")
@@ -84,6 +113,41 @@ def test_horizon_from_base_scenario():
     assert calc["months"] == 24.0, f"应按 base 情景 horizon 年化（24 个月），实际 {calc['months']}"
 
 
+def test_new_report_requires_single_shared_horizon():
+    with tempfile.TemporaryDirectory() as d:
+        f = prepare_v2_quote(v2_fill(date="2026-10-26"), d)
+        f["valuation"]["scenarios"][2]["horizon"] = "18个月"
+        expect_valueerror(f, kw="三情景期限不一致")
+        f = prepare_v2_quote(v2_fill(date="2026-10-26"), d)
+        f["valuation"]["scenarios"][1]["horizon"] = "12-24个月"
+        expect_valueerror(f, kw="区间期限")
+        f = prepare_v2_quote(v2_fill(date="2026-10-26"), d)
+        f["valuation"]["scenarios"][1]["horizon"] = "12"
+        f["cycle_html"] = "<p>估值周期分析。</p>"
+        expect_valueerror(f, kw="年/月")
+        f = prepare_v2_quote(v2_fill(date="2026-10-26"), d)
+        f["valuation"]["scenarios"][1]["horizon"] = "1年"
+        f["cycle_html"] = "<p>估值周期分析。</p>"
+        R.validate_content(f, R.compute_valuation(f))  # 1年=12个月，允许同月数不同写法
+
+
+def test_legacy_mixed_horizon_warns_without_rejection():
+    f = minimal_fill(date="2026-08-27")
+    f["valuation"]["scenarios"][2]["horizon"] = "18-24个月"
+    out = validate_stderr(f)
+    assert "区间期限" in out and "旧报告" in out, f"旧报告应给兼容性警告而非拒渲染：{out}"
+
+
+def test_cycle_chapter_required_for_growth_high_and_mature():
+    with tempfile.TemporaryDirectory() as d:
+        f = prepare_v2_quote(v2_fill(date="2026-10-26", growth_tier="high"), d)
+        f["cycle_html"] = ""
+        expect_valueerror(f, kw="第 11 章")
+    out = validate_stderr(minimal_fill(stock_type="成熟/停滞")
+                          | {"cycle_html": ""})
+    assert "cycle_html 缺失" in out and "第 11 章" in out, f"成熟/停滞缺章应给兼容警告：{out}"
+
+
 def test_rejections():
     expect_valueerror(minimal_fill(yellow_deductions=[{"label": "x", "points": -0.5}]),
                       "黄灯负扣分")
@@ -92,7 +156,7 @@ def test_rejections():
     f = minimal_fill(); f["valuation"]["scenarios"][0]["pe"] = [10, 8]
     expect_valueerror(f, "PE 区间倒挂")
     f = minimal_fill(); del f["timing_scores"]["技术面"]
-    expect_valueerror(f, "timing_scores 缺维")
+    assert R.compute_scores(f)["timing"] is None, "缺任一子维应显示数据不足，不按 0 或中性分合成"
     f = minimal_fill(); del f["yellow_deductions"]
     expect_valueerror(f, "yellow_deductions 缺键")
     f = minimal_fill(); f["date"] = "2026/08/27"
@@ -204,23 +268,23 @@ def test_position_steps_direct():
     v5.0：返回值扩为 4 元组（+crit 档位临界列表）；分支覆盖改用非临界分数
     （原 7.2/4.27/4.3/5.8 均落在 ±0.3 临界带，临界分支见 test_position_steps_edge_critical）。"""
     # 红灯熔断：后续调节不再适用
-    label, steps, slot, crit = _position_steps(7.5, 8.5, 7.0, _calc(odds=None), "财务造假嫌疑")
+    label, steps, slot, crit = _position_steps(7.5, 8.5, _calc(odds=None), "财务造假嫌疑")
     assert label == "不建议参与" and slot is None and "红灯熔断" in steps[0] and not crit
     # 中枢为负拦截器（不落矩阵）
-    label, steps, slot, crit = _position_steps(7.5, 8.5, 7.0, _calc(), "")
+    label, steps, slot, crit = _position_steps(7.5, 8.5, _calc(), "")
     assert label == "重仓 ≤20%" and "矩阵落位" in slot, "无红灯无负中枢应走矩阵直落"
-    label, steps, slot, crit = _position_steps(7.5, 8.5, 7.0, {"central_raw": -0.1, "central": -0.1}, "")
+    label, steps, slot, crit = _position_steps(7.5, 8.5, {"central_raw": -0.1, "central": -0.1}, "")
     assert label == "回避（中枢为负，等价格）" and slot is None and "中枢为负" in steps[0]
     # 上浮封顶：质地一般轻仓 + 时机/离散/赔率三连浮仍止步标准仓
-    label, steps, slot, crit = _position_steps(4.5, 4.5, 7.0, _calc(dispersion=0.30, odds=None, floor_type="net_cash"), "")
+    label, steps, slot, crit = _position_steps(4.5, 4.5, _calc(dispersion=0.30, odds=None, floor_type="net_cash"), "")
     assert label == "标准仓 ≤10%" and "上浮封顶" in "".join(steps)
     # 下调 0 兜底：两次下调不得回卷
-    label, steps, slot, crit = _position_steps(4.5, 4.5, 3.5, _calc(dispersion=0.95), "")
+    label, steps, slot, crit = _position_steps(4.5, 4.5, _calc(dispersion=0.95), "")
     assert label == "不建议参与" and "重仓" not in "".join(steps)
-    # 观察池：中上质地 + 差价格；时机差 → 下调不建议参与
-    label, steps, slot, crit = _position_steps(5.9, 5.0, 5.0, None, "")
+    # 观察池：中上质地 + 差价格；离散度极端 → 下调不建议参与
+    label, steps, slot, crit = _position_steps(5.9, 5.0, None, "")
     assert label == "观察池" and "观察池" in slot
-    label, steps, slot, crit = _position_steps(5.9, 5.0, 3.0, None, "")
+    label, steps, slot, crit = _position_steps(5.9, 5.0, _calc(dispersion=0.95), "")
     assert label == "不建议参与" and "观察池下调" in "".join(steps)
     # 与卡片渲染同源：build_position_card 输出含同一结论（行为零变更冒烟）
     html = R.build_position_card(4.5, 4.5, 7.0,
@@ -229,20 +293,21 @@ def test_position_steps_direct():
 
 
 def test_try_up_wording_nailed():
-    """v4.10.2 热核审计钉死：try_up 三条上浮路径的轨迹文案逐字断言。
+    """v4.10.2 热核审计钉死：try_up 离散度/赔率两条上浮路径的轨迹文案逐字断言。
     背景：try_up 收敛曾把赔率分支「）→ 上浮一档」（无空格）归一为「） → 上浮一档」
-    （有空格）——1 字节漂移，因该分支零断言零快照覆盖而溜过。此处把三条路径
-    （时机/离散度/赔率）的成功上浮文案逐字钉死，上浮分支统一「detail → 上浮一档」写法。"""
-    # 时机分上浮成功（落轻仓 → 标准仓）
-    label, steps, _slot, _crit = _position_steps(4.5, 4.5, 6.5, _calc(), "")
-    assert label == "标准仓 ≤10%"
-    assert steps == ["时机分调节：时机分 6.50 ≥ 6 → 上浮一档（轻仓 ≤5%→标准仓 ≤10%）"], steps
+    （有空格）——1 字节漂移，因该分支零断言零快照覆盖而溜过。此处把两条路径
+    （离散度/赔率）的成功上浮文案逐字钉死，上浮分支统一「detail → 上浮一档」写法。
+    时机分已退出仓位，不再产生上浮或下调轨迹。"""
+    # 时机不再进入仓位：不升也不降，只保留矩阵落位
+    label, steps, _slot, _crit = _position_steps(4.5, 4.5, _calc(), "")
+    assert label == "轻仓 ≤5%"
+    assert steps == ["矩阵落位直接生效，无调节项触发"], steps
     # 离散度上浮成功
-    label, steps, _slot, _crit = _position_steps(4.5, 4.5, 5.0, _calc(dispersion=0.30), "")
+    label, steps, _slot, _crit = _position_steps(4.5, 4.5, _calc(dispersion=0.30), "")
     assert label == "标准仓 ≤10%"
     assert steps == ["离散度调节：离散度 30.0% < 40% → 上浮一档（轻仓 ≤5%→标准仓 ≤10%）"], steps
     # 赔率 ∞ 上浮成功（归一化前此分支无空格，本轮有意归一——见 handoff 审计修补段）
-    label, steps, _slot, _crit = _position_steps(4.5, 4.5, 5.0, _calc(dispersion=0.50, odds=None, floor_type="net_cash"), "")
+    label, steps, _slot, _crit = _position_steps(4.5, 4.5, _calc(dispersion=0.50, odds=None, floor_type="net_cash"), "")
     assert label == "标准仓 ≤10%"
     assert steps == ["赔率调节：赔率 ∞（悲观仍正收益） → 上浮一档（轻仓 ≤5%→标准仓 ≤10%）"], steps
 
@@ -562,7 +627,7 @@ def test_negative_profit_central_no_crash():
     calc = R.compute_valuation(f)
     assert isinstance(calc["central"], float), f"负中枢不得年化为复数：{calc['central']!r}"
     assert calc["central"] < -1, f"central_raw=-6（-50×11/10/10−1），实际 {calc['central']}"
-    label, steps, _slot, _crit = _position_steps(6.0, 5.0, 5.0, calc, "")
+    label, steps, _slot, _crit = _position_steps(6.0, 5.0, calc, "")
     assert "中枢为负" in label, f"负中枢应走拦截器，实际 {label}"
     f["thesis_html"] = "<p>困境反转论点：产能出清后正常化利润回归，本句仅作测试占位文本。</p>"
     warns = validate_stderr(f)

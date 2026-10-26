@@ -23,6 +23,53 @@ _GH_ROW = {"org": "中金公司", "yr": "2026", "d_from": "2026-06-30", "d_to": 
            "np_from": 930.0, "np_to": 952.0}
 
 
+def test_timing_facts_evidence_cross_check():
+    technical = {"rsi14": 55.0, "atr14_pct": 2.4, "volume_ratio_20": 1.2}
+    levels = {"start_date": "2023-08-27", "end_date": "2026-08-27",
+              "close_high": 15, "close_low": 8, "intraday_high": 16, "intraday_low": 7,
+              "months": 36, "ohlc_months": 36, "window_years": 3}
+    chip = {"value": 11.2, "unit": "元", "date": "2026-08-27",
+            "source": "妙想", "query": "平均成本"}
+    with tempfile.TemporaryDirectory() as d:
+        quote = write_fill({"price": 10, "pe_ttm": 11,
+                            "timing": {"technical": technical, "consensus_levels": levels}},
+                           d, "_ref_quote.json")
+        evidence = write_fill({"code": "600000", "date": "2026-08-27",
+                               "chips": {"average_cost": chip}, "capital": {}},
+                              d, "_timing_600000_2026-08-27.json")
+        facts = {"source_file": evidence, "technical": technical, "consensus_levels": levels,
+                 "chips": {"average_cost": chip}, "capital": {}}
+        fill = minimal_fill(quote={"source_file": quote}, timing_facts=facts)
+        assert "timing_facts" not in validate_stderr(fill)
+        assert "技术、筹码与资金事实" in render_fill(fill)
+        bad = minimal_fill(quote={"source_file": quote},
+                           timing_facts={**facts, "technical": dict(technical, rsi14=60)})
+        assert "rsi14" in validate_stderr(bad)
+        bad = minimal_fill(quote={"source_file": quote},
+                           timing_facts={**facts, "chips": {"average_cost": dict(chip, value=12)}})
+        assert "average_cost" in validate_stderr(bad)
+        bad = minimal_fill(quote={"source_file": quote},
+                           timing_facts={**facts, "chips": {"average_cost": None}})
+        assert "average_cost" in validate_stderr(bad)
+        bad = minimal_fill(quote={"source_file": quote},
+                           timing_facts={**facts, "source_file": "missing.json"})
+        expect_valueerror(bad, "缺失证据文件", kw="timing_facts.source_file")
+        no_quote = minimal_fill(timing_facts=facts)
+        assert "技术" in validate_stderr(no_quote)
+
+
+def test_timing_facts_rejects_invalid_container_types():
+    expect_valueerror(minimal_fill(timing_facts={"technical": "invalid"}),
+                      "非法技术字段", kw="timing_facts.technical")
+    with tempfile.TemporaryDirectory() as d:
+        evidence = write_fill({"code": "600000", "date": "2026-08-27",
+                               "chips": {"average_cost": {"value": 11.2}}, "capital": {}},
+                              d, "_timing_600000_2026-08-27.json")
+        facts = {"source_file": evidence, "chips": {"average_cost": "invalid"}}
+        expect_valueerror(minimal_fill(timing_facts=facts), "非法单项记录",
+                          kw="timing_facts.chips.average_cost")
+
+
 def test_pe_history_banned_types():
     """v5.4.1：pe_history 禁填告警（fill-schema 填写条件此前只写在文档里、零校验）——
     成长型·高速层（含旧名「快速成长」）与未盈利/管线填了 → 软告警；

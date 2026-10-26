@@ -1457,6 +1457,111 @@ def test_30_quality_v2_summary_out_and_legacy_unchanged():
     print("30. 质量v2摘要落盘与旧命令不变 通过")
 
 
+def test_32_timing_indicator_known_series():
+    import em_market as market
+
+    rows = [{"trade_date": f"2026{i:04d}", "open": float(i),
+             "high": float(i + 1), "low": float(i - 1),
+             "close": float(i), "vol": float(100 + i)} for i in range(1, 141)]
+    facts = market.compute_technical_facts(rows)
+    assert facts["rsi14"] == 100.0
+    assert facts["atr14_pct"] == 1.43
+    assert facts["macd"] == {"dif": 6.999718, "dea": 6.999585, "hist": 0.000266}
+    assert market.compute_technical_facts(rows[:35])["macd"] == {
+        "dif": 6.105711, "dea": 5.811164, "hist": 0.589094}
+    assert facts["volume_ratio_20"] == 1.05
+    assert facts["ma60_slope_20d_pct"] == 22.1
+    assert facts["ma120_slope_20d_pct"] == 33.06
+    assert facts["position_52w_pct"] == 100.0
+    assert facts["as_of"] == "20260140"
+
+    up_then_down = [1, 2, 3, 4, 5, 6, 7, 8, 7, 6, 5, 4, 3, 2, 1]
+    rsi_rows = [dict(row, close=float(close)) for row, close in zip(rows, up_then_down)]
+    assert market.compute_technical_facts(rsi_rows)["rsi14"] == 50.0
+    short = market.compute_technical_facts(rows[:13])
+    assert short["rsi14"] is None and short["atr14_pct"] is None
+    missing_windows = market.compute_technical_facts(rows[:60])
+    assert missing_windows["ma60_slope_20d_pct"] is None
+    assert missing_windows["ma120_slope_20d_pct"] is None
+    zero_volume = market.compute_technical_facts([dict(row, vol=0) for row in rows])
+    assert zero_volume["volume_ratio_20"] is None
+    flat = market.compute_technical_facts([dict(row, close=10) for row in rows])
+    assert flat["position_52w_pct"] is None and flat["rsi14"] == 50.0
+
+
+def test_33_consensus_levels_and_fetch_reuse():
+    import em_market as market
+
+    monthly = [{"date": "2020-12-31", "close": 20, "high": 22, "low": 18},
+               {"date": "2023-06-30", "close": 10, "high": 12, "low": 9},
+               {"date": "2024-01-31", "close": 15, "high": 16, "low": 14}]
+    levels = market.consensus_price_levels(monthly)
+    assert levels["close_high"] == 15 and levels["close_low"] == 10
+    assert levels["intraday_high"] == 16 and levels["intraday_low"] == 9
+    assert levels["months"] == 2 and levels["window_years"] == 3
+    assert levels["close_high"] != levels["intraday_high"]
+    assert market.consensus_price_levels([]) is None
+    partial = market.consensus_price_levels([monthly[1], dict(monthly[2], high=None)])
+    assert partial["intraday_high"] is None and partial["ohlc_months"] == 1
+
+    rows = [{"trade_date": f"2026{i:04d}", "open": float(i), "high": float(i + 1),
+             "low": float(i - 1), "close": float(i), "vol": 100}
+            for i in range(1, 141)]
+    original = market._a_daily_series
+    try:
+        market._a_daily_series = lambda _code: rows
+        result = market.fetch_timing_material("600000", monthly_rows=monthly)
+    finally:
+        market._a_daily_series = original
+    for key in ("price", "ma60", "ma120", "high_52w", "low_52w", "n",
+                "technical", "consensus_levels"):
+        assert key in result
+    assert result["price"] == 140 and result["technical"]["rsi14"] == 100.0
+    assert result["consensus_levels"]["close_high"] == 15
+
+
+def test_34_timing_evidence_written_with_null_unavailable(monkeypatch, tmp_path):
+    import json
+
+    monkeypatch.setattr(em, "_CAPTURE", {})
+    def fake_summary(*_args):
+        em._CAPTURE.update({"code": "600000", "timing": {
+            "price": 10, "technical": {"rsi14": 55.0},
+            "consensus_levels": {"close_high": 15, "close_low": 8}}})
+        return "摘要"
+
+    monkeypatch.setattr(em, "summarize", fake_summary)
+    monkeypatch.setattr(em._C, "_tushare_token", lambda: "configured")
+    monkeypatch.setattr(sys, "argv", ["em_fetch.py", "600000", f"--out={tmp_path}/quote.json"])
+    em.main()
+    evidence_path = tmp_path / f"_timing_600000_{date.today().isoformat()}.json"
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    assert evidence["technical"]["rsi14"] == 55.0
+    assert evidence["consensus_levels"]["close_high"] == 15
+    assert evidence["chips"] == {"average_cost": None, "profit_ratio": None}
+    assert set(evidence["capital"]) == {"main_net_inflow", "southbound", "margin"}
+    assert all(value is None for value in evidence["capital"].values())
+
+
+def test_35_summarize_reuses_same_monthly_rows(monkeypatch):
+    monkeypatch.setattr(em, "_CAPTURE", {})
+    monthly = [{"date": "2024-01-31", "close": 15, "high": 16, "low": 14}]
+    fetch_calls = []
+    consumers = []
+    monkeypatch.setattr(em, "fetch_kline_monthly",
+                        lambda *_args: fetch_calls.append(1) or monthly)
+    monkeypatch.setattr(em, "_sec_e1",
+                        lambda _s, _h, _p, monthly_rows=None: consumers.append(monthly_rows) or [])
+    monkeypatch.setattr(em, "_sec_e2",
+                        lambda _s, _y, _h, monthly_rows=None: consumers.append(monthly_rows) or [])
+    monkeypatch.setattr(em, "_sec_e3", lambda *_args: ([], []))
+    for name in ("_sec_quality", "_sec_e4", "_sec_forecast", "_sec_gov", "_sec_e5", "_sec_e6"):
+        monkeypatch.setattr(em, name, lambda *_args: [])
+    em.summarize("600000", 5)
+    assert fetch_calls == [1]
+    assert consumers == [monthly, monthly]
+
+
 def test_31_quality_v2_profile_missing():
     import contextlib
     import io

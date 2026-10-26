@@ -321,7 +321,7 @@ def _old_position(row):
         if not vc:
             return None, None, None
         sc = row.get("old_sc") or compute_scores(fill)
-        position = _position_steps(sc["quality"], vc["score"], sc["timing"], calc, sc["red_flag"],
+        position = _position_steps(sc["quality"], vc["score"], calc, sc["red_flag"],
                                    vc.get("floor_uplift"))[0]
         return position, calc, vc
     except (ValueError, TypeError, KeyError, ZeroDivisionError):
@@ -411,7 +411,7 @@ def _score_row(row, evidence_dir, fetch_missing):
     new_position = None
     if vc:
         sc = row["old_sc"]
-        new_position = _position_steps(row["new_quality"], vc["score"], sc["timing"], calc, sc["red_flag"],
+        new_position = _position_steps(row["new_quality"], vc["score"], calc, sc["red_flag"],
                                        vc.get("floor_uplift"))[0]
         new_position = _apply_critical(new_position, row["critical_weaknesses"])
     row["old_position"], row["new_position"] = old_position, new_position

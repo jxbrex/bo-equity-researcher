@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """validate_audit.py — 照抄对账/落盘防伪校验域（v5.8.3 自 validate.py 按域拆分）。
 
-内容：quote 防伪链（price_date/quote_consistency/quote_present/consensus_np）、
+内容：quote 防伪链（price_date/quote_consistency/quote_present/consensus_np）、timing_facts 技术/筹码/资金对账、
 quality_inputs 双向照抄/profile/披露日对账、gap_plot 分布图与 street 落盘源、
 gap_history 态度变化、dupont 杜邦乘积链、period_track 第 3 章照抄对账、growth_consistency 增速换算对账，
 及 _strict_num/_req_strict/_tol_floor/_audit_pairs 等比对工具
@@ -119,12 +119,96 @@ def _check_score_ranges(fill: dict) -> None:
         if raw is not None and not isinstance(raw, dict):
             raise ValueError(f"{field} 需为对象（{{维度: 0-10 分值}}），实际: {type(raw).__name__}")
         for k, v in (raw or {}).items():
+            if field == "timing_scores" and v is None:
+                continue
             try:
                 fv = float(v)
             except (TypeError, ValueError):
                 raise ValueError(f"{field}.{k} 不是数字: {v!r}")
             if not (0 <= fv <= 10):
                 raise ValueError(f"{field}.{k} = {fv} 超出 0-10 范围")
+
+
+def _check_timing_facts(fill: dict, warns: list) -> None:
+    """技术事实对 quote 落盘；筹码/资金事实对独立证据文件。"""
+    facts = fill.get("timing_facts")
+    quote_timing = (_quote_ref(fill) or {}).get("timing") or {}
+    if not facts:
+        if quote_timing.get("technical"):
+            warns.append("timing_facts 未回填：quote 已有技术与三年区间数据，事实卡不可见")
+        return
+    if not isinstance(facts, dict):
+        raise ValueError("timing_facts 必须为对象")
+    for key in ("technical", "consensus_levels"):
+        if facts.get(key) is not None and not isinstance(facts[key], dict):
+            raise ValueError(f"timing_facts.{key} 必须为对象或 null")
+    technical = facts.get("technical") or {}
+    if technical.get("macd") is not None and not isinstance(technical["macd"], dict):
+        raise ValueError("timing_facts.technical.macd 必须为对象或 null")
+
+    def compare(owner, actual, expected):
+        if isinstance(actual, dict):
+            for key, value in actual.items():
+                compare(f"{owner}.{key}", value, (expected or {}).get(key))
+            return
+        if actual is None:
+            return
+        if _strict_num(actual) is None:
+            if actual != expected:
+                warns.append(f"{owner} 与落盘值不一致")
+            return
+        value = _req_strict(owner, "", actual)
+        reference = _strict_num(expected)
+        if reference is None:
+            warns.append(f"{owner} 无落盘技术证据可核对，请重跑 em_fetch --out")
+        elif abs(value - reference) > max(0.005, abs(reference) * 0.01):
+            warns.append(f"{owner}={value:g} 与落盘值 {reference:g} 不一致，禁手估")
+
+    if facts.get("technical"):
+        compare("timing_facts.technical", facts["technical"], quote_timing.get("technical"))
+    elif quote_timing.get("technical"):
+        warns.append("timing_facts 缺技术字段：quote 已有数据但未回填")
+    if facts.get("consensus_levels"):
+        compare("timing_facts.consensus_levels", facts["consensus_levels"],
+                quote_timing.get("consensus_levels"))
+    if not (facts.get("chips") or facts.get("capital")):
+        return
+    src = str(facts.get("source_file") or "").strip()
+    if not src:
+        raise ValueError("timing_facts.source_file 缺失：筹码/资金事实须引用独立证据文件")
+    try:
+        with open(src, encoding="utf-8") as handle:
+            evidence = json.load(handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"timing_facts.source_file 读取失败: {src}（{exc}）") from None
+    if not isinstance(evidence, dict):
+        raise ValueError("timing_facts.source_file 证据根节点必须为对象")
+    if str(evidence.get("code")) != str(fill.get("code")) or evidence.get("date") != fill.get("date"):
+        raise ValueError("timing_facts.source_file 的 code/date 与 fill 不一致")
+    for group in ("chips", "capital"):
+        records = facts.get(group) or {}
+        if not isinstance(records, dict):
+            raise ValueError(f"timing_facts.{group} 必须为对象")
+        for key, record in records.items():
+            reference = (evidence.get(group) or {}).get(key)
+            if record is None:
+                if isinstance(reference, dict) and reference.get("value") is not None:
+                    warns.append(f"timing_facts.{group}.{key} 已有证据但被改空，禁止隐藏事实")
+                continue
+            if not isinstance(record, dict):
+                raise ValueError(f"timing_facts.{group}.{key} 必须为对象或 null")
+            if not isinstance(reference, dict):
+                warns.append(f"timing_facts.{group}.{key} 在证据文件中缺记录")
+                continue
+            for field in ("source", "query", "date"):
+                if not str(record.get(field) or "").strip():
+                    raise ValueError(f"timing_facts.{group}.{key} 缺 {field}")
+                if record.get(field) != reference.get(field):
+                    warns.append(f"timing_facts.{group}.{key}.{field} 与证据文件不一致")
+            if record.get("unit") != reference.get("unit"):
+                warns.append(f"timing_facts.{group}.{key}.unit 与证据文件不一致")
+            if _strict_num(record.get("value")) != _strict_num(reference.get("value")):
+                warns.append(f"timing_facts.{group}.{key} 数值与证据文件不一致")
 
 
 def _check_gap_plot(fill: dict, calc: dict, warns: list) -> None:

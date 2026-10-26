@@ -205,6 +205,14 @@ def test_thesis_baretext_validate():
         "带元区间仍拒", kw="全缺")
 
 
+def test_thesis_feedback_requires_research_not_trade_conclusion():
+    out = validate_stderr(minimal_fill())
+    messages = [line for line in out.splitlines() if "thesis_html 信息量不足" in line]
+    assert len(messages) == 1
+    assert "研究结论" in messages[0]
+    assert "操作结论" not in messages[0]
+
+
 def test_triggers_target_validate():
     """v5.1.2：triggers hit/miss 行 target 核对——缺「实际值」告警；阈值方向矛盾告警。"""
     warns = validate_stderr(minimal_fill(triggers=[
@@ -222,17 +230,100 @@ def test_triggers_target_validate():
     assert "矛盾" in warns
 
 
+def _timing_table(chip, technical, total):
+    return ('<table><thead><tr><th>维度</th><th>得分</th><th>命中信号</th></tr></thead>'
+            f'<tbody><tr><td>筹码面</td><td>{chip}</td><td>证据与来源</td></tr>'
+            f'<tr><td>技术面</td><td>{technical}</td><td>同源日线</td></tr>'
+            f'<tr><td>合计</td><td>{total}</td><td>独立参考，不调节仓位</td></tr></tbody></table>'
+            '<span class="source">数据来源：公开行情与股东户数披露</span>')
+
+
+def test_timing_table_rejects_numeric_scores_when_missing():
+    bad = v2_fill(date="2026-10-26")
+    bad["timing_scores"] = None
+    bad["position_html"] = _timing_table("5.0", "5.0", "5.0") + "研究复核与估值证伪。" * 8
+    try:
+        render_v2_fill(bad)
+    except ValueError as exc:
+        assert "数据不足" in str(exc), str(exc)
+    else:
+        raise AssertionError("缺总分仍写 5.0 应拒渲染")
+
+    bad["timing_scores"] = {"筹码面": None, "技术面": 5.0}
+    bad["position_html"] = _timing_table("数据不足", "5.0", "5.0") + "研究复核与估值证伪。" * 8
+    try:
+        render_v2_fill(bad)
+    except ValueError as exc:
+        assert "合计" in str(exc) and "数据不足" in str(exc), str(exc)
+    else:
+        raise AssertionError("缺子维时合计行也不得写数值分")
+
+    good = v2_fill(date="2026-10-26")
+    good["cycle_html"] = "<p>估值周期分析。</p>"
+    good["timing_scores"] = {"筹码面": None, "技术面": 5.0}
+    good["position_html"] = _timing_table("数据不足", "5.0", "数据不足") + "研究复核与估值证伪。" * 8
+    html = render_v2_fill(good)
+    assert '时机分 <span class="tv">数据不足</span>' in html
+    assert "合计</td><td>数据不足" in html
+    legacy = minimal_fill(timing_scores=None,
+                          position_html=_timing_table("5.0", "5.0", "5.0") + "研究复核与估值证伪。" * 8)
+    assert "兼容" in validate_stderr(legacy)
+
+
+def test_new_report_rejects_trade_cadence():
+    bad = v2_fill(date="2026-10-26")
+    bad["dash_html"] = bad["dash_html"].replace("加仓至标配", "复核估值假设")
+    bad["dash_html"] = bad["dash_html"].replace("复核估值假设", "加仓至标配")
+    try:
+        render_v2_fill(bad)
+    except ValueError as exc:
+        assert "dash_html" in str(exc) and "研究动作" in str(exc), str(exc)
+    else:
+        raise AssertionError("新报告不应继续输出加仓动作")
+
+    bad = v2_fill(date="2026-10-26")
+    bad["dash_html"] = bad["dash_html"].replace("加仓至标配", "复核估值假设")
+    bad["position_html"] = "建议分批建仓。研究复核与估值证伪条件。" * 8
+    try:
+        render_v2_fill(bad)
+    except ValueError as exc:
+        assert "position_html" in str(exc) and "研究动作" in str(exc), str(exc)
+    else:
+        raise AssertionError("新报告不应输出分批买卖节奏")
+
+    bad["position_html"] = "研究复核与估值证伪条件。" * 10
+    bad["thesis_html"] += "<p>建议分批买入</p>"
+    try:
+        render_v2_fill(bad)
+    except ValueError as exc:
+        assert "thesis_html" in str(exc) and "研究动作" in str(exc), str(exc)
+    else:
+        raise AssertionError("Hero 不应输出分批买卖节奏")
+
+    good = v2_fill(date="2026-10-26")
+    good["cycle_html"] = "<p>估值周期分析。</p>"
+    good["dash_html"] = good["dash_html"].replace("加仓至标配", "复核估值假设")
+    good["position_html"] = "禁止分批；研究复核与估值证伪条件。" * 8
+    good["thesis_html"] = "不采用分批节奏，" + good["thesis_html"]
+    render_v2_fill(good)
+    legacy = minimal_fill(position_html="加仓并分批建仓。" + "研究复核与估值证伪条件。" * 8,
+                          dash_html="加仓至标配")
+    warnings = validate_stderr(legacy)
+    assert "兼容" in warnings
+    assert warnings.count("position_html 含交易节奏") == 1
+
+
 def test_timing_table_validate():
     """v5.1.2：时机小表得分 vs timing_scores（>0.1 告警）；信号数值/方向 vs 落盘 timing。"""
     tbl = ('<p>时机判定：筹码面改善、技术面偏弱，仓位维持观察池不变，决策逻辑见下表与正文。</p>'
            '<table><thead><tr><th>维度</th><th>得分</th><th>命中信号与加减</th></tr></thead>'
            '<tbody><tr><td>筹码面</td><td>6.0</td><td>户数下降 +1</td></tr>'
            '<tr><td>技术面</td><td>4.0</td><td>现价 10.5 站上 MA60 9.8</td></tr>'
-           '<tr><td>合计</td><td>5.3</td><td>微调 ±1 档</td></tr></tbody></table>'
+           '<tr><td>合计</td><td>5.3</td><td>独立参考，不调节仓位</td></tr></tbody></table>'
            '<span class="source">时机信号：quote 落盘 timing（现价/MA60/MA120/52 周高低），'
            '筹码面数据：E4 股东户数，均取自 em_fetch 落盘输出。</span>'
            '<div class="info-card"><strong>决策逻辑：</strong>质量分好公司但估值无安全边际，'
-           '时机微调不足以升档，维持观察池，等估值回到合理带下沿再评估。</div>')
+           '时机仅作独立参考，维持观察池，等估值回到合理带下沿再评估。</div>')
     with tempfile.TemporaryDirectory() as d:
         ref = write_fill({"price": 10.0, "pe_ttm": 11.0,
                           "timing": {"price": 10.0, "ma60": 9.9, "ma120": 9.5,
@@ -259,10 +350,10 @@ def test_timing_table_52w_cross_validate():
            '<table><thead><tr><th>维度</th><th>得分</th><th>命中信号与加减</th></tr></thead>'
            '<tbody><tr><td>筹码面</td><td>5.0</td><td>户数下降 +1</td></tr>'
            '<tr><td>技术面</td><td>5.0</td><td>现价 10.0 站上 MA60 9.9；52周高低 12.0/8.0</td></tr>'
-           '<tr><td>合计</td><td>5.0</td><td>微调 ±1 档</td></tr></tbody></table>'
+           '<tr><td>合计</td><td>5.0</td><td>独立参考，不调节仓位</td></tr></tbody></table>'
            '<span class="source">时机信号：quote 落盘 timing（现价/MA60/MA120/52 周高低）。</span>'
            '<div class="info-card"><strong>决策逻辑：</strong>质量分好公司但估值无安全边际，'
-           '时机微调不足以升档，维持观察池，等估值回到合理带下沿再评估。</div>')
+           '时机仅作独立参考，维持观察池，等估值回到合理带下沿再评估。</div>')
     with tempfile.TemporaryDirectory() as d:
         ref = write_fill({"price": 10.0, "pe_ttm": 11.0,
                           "timing": {"price": 10.0, "ma60": 9.9, "ma120": 9.5,
@@ -516,6 +607,11 @@ def test_dcf_stable_value_required_warn():
     # v5.5.0 P1：子类词表单源（_fin_subclass）——证券与银行/保险同豁免，与 B6 参考带同口径
     for st in ("稳定价值（证券）", "稳定价值/金融（券商）", "稳定价值/金融（保险）"):
         assert "dcf 字段未填" not in validate_stderr(minimal_fill(stock_type=st)), f"{st} 应豁免"
+
+
+def test_dcf_mature_stagnant_required_warn():
+    out = validate_stderr(minimal_fill(stock_type="成熟/停滞"))
+    assert "dcf 字段未填" in out and "成熟/停滞" in out, f"成熟/停滞分型表要求 DCF，但当前漏检：{out}"
 
 
 # ---------------- v5.5.0 B4 sensitivity 业务线覆盖硬闸 ----------------

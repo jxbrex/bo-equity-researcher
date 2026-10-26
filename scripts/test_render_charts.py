@@ -18,7 +18,6 @@ from charts_l1 import build_segments_plot, build_chain_plot, build_fin_trend
 from charts_misc import build_growth_plot
 from conftest import (
     minimal_fill, expect_valueerror, capture_stderr, capture_stderr_value, render_fill,
-    satellite_cycle_fill,
 )
 
 
@@ -53,46 +52,6 @@ def test_timing_facts_card_has_sources_and_valuation_context():
     assert "融券余额492.7万元" in html
     assert "平均成本 &lt;script&gt;" in html and "平均成本 <script>" not in html
     assert charts.build_timing_facts(minimal_fill()) == ""
-
-
-def test_cycle_valuation_card_and_reference():
-    import charts_scenario as charts
-
-    fill = satellite_cycle_fill()
-    calc = R.compute_valuation(fill)
-    html = charts.build_cycle_valuation(fill, calc)
-    for text in ("现价隐含利润", "76.26-93.21亿元", "基础情景目标价", "31.52-38.53元",
-                 "正常化估值区间", "21.37-29.39元", "85.00亿元", "+33.00亿元",
-                 "方法分歧大", "不取平均", "profit_regime", "price_regime"):
-        assert text in html, text
-    assert "不显示高置信" in html and "高置信度" not in html
-    assert "不把利润高位等同股价高位" in html
-    reference = charts.build_cycle_valuation_reference(fill)
-    assert 'href="#cycle-valuation"' in reference and "同一 cycle_valuation" in reference
-    assert charts.build_cycle_valuation(minimal_fill(), None) == ""
-
-
-def test_cycle_valuation_bad_legacy_bridge_is_safe():
-    import charts_scenario as charts
-
-    bad = satellite_cycle_fill()
-    bad["cycle_valuation"]["bridge"]["items"] = [None]
-    assert charts.build_cycle_valuation(bad, R.compute_valuation(bad)) == ""
-    numeric_strings = satellite_cycle_fill()
-    numeric_strings["cycle_valuation"]["bridge"]["start_profit"] = "85"
-    numeric_strings["cycle_valuation"]["bridge"]["items"][0]["amount"] = "33"
-    html = charts.build_cycle_valuation(numeric_strings, R.compute_valuation(numeric_strings))
-    assert "85.00亿元" in html and "+33.00亿元" in html
-
-
-def test_cycle_valuation_zero_dcf_still_diverges():
-    fill = satellite_cycle_fill()
-    cv = fill["cycle_valuation"]
-    cv["normalized_profit"] = [118, 118]
-    cv["bridge"]["start_profit"] = 118
-    cv["bridge"]["items"][0]["amount"] = 0
-    fill["dcf"] = {"value": 0}
-    assert R.compute_cycle_valuation(fill, R.compute_valuation(fill))["divergence"] is True
 
 
 def test_nice_ticks():

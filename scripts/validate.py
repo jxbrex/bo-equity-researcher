@@ -149,8 +149,7 @@ from validate_valuation import (
     _check_thesis_consistency,
     _check_hero_cross,
     _check_hero_band_claims,
-    _check_dcf,
-    _check_cycle_valuation)
+    _check_dcf)
 from validate_html import (
     _check_red_flag_breaker,
     _check_content_floor,
@@ -204,7 +203,6 @@ def _validate_content_impl(fill: dict, calc: dict, warns: list, sc: dict = None)
 
     _check_valuation_inputs(fill)
     _check_valuation_scenarios(fill, warns)
-    _check_cycle_valuation(fill, calc, warns)
     _check_odds_floor(fill, warns, calc)  # v5.0 机制三：赔率 ∞ 须配悲观地板证据（floor）
     _check_consensus_np(fill, warns)    # v5.0 机制二：乐观税一致预期照抄交叉校验
     _check_anchor_discipline(fill, warns)  # v5.1.0 估值锚纪律：增量证据锁死+回滚条款前置（v5.4.0 双尺）

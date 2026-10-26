@@ -292,57 +292,6 @@ def compute_valuation(fill: dict):
             "mode": "mcap" if rows[0]["mcap_lo"] is not None else "pe"}
 
 
-def compute_cycle_valuation(fill: dict, calc: dict):
-    """周期三账只读计算：基础、正常化与现价隐含假设，不进入评分或仓位。"""
-    cv = fill.get("cycle_valuation")
-    if not isinstance(cv, dict) or not calc:
-        return None
-    profit = cv.get("normalized_profit") or []
-    multiple = cv.get("normalized_pe") or []
-    shares = _num((fill.get("valuation") or {}).get("shares"))
-    if len(profit) != 2 or len(multiple) != 2 or not shares or shares <= 0:
-        return None
-    profit = [_num(value) for value in profit]
-    multiple = [_num(value) for value in multiple]
-    if None in profit or None in multiple or any(value <= 0 for value in multiple):
-        return None
-    base = next((row for row in calc.get("rows", []) if row.get("key") == "base"), None)
-    if not base:
-        return None
-    market_cap = calc["price"] * shares
-    implied = [market_cap / multiple[1], market_cap / multiple[0]]
-    normalized = [profit[0] * multiple[0] / shares, profit[1] * multiple[1] / shares]
-    bridge = cv.get("bridge") or {}
-    start = _num(bridge.get("start_profit"))
-    if start is None or not isinstance(bridge.get("items"), list):
-        return None
-    if any(not isinstance(item, dict) for item in bridge["items"]):
-        return None
-    amounts = [_num(item.get("amount")) for item in bridge["items"]]
-    if any(value is None for value in amounts):
-        return None
-
-    def far(left, right):
-        if left == right:
-            return False
-        if left == 0 or right == 0:
-            return True
-        denominator = min(abs(left), abs(right))
-        return abs(left - right) / denominator > 0.30
-
-    normalized_mid = sum(normalized) / 2
-    methods = [base["mid"], normalized_mid]
-    dcf_value = _num((fill.get("dcf") or {}).get("value"))
-    if dcf_value is not None:
-        methods.append(dcf_value)
-    divergence = any(far(left, right) for i, left in enumerate(methods)
-                     for right in methods[i + 1:])
-    return {"implied_profit": implied, "normalized_target": normalized,
-            "base_target": [base["low"], base["high"]], "base_mid": base["mid"],
-            "normalized_mid": normalized_mid, "dcf_value": dcf_value,
-            "divergence": divergence, "bridge_end": start + sum(amounts)}
-
-
 def _lookup(val, pairs, default):
     """阈值表查找：pairs 为 [(阈值, 分值)] 降序，返回首个 val >= 阈值 的分值。"""
     for t, s in pairs:

@@ -34,33 +34,36 @@ def test_timing_score_does_not_change_position():
     assert _position_label(low_obs) == _position_label(high_obs) == "观察池"
 
 
-def test_cycle_valuation_satellite_three_accounts_and_single_source():
+def test_cycle_valuation_withdrawn_and_legacy_field_ignored():
     fill = satellite_cycle_fill()
-    calc = R.compute_valuation(fill)
-    result = R.compute_cycle_valuation(fill, calc)
-    assert [round(value, 2) for value in result["normalized_target"]] == [21.37, 29.39]
-    assert [round(value, 2) for value in result["implied_profit"]] == [76.26, 93.21]
-    assert result["divergence"] is True
-    assert result["bridge_end"] == 118
-
     full = v2_fill()
     full.update(price=fill["price"], valuation=fill["valuation"],
                 cycle_valuation=fill["cycle_valuation"], date="2026-10-26",
-                stock_type="周期股", cycle_position={"stage": "本轮高景气"},
-                cycle_html="<p>正常化利润80-90亿元；利润位置与价格位置分别留证据。</p>")
+                stock_type="周期股",
+                cycle_position={"stage": "本轮高景气", "price_pctile": "商品价格处高位区",
+                                "capacity": "新产能爬坡", "stock_spread": "价差环比收窄",
+                                "implication": "利润距顶比距底更近"},
+                cycle_html="<p>当前处于高景气后段，历史阶段与规律保留。</p>")
     full["score_inputs"]["1F"].update(
         roic=0.14, roic_basis="normalized", roic_normalized_components=[0.12, 0.14, 0.16])
     calc = R.compute_valuation(full)
     prices = {row["key"]: f'{row["mid"]:.2f}' for row in calc["rows"]}
-    full["thesis_html"] = ("周期三账同源且证据可复算，现价隐含利润、基础情景与正常化估值并列，"
+    full["thesis_html"] = ("周期分析与三情景估值分开呈现，"
                             f'<span class="scenario-pess">{prices["pess"]}</span>/'
                             f'<span class="scenario-base">{prices["base"]}</span>/'
                             f'<span class="scenario-opt">{prices["opt"]}</span>元；不机械推断涨跌。')
     html = render_v2_fill(full)
-    assert html.count('id="cycle-valuation"') == 1
-    assert html.count('href="#cycle-valuation"') == 1
-    assert html.count('aria-label="周期估值三账"') == 1
-    assert "76.26" in html and "29.39" in html and "方法分歧大" in html
+    assert 'id="cycle-valuation"' not in html
+    assert "周期估值三账" not in html
+    assert "第11章查看利润桥" not in html
+    assert "当前位置：本轮高景气" in html
+    assert "历史阶段与规律保留" in html
+    assert "目标价走廊" in html
+
+    del full["cycle_valuation"]
+    without_field = render_v2_fill(full)
+    assert 'id="cycle-valuation"' not in without_field
+    assert "周期估值三账" not in without_field
 
 
 def test_v2_critical_weaknesses_only_core_dimensions():

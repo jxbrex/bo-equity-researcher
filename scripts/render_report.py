@@ -37,14 +37,13 @@ from scoring import (
     _esc, _cn_placeholders, compute_scores, _quality_version,
     build_score_summary, build_valuation_process_card, build_position_card,
     _quality_verdict, _valuation_verdict,
-    compute_valuation, compute_cycle_valuation, compute_valuation_score, build_dcf_cards, build_regime_note,
+    compute_valuation, compute_valuation_score, build_dcf_cards, build_regime_note,
     _edge_info, build_edge_upgrade_rows, _matrix_applies,
 )
 from quality_rules import F_ITEM_IDS
 from charts_base import _fmt_px, _prev_track_rows, _SOURCE_BANNED_RE
 from charts_scenario import (
     build_scenario_spectrum, build_scenario_block, build_peers_plot,
-    build_cycle_valuation, build_cycle_valuation_reference,
 )
 from charts_score import build_score_bars, build_sensitivity_tornado
 from charts_l1 import _inject_l1_charts
@@ -64,7 +63,7 @@ from validate import validate_content
 
 # 渲染器版本：嵌入输出 HTML 尾部注释，事后可 grep 验证报告确由本脚本渲染
 # （防"render 报错后手写全文 HTML 绕行"，巨石 2026-08-23 实证）
-RENDERER_VERSION = "v0.11.0"
+RENDERER_VERSION = "v0.11.1"
 
 # Windows 文件名非法字符：\ / : * ? " < > | 及 ASCII 控制字符（\x00-\x1f）
 _WIN_ILLEGAL = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
@@ -536,7 +535,7 @@ def _build_repl_map(ctx: "RenderContext") -> dict:
         # v4.11.3：周期阶段卡（cycle_stages 字段，垫在手写 cycle_html 前；空串替换）
         "CYCLE_STAGES_HTML": build_cycle_stages(fill),
         # v5.2.0：当前周期位置刻度条（cycle_position 字段，垫在阶段卡与手写 cycle_html 之间）
-        "CYCLE_POSITION_HTML": build_cycle_position(fill) + build_cycle_valuation(fill, calc),
+        "CYCLE_POSITION_HTML": build_cycle_position(fill),
         "CYCLE_HTML": fill.get("cycle_html", ""),
         "NEXT_REVIEW": _esc(fill.get("next_review", "—")),
         # v4.9：触发条件状态条（triggers 可选字段，脚本生成，垫在手写仪表盘前）
@@ -566,8 +565,7 @@ def _build_repl_map(ctx: "RenderContext") -> dict:
         # 附 rollback_html 回滚条款）拼在估值分过程卡后
         "VALUATION_PROCESS_HTML": build_valuation_process_card(calc, valuation_calc,
                                                                fill.get("valuation_inputs") or {})
-                                  + build_regime_note(fill)
-                                  + build_cycle_valuation_reference(fill),
+                                  + build_regime_note(fill),
         "POSITION_CARD_HTML": build_timing_facts(fill, calc)
                               + build_position_card(quality, valuation, timing, calc, red_flag,
                                                     floor_uplift=valuation_calc.get("floor_uplift"),

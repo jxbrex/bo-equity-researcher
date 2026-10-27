@@ -6,6 +6,8 @@ _inject_l3_charts）/ 12 股东户数趋势（build_holders_plot）与技术事�
 （build_anchor_ledger / build_review_dumbbell）/ 14 触发条件状态条（build_triggers_strip）
 / 2 驱动卡与 11 阶段卡（build_driver_cards / build_cycle_stages）。依赖 charts_base 与 scoring。"""
 
+from math import isfinite
+
 from scoring import _num, _fmt, _esc, _parse_prev_scenarios
 from charts_base import *
 def build_growth_plot(fill: dict) -> str:
@@ -112,7 +114,7 @@ def build_growth_plot(fill: dict) -> str:
 
 
 def build_timing_facts(fill: dict) -> str:
-    """技术、筹码、资金三组事实卡；只展示证据，不产生评分或仓位。"""
+    """技术、筹码、资金三组事实卡；展示证据与逐项状态判词，不产生评分或仓位。"""
     facts = fill.get("timing_facts")
     if not facts:
         return ""
@@ -120,29 +122,78 @@ def build_timing_facts(fill: dict) -> str:
     def number(value, suffix=""):
         return "未获取" if value is None else f"{_fmt(value)}{suffix}"
 
+    def finite(value):
+        value = _num(value)
+        return value if value is not None and isfinite(value) else None
+
+    def verdict(key, value):
+        value = finite(value)
+        if value is None:
+            return ""
+        if key == "rsi14":
+            return "超买区" if value >= 70 else "超卖区" if value <= 30 else "中性区"
+        if key in ("ma60_slope_20d_pct", "ma120_slope_20d_pct"):
+            return "上行" if value > 0 else "下行" if value < 0 else "走平"
+        if key == "volume_ratio_20":
+            return "较 20 日均量放量" if value > 1 else "较 20 日均量缩量" if value < 1 else "与 20 日均量持平"
+        if key == "atr14_pct":
+            return "只衡量波动，不判方向"
+        if key == "macd_hist":
+            if value > 0:
+                return "柱为正，短线动能偏强"
+            if value < 0:
+                return "柱为负，短线动能偏弱"
+            return "柱为零"
+        if key == "profit_ratio":
+            if value > 90:
+                return "获利盘较厚"
+            if value > 50:
+                return "多数持仓盈利"
+            if value < 50:
+                return "多数持仓未盈利"
+            return "约半数持仓盈利"
+        if key == "main_net_inflow":
+            return "当日净流入" if value > 0 else "当日净流出" if value < 0 else "当日持平"
+        return ""
+
+    def chip_verdict(key, item):
+        if not item or item.get("value") is None:
+            return ""
+        if key == "profit_ratio":
+            return verdict(key, item["value"])
+        if key != "average_cost":
+            return ""
+        current, cost = finite(fill.get("price")), finite(item["value"])
+        if current is None or cost is None:
+            return ""
+        return "现价高于平均成本" if current > cost else "现价低于平均成本" if current < cost else "现价与平均成本持平"
+
     def metric(label, value, note=""):
         detail = f'<small>{_esc(note)}</small>' if note else ""
         return (f'<div class="fact-metric"><span>{_esc(label)}</span>'
                 f'<strong>{_esc(value)}</strong>{detail}</div>')
 
-    def scale(label, value):
+    def scale(label, value, note=""):
+        value = finite(value)
         if value is None:
             return ""
-        position = max(0, min(100, float(value)))
+        position = max(0, min(100, value))
         shown = number(value, "%")
+        detail = f'<small>{_esc(note)}</small>' if note else ""
         return (f'<div class="fact-scale-block"><div class="fact-metric"><span>{_esc(label)}</span>'
-                f'<strong>{shown}</strong></div><div class="fact-scale" role="img" '
+                f'<strong>{shown}</strong>{detail}</div><div class="fact-scale" role="img" '
                 f'aria-label="{_esc(f"{label} {shown}，0% 为区间低点、100% 为区间高点")}">'
                 f'<span style="left:{position:.2f}%"></span></div></div>')
 
-    def record(label, item):
+    def record(label, item, verdict_text=""):
         if not item or item.get("value") is None:
             return ""
         value = number(item.get("value"), item.get("unit", ""))
         meta = f"{item.get('date', '日期未注明')} · {item.get('source', '来源未注明')}"
+        detail = f'<small>{_esc(verdict_text)}</small>' if verdict_text else ""
         note = f'<p>{_esc(item["note"])}</p>' if item.get("note") else ""
         return (f'<div class="fact-record"><div class="fact-metric"><span>{_esc(label)}</span>'
-                f'<strong>{_esc(value)}</strong></div><small>{_esc(meta)}</small>{note}</div>')
+                f'<strong>{_esc(value)}</strong></div>{detail}<small>{_esc(meta)}</small>{note}</div>')
 
     def missing(labels):
         return f'<p class="fact-missing">未获取：{_esc("、".join(labels))}</p>' if labels else ""
@@ -162,14 +213,15 @@ def build_timing_facts(fill: dict) -> str:
     as_of = f"{as_of[:4]}-{as_of[4:6]}-{as_of[6:8]}" if len(as_of) == 8 else as_of
     tech_source = "；".join(x for x in (f"截至 {as_of}" if as_of else "",
                                       f"{tech.get('sample_days')} 个样本" if tech.get("sample_days") else ""))
-    technical = scale("RSI14", tech.get("rsi14")) + scale("52 周价格位置", tech.get("position_52w_pct"))
+    technical = (scale("RSI14", tech.get("rsi14"), verdict("rsi14", tech.get("rsi14")))
+                 + scale("52 周价格位置", tech.get("position_52w_pct")))
     for key, label, suffix in (("ma60_slope_20d_pct", "MA60 的 20 日斜率", "%"),
                                ("ma120_slope_20d_pct", "MA120 斜率（20 日）", "%"),
                                ("volume_ratio_20", "20 日量比", "×"), ("atr14_pct", "ATR14%", "%")):
         if tech.get(key) is not None:
-            technical += metric(label, number(tech[key], suffix))
+            technical += metric(label, number(tech[key], suffix), verdict(key, tech[key]))
     if macd_text != "未获取":
-        technical += metric("MACD（12,26,9）", macd_text)
+        technical += metric("MACD（12,26,9）", macd_text, verdict("macd_hist", macd["hist"]))
     technical += missing(tech_missing)
 
     levels = facts.get("consensus_levels") or {}
@@ -201,7 +253,10 @@ def build_timing_facts(fill: dict) -> str:
                       f'{_esc(levels.get("months", "—"))} 个月</small></div>')
     chip_labels = {"average_cost": "平均成本", "profit_ratio": "盈利比率"}
     chips = facts.get("chips") or {}
-    chips_html = range_html + "".join(record(label, chips.get(key)) for key, label in chip_labels.items())
+    chips_html = range_html
+    for key, label in chip_labels.items():
+        item = chips.get(key)
+        chips_html += record(label, item, chip_verdict(key, item))
     chips_missing = [label for key, label in chip_labels.items()
                      if not chips.get(key) or chips[key].get("value") is None]
     if not levels:
@@ -215,7 +270,10 @@ def build_timing_facts(fill: dict) -> str:
                       "southbound": "北向/陆股通持股" if is_a_share else "南向持股",
                       "margin": "两融余额"}
     capital = facts.get("capital") or {}
-    capital_html = "".join(record(label, capital.get(key)) for key, label in capital_labels.items())
+    capital_html = ""
+    for key, label in capital_labels.items():
+        item = capital.get(key)
+        capital_html += record(label, item, verdict(key, item.get("value")) if item else "")
     capital_missing = [label for key, label in capital_labels.items()
                        if not capital.get(key) or capital[key].get("value") is None]
     capital_html += missing(capital_missing)
@@ -230,7 +288,8 @@ def build_timing_facts(fill: dict) -> str:
             '<article class="timing-fact-card" data-group="capital"><h3>资金事实</h3>'
             '<p class="fact-card-sub">只列有日期与来源的单点观测，不画趋势</p>'
             f'{capital_html}<footer>来源：各项记录的公开数据；单日值不代表趋势。</footer></article></div>'
-            '<p class="timing-facts-context"><a href="#s8">三情景目标价见第 8 章</a>；历史高低点不是目标价。只作事实，不进入评分或仓位。</p>')
+            '<p class="timing-facts-context"><a href="#s8">三情景目标价见第 8 章</a>；历史高低点不是目标价。'
+            '逐项判词仅描述指标自身状态；只作事实，不进入评分或仓位。</p>')
 
 
 def build_holders_plot(fill: dict) -> str:

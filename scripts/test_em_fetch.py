@@ -962,6 +962,8 @@ def test_23_forensic_fields_third_param():
         assert fields23 == "ts_code,end_date,grossprofit_margin", \
             f"fields 应走第三参，实际 {fields23!r}"
         assert any("M-Score" in l for l in lines), f"应产出 M-Score 行，实际 {lines}"
+        assert "至少扣 0.5" not in "\n".join(lines)
+        assert "不固定扣 0.5" in "\n".join(lines)
     finally:
         em_core.ts_call = _orig_ts23
     print("23. fetch_forensic fields 第三参 通过")
@@ -1622,3 +1624,65 @@ def test_31_quality_v2_profile_missing():
         else:
             em.fetch_quality_inputs = original_fetch
     print("31. 质量v2缺profile显式降级 通过")
+
+
+def test_36_summarize_include_e5(monkeypatch):
+    monkeypatch.setattr(em, "_CAPTURE", {})
+    monkeypatch.setattr(em, "fetch_kline_monthly", lambda *_args: [])
+    monkeypatch.setattr(em, "_sec_e1", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(em, "_sec_e2", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(em, "_sec_e3", lambda *_args: ([], []))
+    for name in ("_sec_quality", "_sec_e4", "_sec_forecast", "_sec_gov", "_sec_e6"):
+        monkeypatch.setattr(em, name, lambda *_args: [])
+    calls = []
+    monkeypatch.setattr(em, "_sec_e5", lambda *_args: calls.append(1) or [])
+    em.summarize("600000", 5)
+    assert calls == [1]
+    em.summarize("600000", 5, include_e5=False)
+    assert calls == [1]
+
+
+def test_37_peers_and_no_e5_cli(monkeypatch):
+    calls = []
+    def fake_summary(code, _years, _searches=None, include_e5=True):
+        calls.append((code, include_e5))
+        return "摘要"
+    monkeypatch.setattr(em, "summarize", fake_summary)
+    monkeypatch.setattr(em._C, "_tushare_token", lambda: "configured")
+    monkeypatch.setattr(sys, "argv", [
+        "em_fetch.py", "600989", "--peers=600309,002001,600426"])
+    em.main()
+    assert calls == [("600989", True), ("600309", False),
+                     ("002001", False), ("600426", False)]
+    calls.clear()
+    monkeypatch.setattr(sys, "argv", [
+        "em_fetch.py", "600989", "--peers=600309,002001,600426", "--no-e5"])
+    em.main()
+    assert calls == [("600989", False), ("600309", False),
+                     ("002001", False), ("600426", False)]
+
+
+def test_38_quality_fallback_uses_v2_risk_wording(monkeypatch):
+    monkeypatch.setattr(em, "red_flags", lambda _annual: [])
+    monkeypatch.setattr(em, "fetch_audit", lambda _code: None)
+    monkeypatch.setattr(em, "fetch_forensic", lambda _code: None)
+    text = "\n".join(em._sec_quality("600000", []))
+    assert "C→黄灯扣分" not in text
+    assert "第 6 章风险登记" in text
+    assert "D→红灯" in text
+
+
+def test_39_no_e5_rejects_target_evidence_flags(monkeypatch, capsys):
+    calls = []
+    monkeypatch.setattr(em, "summarize", lambda *args: calls.append(args) or "")
+    monkeypatch.setattr(em._C, "_tushare_token", lambda: "configured")
+    for extra in ("--out=quote.json", "--quality-v2"):
+        monkeypatch.setattr(sys, "argv", ["em_fetch.py", "600989", "--no-e5", extra])
+        try:
+            em.main()
+        except SystemExit as exc:
+            assert exc.code == 2
+        else:
+            raise AssertionError(f"--no-e5 {extra} 应拒绝执行")
+        assert "禁止与 --out 或 --quality-v2 同用" in capsys.readouterr().err
+    assert not calls

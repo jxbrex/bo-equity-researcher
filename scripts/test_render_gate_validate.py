@@ -862,6 +862,9 @@ def test_v2_risk_register_render_preserves_hero_and_premortem(capsys):
     assert "1D.RED.RECEIVABLES" in html
     assert "<!--RISK_REGISTER-->" not in html
     assert "统一风险登记" in html
+    assert "原黄灯（非致命风险）不在本章另行扣分" in html
+    assert "第 4/5 章" in html and "第 7 章" in html
+    assert "是否扣分以规则为准" in html
     output = capsys.readouterr().out
     assert "无独立风险扣分" in output
     assert "黄灯" not in output

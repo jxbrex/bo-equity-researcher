@@ -14,7 +14,8 @@
 
 ```bash
 python "<技能目录>\scripts\em_fetch.py" [代码] --peers=[peer1],[peer2],[peer3],[peer4]
-# 例: python "<技能目录>\scripts\em_fetch.py" 600989 --peers=600309,002001,600426
+# 例（普通目标+peers，目标保留 E5）: python "<技能目录>\scripts\em_fetch.py" 600989 --peers=600309,002001,600426
+# 例（peers 委派专用，连目标 E5 也跳过）: python "<技能目录>\scripts\em_fetch.py" 600989 --peers=600309,002001,600426 --no-e5
 
 # 新报告同时取九维机械输入（分型按标的实际替换，--out 必须保留）
 python "<技能目录>\scripts\em_fetch.py" 600989 --quality-v2 --stock-type=成长型 --growth-tier=mid --industry-profile=generic --out=_em_600989_quote.json
@@ -207,6 +208,9 @@ fill-schema.md `gap_plot` 行）。
   `--out=_em_[代码]_quote.json` 落盘（fill 的 `quote.source_file` 引用、渲染器比对防伪，
   见 Step 1.0）；定性调研在主会话完成——子代理脱离技能上下文会退化为抓搜索页（见上方纪律）。
 - **同业 peer ≥3 只：批量取数与清洗成表必须委派（MANDATORY）**——子代理只处理 **peers 部分**：
+  委派命令固定带 `--no-e5`（如 `python "<技能目录>\scripts\em_fetch.py" 600989 --peers=600309,002001,600426 --no-e5`）；
+  此开关仅供只处理 peers 的委派进程，主会话目标股取数禁用此开关；与 `--out` 或 `--quality-v2`
+  同用会被直接拒绝，防止静默产出缺 E5 的防伪文件；peers 不消费也不请求 E5。
   抓取 + 清洗成表回传，回传**必须含每个 peer 的 E1 原文行**，不足即视为委派失败——重跑，不凑合。
   em_fetch 已是单命令批量 + 进程/磁盘缓存，委派目的 = **把 peers 大块原始输出剥离出主会话上下文、
   由子代理压缩回传**（token 大户），不是脚本跑不动；em_fetch 一条命令会连带输出目标公司本体——

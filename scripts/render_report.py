@@ -63,7 +63,7 @@ from validate import validate_content
 
 # 渲染器版本：嵌入输出 HTML 尾部注释，事后可 grep 验证报告确由本脚本渲染
 # （防"render 报错后手写全文 HTML 绕行"，巨石 2026-08-23 实证）
-RENDERER_VERSION = "v0.11.2"
+RENDERER_VERSION = "v0.11.3"
 
 # Windows 文件名非法字符：\ / : * ? " < > | 及 ASCII 控制字符（\x00-\x1f）
 _WIN_ILLEGAL = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
@@ -372,8 +372,9 @@ def build_risk_register(fill: dict) -> str:
         raise ValueError("风险命中 ≥4 项且覆盖 ≥3 个位置时必须填写 red_review；复核不自动升级红灯")
     if not rows:
         rows.append('<tr><td colspan="5">本期未登记风险；这不代表风险已经排除。</td></tr>')
-    html = ('<div class="risk-register"><p>质量类命中已在对应维度反映，此处不重复扣分；'
-            '多项命中只触发红灯复核，不自动升级红灯。</p>'
+    html = ('<div class="risk-register"><p>原黄灯（非致命风险）不在本章另行扣分；'
+            '质量类命中只在第 4/5 章按对应维度规则反映，是否扣分以规则为准，汇总见第 7 章；'
+            '估值、时机与仅跟踪项不扣质量分；多项命中只触发红灯复核，不自动升级红灯。</p>'
             '<div class="table-scroll"><table><thead><tr><th>风险事实</th><th>证据与当前值</th>'
             '<th>影响去向</th><th>对应位置</th><th>跟踪指标</th></tr></thead>'
             f'<tbody>{"".join(rows)}</tbody></table></div></div>')

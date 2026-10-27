@@ -3,7 +3,7 @@
 基于「质量 × 估值 × 时机」三轨评分框架的个股深度分析技能（Kimi Code / ZCode 通用）。
 一键取数、脚本拼装，产出单文件自包含 HTML 研究报告。
 
-当前发布：**v0.11.2**（2026-10-27）。由 v5.10.1 重置发布编号，不是评分口径回退；
+当前发布：**v0.11.3**（2026-10-27）。由 v5.10.1 重置发布编号，不是评分口径回退；
 `quality_version: 2` 保持不变。
 
 > ⚠️ 本技能产出的报告为 AI 生成的研究笔记，不构成投资建议。
@@ -184,6 +184,9 @@ F 式九项支撑 1D 趋势档，G-Score 只作成长补充检查，不另起评
 ```bash
 # 1. 一键取数（tushare 优先、东财兜底；A 股 6 位代码、港股 5 位代码自动识别）
 python "<技能目录>/scripts/em_fetch.py" 600989 --peers=600309,002001,600426
+
+# peers 委派进程专用：连目标股 E5 也跳过（与 --out/--quality-v2 互斥，主会话目标股不要加）
+python "<技能目录>/scripts/em_fetch.py" 600989 --peers=600309,002001,600426 --no-e5
 
 # 新报告同时取九维机械输入（分型按标的实际替换；旧命令不加 quality-v2 时输出不变）
 python "<技能目录>/scripts/em_fetch.py" 600989 --quality-v2 --stock-type=成长型 --growth-tier=mid --industry-profile=generic --out=_em_600989_quote.json

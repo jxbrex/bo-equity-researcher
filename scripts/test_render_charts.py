@@ -47,19 +47,78 @@ def test_timing_facts_cards_group_metrics_sources_and_context():
         assert f'data-group="{group}"' in html
     for text in ("技术、筹码与资金事实", "RSI14", "55.5", "ATR14%", "MACD", "20 日量比",
                  "近 3 年价格区间", "月末收盘", "平均成本", "11.2元", "北向/陆股通持股",
+                 "中性区", "上行", "较 20 日均量放量", "柱为正，短线动能偏强",
+                 "只衡量波动，不判方向", "现价低于平均成本", "逐项判词仅描述指标自身状态",
                  "只作事实，不进入评分或仓位", "公开日线行情", "公开月线行情"):
         assert text in html, text
     assert html.count('role="img"') >= 3 and "70%" in html
     assert "融券余额492.7万元" in html
     assert "妙想 &lt;script&gt;" in html and "妙想 <script>" not in html
     for forbidden in ("<table", "估值三情景对照", "悲观 6.40-8.00", "原查询",
-                      "_timing_600000", "平均成本 <script>", "南向持股"):
+                      "_timing_600000", "平均成本 <script>", "南向持股",
+                      "金叉", "死叉", "加仓", "减仓", "顺风", "逆风"):
         assert forbidden not in html, forbidden
     assert 'href="#s8"' in html
     assert charts.build_timing_facts(minimal_fill()) == ""
     hk = minimal_fill(code="01810", timing_facts=fill["timing_facts"])
     hk_html = charts.build_timing_facts(hk)
     assert "南向持股" in hk_html and "北向/陆股通持股" not in hk_html
+
+
+def test_timing_facts_verdict_boundaries():
+    import charts_misc as charts
+
+    def record(value):
+        return {"value": value, "unit": "", "date": "2026-08-27",
+                "source": "公开数据", "query": "测试"}
+
+    facts = {
+        "technical": {"rsi14": 70, "atr14_pct": 2.4,
+                      "macd": {"dif": 0.1, "dea": 0.2, "hist": -0.2},
+                      "volume_ratio_20": 1.0, "ma60_slope_20d_pct": 0,
+                      "ma120_slope_20d_pct": -1.5, "position_52w_pct": 50},
+        "chips": {"average_cost": record(10), "profit_ratio": record(91)},
+        "capital": {"main_net_inflow": record(-2.5)},
+    }
+    fill = minimal_fill(timing_facts=facts)
+    html = charts.build_timing_facts(fill)
+    for text in ("超买区", "走平", "下行", "与 20 日均量持平", "柱为负，短线动能偏弱",
+                 "现价与平均成本持平", "获利盘较厚", "当日净流出"):
+        assert text in html, text
+
+    facts["technical"]["rsi14"] = 30
+    facts["technical"]["volume_ratio_20"] = 0.8
+    facts["technical"]["macd"] = {"dif": 0.1, "dea": 0.1, "hist": 0}
+    facts["chips"]["average_cost"]["value"] = 9
+    html = charts.build_timing_facts(fill)
+    for text in ("超卖区", "较 20 日均量缩量", "柱为零", "现价高于平均成本"):
+        assert text in html, text
+
+    for value, expected in ((60, "多数持仓盈利"), (50, "约半数持仓盈利"),
+                            (49.9, "多数持仓未盈利")):
+        facts["chips"]["profit_ratio"]["value"] = value
+        assert expected in charts.build_timing_facts(fill)
+    for value, expected in ((2.5, "当日净流入"), (0, "当日持平")):
+        facts["capital"]["main_net_inflow"]["value"] = value
+        assert expected in charts.build_timing_facts(fill)
+
+
+def test_timing_facts_nonfinite_values_do_not_get_verdicts():
+    import charts_misc as charts
+
+    nan = float("nan")
+    facts = {
+        "technical": {"rsi14": nan, "atr14_pct": 2.4,
+                      "macd": {"dif": nan, "dea": nan, "hist": nan},
+                      "volume_ratio_20": nan, "ma60_slope_20d_pct": nan,
+                      "ma120_slope_20d_pct": float("inf"), "position_52w_pct": nan},
+        "chips": {"average_cost": {"value": nan}, "profit_ratio": {"value": float("inf")}},
+        "capital": {"main_net_inflow": {"value": nan}},
+    }
+    html = charts.build_timing_facts(minimal_fill(timing_facts=facts))
+    for forbidden in ("中性区", "超买区", "超卖区", "走平", "下行", "与 20 日均量持平",
+                      "柱为零", "现价与平均成本持平", "获利盘较厚", "当日持平"):
+        assert forbidden not in html, forbidden
 
 
 def test_timing_facts_missing_values_are_grouped_without_fake_scales():
@@ -77,6 +136,9 @@ def test_timing_facts_missing_values_are_grouped_without_fake_scales():
     assert "left:0%" not in html and "数据不足" not in html
     assert html.count("未获取") == 3, "每组只在缺省汇总出现一次，不在指标行重复"
     assert html.count('<article class="timing-fact-card"') == 3
+    for forbidden in ("中性区", "走平", "当日持平", "多数持仓盈利",
+                      "约半数持仓盈利", "现价与平均成本持平"):
+        assert forbidden not in html, forbidden
 
 
 def test_timing_facts_missing_intraday_does_not_relabel_close_prices():

@@ -832,7 +832,7 @@ def fetch_forensic(code: str) -> list:
         else:
             rating = "A"
         basis = ("审计意见非标" if audit_bad else ("；".join(serious) if serious else "无红旗项"))
-        lines.append(f"初评: {rating}（{basis}）——C → 黄灯 d 类至少扣 0.5 且 00 章警示；"
+        lines.append(f"初评: {rating}（{basis}）——C → 第 1 章警示 + 第 6 章风险登记，不固定扣 0.5；"
                      f"D → 红灯回避，估值仅供参考")
         return lines
     except Exception:

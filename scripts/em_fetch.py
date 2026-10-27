@@ -24,7 +24,8 @@ tushare 不可用时自动回落东财野生端点（curl 传输，防 TLS 指�
 
 用法:
     python em_fetch.py 600989                    # 目标公司全量取数
-    python em_fetch.py 600989 --peers=600309,002001,600426   # 目标 + ≥3 家可比公司
+    python em_fetch.py 600989 --peers=600309,002001,600426   # 目标 + ≥3 家可比公司（peers 不取 E5）
+    python em_fetch.py 600989 --peers=600309,002001,600426 --no-e5  # 委派进程连目标股 E5 也跳过
     python em_fetch.py 600989 --kline-years=5    # 月K线回溯年数（默认5）
     python em_fetch.py 600989 --search="收购,减持,新华三"  # E7 定性站内搜索（可多关键词，逗号分隔）
     python em_fetch.py 600989 --out=_em_600989_quote.json  # E1 源头数字落盘（fill.quote 防伪引用）
@@ -424,7 +425,7 @@ def _sec_quality(pure: str, annual: list) -> list:
     else:
         out.append("## 财报可信度（初判）\n△ 数据不足（tushare 三表缺字段，应计比率/M-Score 无法计算）"
                    "——请降级：东财 F10 补应计/M-Score 输入，或妙想 MCP 直查；"
-                   "此评级是 MANDATORY（C→黄灯扣分、D→红灯），禁止静默跳过\n")
+                   "此评级是 MANDATORY（C→第 1 章警示 + 第 6 章风险登记，不固定扣分；D→红灯），禁止静默跳过\n")
     return out
 
 
@@ -728,7 +729,7 @@ def _sec_e7(searches: list) -> list:
     return out
 
 
-def summarize(code: str, years: int, searches: list = None) -> str:
+def summarize(code: str, years: int, searches: list = None, include_e5: bool = True) -> str:
     # v5.8.2（审计修复）：_CAPTURE 只写不清，同进程第二次调用会读到上一次残留键——
     # _sec_e5 的 "consensus_eps" in _CAPTURE 判断即因此被误标注（现有 main 单次调用恰好
     # 规避，属顺序脆弱依赖）；入口清空，每次 summarize 的捕获独立成集
@@ -759,7 +760,8 @@ def summarize(code: str, years: int, searches: list = None) -> str:
     if not is_hk:
         jobs.append(lambda: _sec_forecast(pure))
         jobs.append(lambda: _sec_gov(pure))
-    jobs.append(lambda: _sec_e5(pure, is_hk))
+    if include_e5:
+        jobs.append(lambda: _sec_e5(pure, is_hk))
     jobs.append(lambda: _sec_e6(secucode, is_hk))
     if searches:
         jobs.append(lambda: _sec_e7(searches))
@@ -780,8 +782,8 @@ def main():
     for a in sys.argv[1:]:
         if not a.startswith("--"):
             continue
-        if a == "--quality-v2":
-            opts["quality-v2"] = True
+        if a in ("--quality-v2", "--no-e5"):
+            opts[a[2:]] = True
             continue
         if "=" not in a:
             # --peers 这类不带 = 的参数原样会被静默忽略，改为明确报错+用法提示
@@ -793,6 +795,9 @@ def main():
     if not args:
         print(__doc__)
         sys.exit(1)
+    if opts.get("no-e5") and (opts.get("out") or opts.get("quality-v2")):
+        print("错误：--no-e5 仅供 peers 委派，禁止与 --out 或 --quality-v2 同用", file=sys.stderr)
+        sys.exit(2)
     if not _C._tushare_token():
         # 硬告警不硬停（东财兜底仍可出报告）：token 缺失时 ts_call 的 RuntimeError 曾被
         # 各 fetch 的裸 except 静默吞掉 → 治理/审计全部输出「未获取到」，agent 白走降级链
@@ -808,7 +813,7 @@ def main():
     searches = None
     if opts.get("search"):
         searches = [s.strip() for s in opts["search"].split(",") if s.strip()]
-    summary = summarize(args[0], years, searches)
+    summary = summarize(args[0], years, searches, not opts.get("no-e5"))
     captured_e1 = bool(_CAPTURE)
     if opts.get("quality-v2"):
         _secid, secucode, _is_hk = secid_of(args[0])
@@ -887,7 +892,7 @@ def main():
         peer = peer.strip()
         if peer:
             print("\n---\n")
-            print(summarize(peer, years))
+            print(summarize(peer, years, None, False))
 
 
 def _debug_summary() -> None:

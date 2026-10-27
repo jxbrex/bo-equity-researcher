@@ -285,6 +285,16 @@ def test_calib_keys_and_count_warn():
     assert "未标注校准锚" not in out7 and "校准锚（calib:true）仅" not in out7, "非四型 0 个不应告警"
 
 
+def test_calib_history_distortion_fallback_is_allowed():
+    stages = [{"name": "段一", "period": "2021/01–2021/12"},
+              {"name": "当前段", "period": "2022/01–至今", "current": True},
+              {"name": "过渡段", "period": "2022/01–2022/06"}]
+    f = _calib_fill(stages, stock_type="困境反转")
+    f["cycle_html"] = ("<p>历史 PE 带严重失真且重组前后不可比，未标校准锚（calib）；"
+                        "改用同业锚与正常化利润，此为降级取数路径的显式声明。</p>")
+    assert "未标注校准锚（calib）" not in validate_stderr(f)
+
+
 def test_calib_window_recon_warn():
     """v5.4.0 校准锚③：calib 时段落在 price_history 窗口内 → 声明区间与窗口实测 PE 极值
     端点偏差 >25% 告警（上限方向同）；恰 25% 边界放行；未写 pe 键/窗口外 → 跳过；

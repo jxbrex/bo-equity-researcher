@@ -1546,6 +1546,37 @@ def test_34_timing_evidence_written_with_null_unavailable(monkeypatch, tmp_path)
     assert all(value is None for value in evidence["capital"].values())
 
 
+def test_35_timing_evidence_retry_preserves_manual_chip_capital(monkeypatch, tmp_path):
+    import json
+
+    evidence_path = tmp_path / f"_timing_600000_{date.today().isoformat()}.json"
+    chip = {"value": 11.2, "unit": "元", "date": "2026-08-27", "source": "东方财富", "query": "平均成本"}
+    margin = {"value": 36.33, "unit": "亿元", "date": "2026-08-27", "source": "东方财富", "query": "两融"}
+    evidence_path.write_text(json.dumps({
+        "code": "600000", "date": date.today().isoformat(), "technical": {"rsi14": 40.0},
+        "consensus_levels": {"close_high": 12, "close_low": 7},
+        "chips": {"average_cost": chip, "profit_ratio": None},
+        "capital": {"main_net_inflow": None, "southbound": None, "margin": margin},
+    }, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(em, "_CAPTURE", {})
+    def fake_summary(*_args):
+        em._CAPTURE.update({"code": "600000", "timing": {
+            "price": 10, "technical": {"rsi14": 66.0},
+            "consensus_levels": {"close_high": 20, "close_low": 9}}})
+        return "摘要"
+    monkeypatch.setattr(em, "summarize", fake_summary)
+    monkeypatch.setattr(em._C, "_tushare_token", lambda: "configured")
+    monkeypatch.setattr(sys, "argv", ["em_fetch.py", "600000", f"--out={tmp_path}/quote.json"])
+    em.main()
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    assert evidence["technical"]["rsi14"] == 66.0
+    assert evidence["consensus_levels"]["close_high"] == 20
+    assert evidence["chips"]["average_cost"] == chip
+    assert evidence["capital"]["margin"] == margin
+    assert evidence["chips"]["profit_ratio"] is None
+    assert evidence["capital"]["main_net_inflow"] is None
+
+
 def test_35_summarize_reuses_same_monthly_rows(monkeypatch):
     monkeypatch.setattr(em, "_CAPTURE", {})
     monthly = [{"date": "2024-01-31", "close": 15, "high": 16, "low": 14}]

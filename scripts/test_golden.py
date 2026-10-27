@@ -88,7 +88,8 @@ def test_golden_v2_fill():
     """v2 主快照：九维得分链、统一风险登记与版本标记必须有独立字节级基线。"""
     html = _render_v2_norm(v2_fill())
     assert 'data-quality-version="2"' in html
-    assert "风险事实" in html and "得分链" in html
+    assert "风险事实" in html and "评分依据" in html
+    assert "评分 v2" not in html
     _assert_snapshot("v2_fill", v2_fill(), renderer=_render_v2_norm)
 
 

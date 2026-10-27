@@ -2,8 +2,185 @@
 # -*- coding: utf-8 -*-
 """charts_score.py — 评分类图族（v4.9 从 charts.py 拆出）：07 九维评分分布横条（build_score_bars）/ 02 敏感性龙卷风（build_sensitivity_tornado）。依赖 charts_base 与 scoring。"""
 
+import re
+
 from scoring import DIMS, LAYER_NAMES, badge_class, _dim_verdict, _fmt, _esc
+from quality_rules import F_ITEM_IDS, RULE_LABELS
 from charts_base import *
+
+
+_F_LABELS = {
+    "profit_positive": "利润为正", "ocf_positive": "经营现金流为正", "roa_improving": "ROA 改善",
+    "cash_quality_ok": "现金含量合格", "long_debt_down": "长期有息负债下降",
+    "short_cover_improving": "短债覆盖改善", "no_dilution": "无股本稀释",
+    "gross_margin_improving": "毛利率改善", "asset_turnover_improving": "资产周转改善",
+}
+_F_MISS = {
+    "profit_positive": "利润为负", "ocf_positive": "经营现金流为负", "roa_improving": "ROA 未改善",
+    "cash_quality_ok": "现金含量不合格", "long_debt_down": "长期有息负债未下降",
+    "short_cover_improving": "短债覆盖未改善", "no_dilution": "存在股本稀释",
+    "gross_margin_improving": "毛利率未改善", "asset_turnover_improving": "资产周转未改善",
+}
+_PROFILE_LABELS = {
+    "pharma_cxo": "医药 CXO", "pharma_device": "医药器械", "resources_upstream": "上游资源",
+    "internet_platform": "平台互联网", "financial_bank": "银行", "financial_insurance": "保险",
+    "financial_broker": "券商", "realestate_development": "开发地产", "generic": "通用",
+}
+
+
+def _delta_text(value):
+    return f"{float(value):+.2f}".replace("-", "−")
+
+
+def _score_label(step):
+    rule_id = str(step.get("id") or "")
+    if rule_id.startswith("1D.RED."):
+        return RULE_LABELS.get(rule_id, "财务风险")
+    if "CUSTOM" in rule_id:
+        return "清单外调整"
+    return RULE_LABELS.get(rule_id, "")
+
+
+def _score_text(key, step, spec):
+    rule_id = str(step.get("id") or "")
+    evidence = str(step.get("evidence") or "")
+    if rule_id in ("1D.CASH_RUNWAY", "1F.CASH_RUNWAY"):
+        return f"{float(evidence.removesuffix('个月')):.2f} 个月"
+    if rule_id == "1D.F.HITS":
+        items = spec.get("f_items") or {}
+        if not items:
+            return evidence.replace("命中", "通过", 1)
+        merged = re.fullmatch(r"原始(\d+)/9，因果归并后(\d+)/9", evidence)
+        hits = sum(items.get(name) is True for name in F_ITEM_IDS)
+        misses = [_F_MISS[name] for name in F_ITEM_IDS if items.get(name) is False]
+        unknown = [_F_LABELS[name] for name in F_ITEM_IDS if not isinstance(items.get(name), bool)]
+        text = (f"通过 {merged.group(2)}/9 项（因果归并前 {merged.group(1)}/9 项）" if merged
+                else f"通过 {hits}/{len(F_ITEM_IDS)} 项")
+        if misses:
+            text += "；原始未通过：" if merged else "；未通过："
+            text += "、".join(misses)
+        if unknown:
+            text += "；未核实：" + "、".join(unknown)
+        return text
+    if rule_id == "1D.LIQUIDITY":
+        values = spec.get("liquidity") or {}
+        pct = lambda v: "未获取" if v is None else f"{v:.2%}"
+        ratio = lambda v: "未获取" if v is None else f"{v:.2f} 倍"
+        return (f"有息负债/总资产 {pct(values.get('debt_ratio'))}；"
+                f"货币资金/短债 {ratio(values.get('short_cover'))}；"
+                f"经营现金流/短债 {ratio(values.get('ocf_short_cover'))}")
+    if rule_id == "1E.DIVIDEND":
+        values = spec.get("dividend") or {}
+        parts = [f"连续分红 {values['payout_streak']} 年" if values.get("payout_streak") is not None else "",
+                 f"分红增长连续 {values['growth_streak']} 年" if values.get("growth_streak") is not None else ""]
+        return "；".join(part for part in parts if part) or "长期分红记录"
+    if rule_id == "1E.BUYBACK":
+        return "注销式回购：" + ("是" if (spec.get("buyback") or {}).get("cancel") else "否")
+    if rule_id == "1E.LONG_RECORD":
+        values = spec.get("long_record") or {}
+        names = {"dividend_growth": "持续分红增长", "low_buyback": "低价回购"}
+        return "；".join(label for name, label in names.items() if values.get(name)) or "长期资本配置记录"
+    if rule_id == "1F.ROIC_COMPONENTS":
+        values = spec.get("roic_normalized_components") or []
+        return "近三年 ROIC：" + " / ".join(f"{float(v):.2%}" for v in values)
+    if rule_id == "1F.INCREMENTAL_ROIC":
+        return f"{float(evidence):.2%}"
+    if rule_id == "1E.PLEDGE":
+        return f"质押比例 {float(step.get('evidence')):.2%}"
+    if rule_id == "1E.REDUCTION":
+        return f"减持比例 {float(step.get('evidence')):.2%}"
+    if rule_id == "1E.SUCCESSION":
+        return f"负责人 {float(evidence):g} 岁，未披露继任安排"
+    if rule_id == "1E.PENALTIES":
+        return "存在监管处罚"
+    if rule_id.startswith("1D.CAUSAL_GROUP."):
+        return evidence.split("；同一因果链", 1)[0] + "；同一因果链只计一次"
+    if rule_id.startswith("1D.RED.") and evidence in ("True", "False"):
+        return "已核实" if evidence == "True" else "未核实"
+    if evidence in ("True", "False"):
+        return "通过" if evidence == "True" else "未通过"
+    for code, label in _PROFILE_LABELS.items():
+        evidence = evidence.replace(code, label)
+        evidence = evidence.replace("成本strong", "成本强").replace("定价strong", "定价强")
+        evidence = evidence.replace("成本neutral", "成本中性").replace("定价neutral", "定价中性")
+        evidence = evidence.replace("成本weak", "成本弱").replace("定价weak", "定价弱")
+    return evidence
+
+
+def _score_group(key, step):
+    rule_id = str(step.get("id") or "")
+    evidence = str(step.get("evidence") or "")
+    if step.get("delta"):
+        return "加减分"
+    if key == "1D" and rule_id.startswith("1D.G."):
+        return "补充观察"
+    if "UNKNOWN" in rule_id or any(word in evidence for word in ("最高只能", "未获取", "未知", "缺失")):
+        return "数据缺口与限制"
+    return "定档依据"
+
+
+def _build_score_detail(key, result, spec):
+    steps = result.get("rule_steps") or []
+    custom = result.get("custom") or {}
+    custom_ids = {custom.get("id")} | {item.get("id") for item in custom.get("items", [])}
+    custom_ids.discard(None)
+    final = result.get("final")
+    if final is None:
+        summary = "数据不足"
+    else:
+        base = float(result.get("base") or 0)
+        rule_steps = [s for s in steps if s.get("id") not in custom_ids]
+        total_delta = sum(float(s.get("delta") or 0) for s in steps)
+        before_limit = base + total_delta
+        pre_cap = float(result.get("pre_cap", before_limit))
+        band_limited = abs(pre_cap - before_limit) >= 0.005
+        cap = result.get("cap")
+        cap_active = (cap is not None and pre_cap > cap and abs(final - cap) < 0.005)
+        parts = [f"最终 {final:.2f}", f"定档起点 {base:.2f}"]
+        for step in rule_steps:
+            if step.get("delta"):
+                label = _score_label(step)
+                if label:
+                    parts.append(f"{label} {_delta_text(step['delta'])}")
+        regular_deltas = [float(s["delta"]) for s in rule_steps
+                          if s.get("delta") and not _score_label(s)]
+        regular_positive = sum(value for value in regular_deltas if value > 0)
+        regular_negative = sum(value for value in regular_deltas if value < 0)
+        if regular_positive:
+            parts.append(f"规则调整 {_delta_text(regular_positive)}")
+        if regular_negative:
+            parts.append(f"规则减分 {_delta_text(regular_negative)}")
+        custom_delta = sum(float(s.get("delta") or 0) for s in steps if s.get("id") in custom_ids)
+        if custom_delta:
+            parts.append(f"清单外调整 {_delta_text(custom_delta)}")
+        if band_limited:
+            parts.append("档位边界限制")
+        if cap_active:
+            reason_step = next((s for s in reversed(steps)
+                                if "UNKNOWN" in str(s.get("id")) or "最高" in str(s.get("evidence"))), None)
+            reason = f"（{_score_text(key, reason_step, spec)}）" if reason_step else ""
+            parts.append(f"证据上限 {cap:.2f}{reason}")
+        summary = "｜".join(parts)
+    groups = {"加减分": [], "定档依据": [], "数据缺口与限制": [], "补充观察": []}
+    for step in steps:
+        rule_id = str(step.get("id") or "")
+        if rule_id in F_ITEM_IDS.values():
+            continue
+        text = _score_text(key, step, spec)
+        label = _score_label(step)
+        prefix = f"{label}：" if label else ""
+        delta = step.get("delta")
+        delta_html = (f'<strong class="{"bad" if delta < 0 else "good"}">{_delta_text(delta)}</strong>'
+                      if delta else "")
+        item = (f'<li data-rule-id="{_esc(rule_id)}"><span>{_esc(prefix + text)}</span>'
+                f'{delta_html}</li>')
+        groups[_score_group(key, step)].append(item)
+    body = "".join(f'<section class="score-group"><h4>{title}</h4><ul>{"".join(items)}</ul></section>'
+                   for title, items in groups.items() if items)
+    return (f'<details class="score-detail"><summary><span class="score-final">{_esc(summary)}</span>'
+            f'<span class="score-detail-toggle">查看评分依据</span></summary>'
+            f'<div class="score-groups">{body}</div></details>')
+
 
 def build_score_bars(sc: dict) -> str:
     """06 质量分汇总·九维评分横条图：条长=维度得分（0-10 定域，跨报告可比），条色=徽章档，

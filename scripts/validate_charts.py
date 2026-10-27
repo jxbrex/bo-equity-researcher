@@ -131,7 +131,10 @@ def _check_prev_fields(fill: dict, warns: list) -> None:
     """prev 内部字段校验（回测模式锚点缺项会静默显示 "?"/"—"）。"""
     if fill.get("prev"):
         pv = fill["prev"]
-        for k in ("date", "quality", "valuation", "timing", "target_range"):
+        required = ["date", "quality", "valuation", "timing", "target_range"]
+        if pv.get("quality_version") == "legacy-single-track":
+            required.remove("valuation")
+        for k in required:
             if not pv.get(k):
                 warns.append(f"prev.{k} 缺失：回测对比条该行将显示缺省值，请补全上版锚点")
         # 复盘高亮校验：评分变化/被证伪假设/新增变量应挂 .rev（全文 <3 处说明漏标）
@@ -190,6 +193,26 @@ def _prev_chart_facts(fill: dict) -> dict:
             "growth_fcst_years": fcst_n, "pe_history": _pe_band_ok(fill)}
 
 
+def _review_chart_note(fill, aliases):
+    text = _plain_text(fill.get("review_html") or "")
+    actions = ("减配", "少画", "不再绘制", "不再生成", "不生成", "未生成", "不画",
+               "删除", "仅画", "只画", "缺省", "降级")
+    reasons = ("原因", "口径", "避免", "未获取", "缺少", "禁填", "无法", "无情景",
+               "失真", "规则", "锚不住", "替代", "不可比", "不足")
+    return any(any(alias in sentence for alias in aliases)
+               and any(action in sentence for action in actions)
+               and any(reason in sentence for reason in reasons)
+               for sentence in re.split(r"[。；;]", text))
+
+
+def _cycle_anchor_fallback_documented(fill):
+    text = _plain_text(fill.get("cycle_html") or "")
+    return ("未标校准锚" in text
+            and any(word in text for word in ("失真", "不可比", "不可用"))
+            and any(word in text for word in ("改用", "替代"))
+            and any(word in text for word in ("同业锚", "正常化", "市值", "rNPV")))
+
+
 def _check_prev_charts(fill: dict, warns: list) -> None:
     """v5.5.1 F3 复盘模式「旧有新无」结构对照（软告警，升拒登记 handoff）：prev.charts 照抄
     上版 fill 的图字段事实，本版逐项对照——上版有而本版不生成/变少即告警，减配要求写进
@@ -208,18 +231,23 @@ def _check_prev_charts(fill: dict, warns: list) -> None:
         return
     now = _prev_chart_facts(fill)
     why = "——若为有意减配，请在 review_html 写明减配理由与替代数据来源；否则补齐"
-    if pc.get("gap_plot") and not now["gap_plot"]:
+    if pc.get("gap_plot") and not now["gap_plot"] and not _review_chart_note(fill, ("逐机构定位", "预期差图")):
         warns.append(f"复盘减配：上版 gap_plot 逐机构定位图已生成（prev.charts.gap_plot=true）"
                      f"而本版不生成（维度不足 2 行）{why}（v5.5.1 结构对照）")
     was_p = _num(pc.get("fin_trend_panels"))
-    if was_p is not None and now["fin_trend_panels"] < was_p:
+    if (was_p is not None and now["fin_trend_panels"] < was_p
+            and not _review_chart_note(fill, ("财务趋势图", "图墙"))):
         warns.append(f"复盘减配：上版 fin_trend 有效面板 {was_p:g} 个而本版 {now['fin_trend_panels']} 个"
                      f"{why}（第 4.4 章图墙少画）")
     was_f = _num(pc.get("growth_fcst_years"))
-    if was_f is not None and now["growth_fcst_years"] < was_f:
+    if (was_f is not None and now["growth_fcst_years"] < was_f
+            and not _review_chart_note(fill, ("利润增长图",))):
         warns.append(f"复盘减配：上版 growth_plot.fcst 预测年 {was_f:g} 个而本版 "
                      f"{now['growth_fcst_years']} 个{why}（第 5.1 章利润增长图缩短）")
-    if pc.get("pe_history") and not now["pe_history"]:
+    std, tier, _legacy = _resolve_type_tier(fill)
+    pe_forbidden = (std == "成长型" and tier == "high") or std == "未盈利/管线"
+    if (pc.get("pe_history") and not now["pe_history"] and not pe_forbidden
+            and not _review_chart_note(fill, ("PE 历史带", "PE历史带"))):
         warns.append(f"复盘减配：上版 pe_history（第 11 章 PE 历史带图）已生成而本版不生成"
                      f"（字段缺失或 hist_lo/hist_hi/pe_ttm/pe_band 键不齐）{why}")
 
@@ -650,7 +678,7 @@ def _check_cycle_stages(fill: dict, warns: list) -> None:
                          "与当前时段的相似性（similarity：增速/规模/宏观背景）与规模折价（discount："
                          "当前利润更大时 PE 应更低）——否则「为何拿这几段校准」无据（v5.4.0 软约束）")
     # v5.4.1：四型零标记不再静默豁免（一个 calib 都不标 = 软约束失去观察意义）
-    if _anchor_unanchored_type(fill) and len(calibs) < 2:
+    if _anchor_unanchored_type(fill) and len(calibs) < 2 and not _cycle_anchor_fallback_documented(fill):
         if calibs:
             warns.append(f"cycle_stages 校准锚（calib:true）仅 {len(calibs)} 个（应 ≥2）：估值带校准"
                          "依赖 ≥2 个可比历史时段（scoring.md「三情景构建」PE 时段匹配）——"

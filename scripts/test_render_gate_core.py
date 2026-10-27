@@ -5,8 +5,11 @@
 v5.8.2 自 test_render_gate.py 按域拆分（纯搬迁：断言逐字沿用，print 噪音已清）。
 """
 import os
+import re
 import sys
 import tempfile
+
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import render_report as R
@@ -544,6 +547,27 @@ def test_peers_bestworst_warn():
     assert "缺最优/最差标注" in err and "ROE" in err, "ROE 列裸奔应按列名告警"
 
 
+def test_peers_roe_outlier_with_documented_one_off_does_not_warn():
+    meta = ("同行业、同规模筛选；同业乙口径不一已剔出；目标公司 ROE 取 2025 年报加权口径，"
+            "含一次性收益，扣非口径另列，与同业年报口径对照")
+    fill = minimal_fill(peers_meta=meta, peers_plot={"points": [
+        {"name": "测试股份", "roe": 34, "pe": 11, "target": True},
+        {"name": "同业甲", "roe": 12, "pe": 18},
+        {"name": "同业乙", "roe": 15, "pe": 20}]})
+    assert "脱离同业量级" not in validate_stderr(fill)
+
+
+def test_peers_directionless_columns_with_units_respect_meta_note():
+    peers_html = ('<div class="table-scroll"><table><tr><th>公司</th><th>现价（元）</th>'
+                  '<th>总市值（亿）</th><th>PE(TTM)</th></tr>'
+                  '<tr><td>测试股份</td><td>10</td><td>100</td><td class="cell-best">11</td></tr>'
+                  '<tr><td>同业甲</td><td>20</td><td>200</td><td class="cell-worst">25</td></tr>'
+                  '</table></div><span class="source">数据来源：测试</span>')
+    out = validate_stderr(minimal_fill(
+        peers_meta="现价/总市值为事实列，不标方向性极值", peers_html=peers_html))
+    assert "缺最优/最差标注" not in out
+
+
 def test_peers_plot_array_form_rejected():
     """peers_plot 数组简写废止（v5.1.5，与 fill-schema「直接给数组亦可」删除同步）：
     传裸数组 → 拒渲染。"""
@@ -865,16 +889,176 @@ def test_v2_missing_required_dimension_is_rejected():
     expect_valueerror(fill, "1D", kw="1D")
 
 
-def test_v2_render_injects_version_badges_and_rule_details():
+def _visible_text(html):
+    return re.sub(r"<[^>]+>", "", html)
+
+
+def test_v2_render_injects_machine_version_and_readable_rule_details():
     html = render_v2_fill(v2_fill())
+    text = _visible_text(html)
     assert 'data-quality-version="2"' in html
-    assert "评分 v2" in html
+    assert "评分 v2" not in text
     assert 'data-dim="1A"' in html
-    assert "1A.MATURE.CHECK" in html
-    assert "1F.ROIC_WACC" in html
+    assert "1A.MATURE.CHECK" not in text
+    assert "1F.ROIC_WACC" not in text
     assert "badge badge-green" in html
     assert "<!--SCORE_BADGE-->" not in html
     assert "<!--SCORE_DETAIL-->" not in html
+
+
+def test_score_detail_explains_effective_cap_in_chinese():
+    result = {"base": 9.0, "cap": 7.9, "final": 7.9, "rule_steps": [
+        {"id": "1B.VALUE_CHAIN", "evidence": "成本/传导/集中度/议价状态", "delta": 0},
+        {"id": "1B.CONCENTRATION.UNKNOWN", "evidence": "客户或供应商集中度未知", "delta": 0},
+    ]}
+    html = R._build_score_detail("1B", result, {})
+    summary = _visible_text(re.search(r"<summary>(.*?)</summary>", html, re.S).group(1))
+    assert "最终 7.90" in summary
+    assert "定档起点 9.00" in summary
+    assert "证据上限 7.90" in summary
+    assert "客户或供应商集中度未知" in _visible_text(html)
+    assert "1B.VALUE_CHAIN" not in _visible_text(html)
+    assert 'data-rule-id="1B.CONCENTRATION.UNKNOWN"' in html
+
+
+def test_score_detail_combines_regular_adjustments_in_summary():
+    result = {"base": 6.0, "cap": 9.0, "final": 7.0, "rule_steps": [
+        {"id": "1E.DIVIDEND", "evidence": "3", "delta": 0.5},
+        {"id": "1E.BUYBACK", "evidence": "True", "delta": 0.5},
+    ]}
+    html = R._build_score_detail("1E", result, {})
+    summary = _visible_text(re.search(r"<summary>(.*?)</summary>", html, re.S).group(1))
+    assert "规则调整 +1.00" in summary
+    assert summary.count("规则调整") == 1
+    assert _visible_text(html).count("+0.50") == 2
+
+
+def test_score_detail_shows_deduction_and_formats_financial_checks():
+    spec = {
+        "f_items": {"profit_positive": True, "ocf_positive": True, "roa_improving": False,
+                    "cash_quality_ok": True, "long_debt_down": False,
+                    "short_cover_improving": True, "no_dilution": True,
+                    "gross_margin_improving": False, "asset_turnover_improving": True},
+        "liquidity": {"debt_ratio": 0.35074714637536947, "short_cover": 0.6398691244981521,
+                      "ocf_short_cover": 0.45615386649391765},
+    }
+    result = {"base": 5.0, "cap": 7.9, "final": 4.0, "rule_steps": [
+        {"id": "1D.F.HITS", "evidence": "命中6/9", "delta": 0},
+        {"id": "1D.LIQUIDITY", "evidence": str(spec["liquidity"]), "delta": 0},
+        {"id": "1D.RED.RECEIVABLES", "evidence": "True", "delta": -1},
+        {"id": "1D.GROSS_MARGIN_PEER.UNKNOWN", "evidence": "同业毛利率对照缺失，最高只能落B档", "delta": 0},
+    ]}
+    html = R._build_score_detail("1D", result, spec)
+    summary = _visible_text(re.search(r"<summary>(.*?)</summary>", html, re.S).group(1))
+    text = _visible_text(html)
+    assert "最终 4.00" in summary and "应收恶化 −1.00" in summary
+    assert "证据上限" not in summary
+    assert "通过 6/9 项" in text
+    for label in ("ROA 未改善", "长期有息负债未下降", "毛利率未改善"):
+        assert label in text
+    assert "有息负债/总资产 35.07%" in text
+    assert "货币资金/短债 0.64 倍" in text
+    assert "经营现金流/短债 0.46 倍" in text
+    for raw in ("True", "False", "debt_ratio", "F.HITS", "LIQUIDITY"):
+        assert raw not in text
+    assert 'data-rule-id="1D.RED.RECEIVABLES"' in html
+
+
+def test_score_detail_formats_cash_runway_to_two_decimals():
+    result = {"base": 9.0, "cap": None, "final": 9.0,
+              "rule_steps": [{"id": "1D.CASH_RUNWAY", "evidence": "59.52249294240183个月", "delta": 0}]}
+    html = R._build_score_detail("1D", result, {"cash_runway_months": 59.52249294240183})
+    assert "59.52 个月" in _visible_text(html)
+    assert "59.52249294240183" not in _visible_text(html)
+
+
+def test_score_detail_keeps_negative_adjustments_visible_when_combining():
+    result = {"base": 6.0, "cap": 9.0, "final": 7.0, "rule_steps": [
+        {"id": "1E.REDUCTION", "evidence": "0.03", "delta": -1},
+        {"id": "1E.DIVIDEND", "evidence": "3", "delta": 0.5},
+        {"id": "1E.BUYBACK", "evidence": "True", "delta": 0.5},
+        {"id": "1E.LONG_RECORD", "evidence": "True", "delta": 1},
+    ]}
+    html = R._build_score_detail("1E", result, {})
+    summary = _visible_text(re.search(r"<summary>(.*?)</summary>", html, re.S).group(1))
+    assert "规则调整 +2.00" in summary
+    assert "减持 −1.00" in summary
+
+
+def test_score_detail_shows_raw_and_merged_financial_check_counts():
+    spec = {"f_items": {
+        "profit_positive": True, "ocf_positive": True, "roa_improving": True,
+        "cash_quality_ok": True, "long_debt_down": True, "short_cover_improving": False,
+        "no_dilution": False, "gross_margin_improving": False, "asset_turnover_improving": False,
+    }}
+    result = {"base": 7, "cap": None, "final": 7, "rule_steps": [
+        {"id": "1D.F.HITS", "evidence": "原始5/9，因果归并后6/9", "delta": 0},
+    ]}
+    text = _visible_text(R._build_score_detail("1D", result, spec))
+    assert "通过 6/9 项（因果归并前 5/9 项）" in text
+    assert "原始未通过" in text
+
+
+def test_score_detail_formats_normalized_roic_numeric_strings():
+    result = {"base": 9, "cap": None, "final": 9, "rule_steps": [
+        {"id": "1F.ROIC_COMPONENTS", "evidence": "['0.07', '0.10', '0.12']", "delta": 0},
+    ]}
+    text = _visible_text(R._build_score_detail(
+        "1F", result, {"roic_normalized_components": ["0.07", "0.10", "0.12"]}))
+    assert "7.00% / 10.00% / 12.00%" in text
+
+
+@pytest.mark.parametrize("key,rule_id,evidence,delta,expected", [
+    ("1D", "1D.G.ROA", "True", 0, "ROA：通过"),
+    ("1F", "1F.INCREMENTAL_ROIC", "0.18", 1, "增量 ROIC：18.00%"),
+    ("1D", "1D.CASH_RUNWAY", "59.52249294240183个月", 0, "现金跑道：59.52 个月"),
+    ("1E", "1E.SUCCESSION", "70", -0.5, "继任风险：负责人 70 岁，未披露继任安排"),
+])
+def test_score_detail_names_supplemental_observations(key, rule_id, evidence, delta, expected):
+    result = {"base": 6, "cap": None, "final": 6 + delta,
+              "rule_steps": [{"id": rule_id, "evidence": evidence, "delta": delta}]}
+    assert expected in _visible_text(R._build_score_detail(key, result, {}))
+
+
+def test_score_summary_uses_chinese_red_flag_names():
+    fill = v2_fill()
+    fill["score_inputs"]["1D"]["red_flags"]["receivables"] = True
+    text = _visible_text(render_v2_fill(fill))
+    assert "红旗扣分 1.0：应收恶化" in text
+    assert "True" not in text and "False" not in text
+
+
+def test_score_detail_does_not_blame_evidence_cap_for_band_clamp():
+    result = {"base": 5, "pre_cap": 5.9, "cap": 5.9, "final": 5.9,
+              "custom": {"id": "CUSTOM.TEST"}, "rule_steps": [
+                  {"id": "1C.PRESSURE.UNKNOWN", "evidence": "压力测试未知，最高只能落B档", "delta": 0},
+                  {"id": "CUSTOM.TEST", "evidence": "补充判断", "delta": 1},
+              ]}
+    html = R._build_score_detail("1C", result, {})
+    summary = _visible_text(re.search(r"<summary>(.*?)</summary>", html, re.S).group(1))
+    assert "证据上限" not in summary
+    assert "档位边界限制" in summary
+
+
+def test_peers_meta_mere_metric_mention_does_not_waive_direction_warning():
+    peers_html = ('<div class="table-scroll"><table><tr><th>公司</th><th>PE(TTM)</th><th>ROE</th></tr>'
+                  '<tr><td>测试股份</td><td>11</td><td class="cell-best">34</td></tr>'
+                  '<tr><td>同业甲</td><td>25</td><td class="cell-worst">12</td></tr>'
+                  '</table></div><span class="source">数据来源：测试</span>')
+    out = validate_stderr(minimal_fill(peers_meta="PE 是估值指标，需结合盈利质量", peers_html=peers_html))
+    assert "缺最优/最差标注" in out and "PE(TTM)" in out
+
+
+def test_risk_register_hides_internal_rule_id_from_readers():
+    fill = v2_fill()
+    fill["score_inputs"]["1D"]["red_flags"]["receivables"] = True
+    fill["risk_items"] = [{"name": "应收恶化", "status": "hit", "evidence": "周转天数连续上升",
+                            "impact": "quality", "home": "1D", "trigger": "周转天数继续上升",
+                            "source": "公司公告", "rule_id": "1D.RED.RECEIVABLES"}]
+    html = R.build_risk_register(fill)
+    assert "4.4 财务健康" in _visible_text(html)
+    assert "1D.RED" not in _visible_text(html)
+    assert 'data-rule-id="1D.RED.RECEIVABLES"' in html
 
 
 def test_v2_red_flags_stay_in_1d_and_two_hits_require_warning():

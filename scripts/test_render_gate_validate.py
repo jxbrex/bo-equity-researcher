@@ -918,6 +918,44 @@ def test_quality_inputs_two_way_copy_checks():
         assert "不一致" in out and "short_cover" in out and "roic_basis" in out
 
 
+def test_quality_inputs_manual_evidence_only_covers_missing_leaf_values():
+    with tempfile.TemporaryDirectory() as d:
+        fill = v2_fill()
+        payload = _quality_payload(fill)
+        payload["1D"]["f_items"]["long_debt_down"] = None
+        fill["score_inputs"]["1D"]["manual_evidence"] = {
+            "f_items.long_debt_down": {"source": "2025 年报资产负债表", "note": "两年长期有息负债逐项对照"}}
+        fill = _prepare_quality_quote(fill, d, payload)
+        out = validate_stderr(fill)
+        assert "quality_inputs.1D.f_items.long_debt_down" not in out
+    with tempfile.TemporaryDirectory() as d:
+        fill = v2_fill()
+        payload = _quality_payload(fill)
+        payload["1D"]["f_items"]["long_debt_down"] = None
+        fill["score_inputs"]["1D"]["manual_evidence"] = {
+            "f_items.long_debt_down": {"source": "2025 年报资产负债表", "note": ""}}
+        fill = _prepare_quality_quote(fill, d, payload)
+        assert "quality_inputs.1D.f_items.long_debt_down" in validate_stderr(fill)
+    with tempfile.TemporaryDirectory() as d:
+        fill = v2_fill()
+        payload = _quality_payload(fill)
+        payload["1D"]["f_items"]["long_debt_down"] = None
+        fill["score_inputs"]["1D"]["manual_evidence"] = {
+            "f_items": {"source": "2025 年报", "note": "父级说明不得放行"}}
+        fill = _prepare_quality_quote(fill, d, payload)
+        assert "quality_inputs.1D.f_items.long_debt_down" in validate_stderr(fill)
+    with tempfile.TemporaryDirectory() as d:
+        fill = v2_fill()
+        payload = _quality_payload(fill)
+        payload["1D"]["liquidity"]["short_cover"] = 4.176949825639379
+        fill["score_inputs"]["1D"]["liquidity"]["short_cover"] = 60
+        fill["score_inputs"]["1D"]["manual_evidence"] = {
+            "liquidity.short_cover": {"source": "估算说明", "note": "不得覆盖机械值"}}
+        fill = _prepare_quality_quote(fill, d, payload)
+        out = validate_stderr(fill)
+        assert "不一致" in out and "short_cover" in out
+
+
 def test_quality_inputs_profile_and_future_dates_are_rejected():
     fill = v2_fill()
     payload = _quality_payload(fill)

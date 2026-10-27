@@ -127,6 +127,53 @@ def test_cash_runway_profile_has_no_generic_f(monkeypatch):
     assert "f_items" not in result["1D"]
 
 
+def test_cash_runway_uses_latest_visible_cash_with_annual_burn(monkeypatch):
+    annual = _rows(2025, "20260320", ocf=-100)
+    quarter = _rows(2026, "20261020", ocf=200)
+    for api, row in quarter.items():
+        if api != "daily_basic":
+            row["end_date"] = "20260930"
+    quarter["balancesheet"]["money_cap"] = 600
+    rows = _bundle(annual, quarter)
+    _install(monkeypatch, rows)
+    profile = {"stock_type": "困境反转", "industry_profile": "turnaround", "growth_tier": None}
+    result = qi.fetch_quality_inputs("600000", None, "2026-10-23", profile)
+    assert result["1D"]["cash_runway_months"] == 72
+    assert result["1F"]["cash_runway_months"] == 72
+
+
+def test_cash_runway_uses_latest_balance_sheet_not_income_period(monkeypatch):
+    annual = _rows(2025, "20260320", ocf=-100)
+    annual["balancesheet"]["money_cap"] = 100
+    latest_income = _rows(2026, "20261020")["income"]
+    latest_income["end_date"] = "20260930"
+    latest_balance = _rows(2026, "20260820")["balancesheet"]
+    latest_balance.update(end_date="20260630", money_cap=600)
+    rows = _bundle(annual, {"income": latest_income, "balancesheet": latest_balance})
+    _install(monkeypatch, rows)
+    profile = {"stock_type": "困境反转", "industry_profile": "turnaround", "growth_tier": None}
+    result = qi.fetch_quality_inputs("600000", None, "2026-10-23", profile)
+    assert result["1D"]["cash_runway_months"] == 72
+    assert result["1F"]["cash_runway_months"] == 72
+
+
+def test_short_term_bond_is_included_in_liquidity_not_long_debt(monkeypatch):
+    annual = _rows(2025, "20260320", profit=100, revenue=1000, assets=1000)
+    quarter = _rows(2026, "20261020", profit=120, revenue=1200, assets=1200)
+    for api, row in quarter.items():
+        if api == "daily_basic":
+            continue
+        row["end_date"] = "20260930"
+        if api == "balancesheet":
+            row.update(st_borr=10, non_cur_liab_due_1y=0, st_bonds_payable=60,
+                       lt_borr=20, bond_payable=0, money_cap=100, total_assets=500)
+    rows = _bundle(annual, quarter)
+    _install(monkeypatch, rows)
+    result = qi.fetch_quality_inputs("600000", None, "2026-10-23", PROFILE)
+    assert result["1D"]["liquidity"]["short_cover"] == 100 / 70
+    assert result["1D"]["liquidity"]["debt_ratio"] == 90 / 500
+
+
 def test_liquidity_and_roic_prefer_latest_visible_quarter(monkeypatch):
     annual = _rows(2025, "20260320", profit=100, revenue=1000, assets=1000)
     quarter = _rows(2026, "20261020", profit=120, revenue=1200, assets=1200)

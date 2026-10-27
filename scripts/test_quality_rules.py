@@ -132,6 +132,13 @@ def test_custom_id_and_reason_enter_rule_steps():
     assert result["rule_steps"][-1]["evidence"] == "公告与数据"
 
 
+def test_pre_cap_preserves_band_clamp_before_evidence_cap():
+    steps = [{"id": "1C.PRESSURE.UNKNOWN", "evidence": "压力测试未知", "delta": 0}]
+    result = qr._finish("1C", (0, 5.9), 5, steps, {"custom": _custom(1)}, cap=5.9)
+    assert result["pre_cap"] == 5.9
+    assert result["final"] == 5.9
+
+
 def test_cash_quality_has_single_effect():
     cash_ok = qr.evaluate_dimension("1D", _financial_spec(hits=8, cash=True), CTX)
     cash_bad = qr.evaluate_dimension("1D", _financial_spec(hits=8, cash=False), CTX)

@@ -868,6 +868,15 @@ def main():
                 evidence_path = os.path.join(
                     os.path.dirname(opts["out"]) or ".",
                     f"_timing_{evidence['code']}_{evidence['date']}.json")
+                try:
+                    with open(evidence_path, encoding="utf-8") as handle:
+                        previous = json.load(handle)
+                except (OSError, json.JSONDecodeError):
+                    previous = {}
+                if previous.get("code") == evidence["code"] and previous.get("date") == evidence["date"]:
+                    for group in ("chips", "capital"):
+                        if isinstance(previous.get(group), dict):
+                            evidence[group].update(previous[group])
                 evidence_tmp = f"{evidence_path}.{os.getpid()}.tmp"
                 with open(evidence_tmp, "w", encoding="utf-8") as handle:
                     json.dump(evidence, handle, ensure_ascii=False, indent=2)

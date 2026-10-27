@@ -41,7 +41,6 @@ def test_timing_facts_evidence_cross_check():
                  "chips": {"average_cost": chip}, "capital": {}}
         fill = minimal_fill(quote={"source_file": quote}, timing_facts=facts)
         assert "timing_facts" not in validate_stderr(fill)
-        assert "技术、筹码与资金事实" in render_fill(fill)
         bad = minimal_fill(quote={"source_file": quote},
                            timing_facts={**facts, "technical": dict(technical, rsi14=60)})
         assert "rsi14" in validate_stderr(bad)
@@ -56,6 +55,8 @@ def test_timing_facts_evidence_cross_check():
         expect_valueerror(bad, "缺失证据文件", kw="timing_facts.source_file")
         no_quote = minimal_fill(timing_facts=facts)
         assert "技术" in validate_stderr(no_quote)
+        # 渲染会归档时机证据，最后执行以免后续校验复用已移动的文件。
+        assert "技术、筹码与资金事实" in render_fill(fill)
 
 
 def test_timing_facts_rejects_invalid_container_types():
@@ -286,6 +287,38 @@ def test_prev_fields_warns():
     out_ok = validate_stderr(full_fill())
     assert "prev.quality 缺失" not in out_ok and "缺关键假设变更表" not in out_ok, \
         "full_fill 锚点齐备、review 有假设表，不应告警"
+
+
+def test_legacy_prev_fields_do_not_invent_independent_valuation():
+    prev = {"date": "2026-08-14", "quality": 4.63, "valuation": None, "timing": 5.17,
+            "quality_version": "legacy-single-track", "target_range": "13-15",
+            "charts": {"gap_plot": False, "fin_trend_panels": 0, "growth_fcst_years": 0,
+                       "pe_history": False},
+            "scenarios": [{"scenario": "基础情景", "归母净利": "95 亿", "PE": "10-12x",
+                           "目标价": "9.5-11.4 元"}]}
+    out = validate_stderr(minimal_fill(
+        prev=prev, review_html=('<table><tr><td>假设变更</td></tr></table>'
+                                  '<span class="source">数据来源：测试</span><span class="rev">修订</span>')))
+    assert "prev.valuation 缺失" not in out
+    assert "prev.timing 缺失" not in out
+
+
+def test_prev_chart_changes_with_same_sentence_reasons_do_not_repeat_warnings():
+    f = full_fill(stock_type="成长型", growth_tier="high")
+    f["prev"]["charts"] = {"growth_fcst_years": 2, "pe_history": True}
+    del f["pe_history"]
+    f["review_html"] += ("<p>利润增长图预测段本版只画 2026E 一年（三情景均为 2026E 口径，"
+                          "避免年度错配）；PE 历史带图本版按高速层规则不再绘制"
+                          "（历史区间锚不住合理带）。</p>")
+    assert "复盘减配" not in validate_stderr(f)
+
+
+def test_prev_chart_note_without_reduction_still_warns():
+    f = full_fill()
+    f["prev"]["charts"] = dict(f["prev"]["charts"], fin_trend_panels=4)
+    f["fin_trend"]["panels"] = f["fin_trend"]["panels"][:3]
+    f["review_html"] += "<p>本版财务趋势图口径沿用上版。</p>"
+    assert "复盘减配" in validate_stderr(f)
 
 
 def test_prev_cross_version_unmarked_warns_by_field():

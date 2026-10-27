@@ -45,7 +45,7 @@ from charts_base import _fmt_px, _prev_track_rows, _SOURCE_BANNED_RE
 from charts_scenario import (
     build_scenario_spectrum, build_scenario_block, build_peers_plot,
 )
-from charts_score import build_score_bars, build_sensitivity_tornado
+from charts_score import build_score_bars, build_sensitivity_tornado, _build_score_detail
 from charts_l1 import _inject_l1_charts
 from charts_cycle import build_pe_band, build_price_history
 from charts_misc import (
@@ -63,7 +63,7 @@ from validate import validate_content
 
 # 渲染器版本：嵌入输出 HTML 尾部注释，事后可 grep 验证报告确由本脚本渲染
 # （防"render 报错后手写全文 HTML 绕行"，巨石 2026-08-23 实证）
-RENDERER_VERSION = "v0.11.1"
+RENDERER_VERSION = "v0.11.2"
 
 # Windows 文件名非法字符：\ / : * ? " < > | 及 ASCII 控制字符（\x00-\x1f）
 _WIN_ILLEGAL = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
@@ -359,9 +359,11 @@ def build_risk_register(fill: dict) -> str:
                 if rule_id in active_ids:
                     raise ValueError(f"{prefix}.rule_id {rule_id} 不得重复登记")
                 active_ids.add(rule_id)
-        reference = home_names[home] + (f" / {rule_id}" if impact == "quality" and status == "hit" else "")
+        reference = home_names[home]
+        rule_attr = (f' data-rule-id="{_esc(rule_id)}"'
+                     if impact == "quality" and status == "hit" and rule_id else "")
         rows.append(
-            f'<tr><td>{_esc(item["name"].strip())}</td>'
+            f'<tr{rule_attr}><td>{_esc(item["name"].strip())}</td>'
             f'<td>{_esc(item["evidence"].strip())}<br><span class="source">来源：{_esc(item["source"].strip())}</span></td>'
             f'<td>{impact_names[impact]}｜{status_names[status]}</td>'
             f'<td>{_esc(reference)}</td><td>{_esc(item["trigger"].strip())}</td></tr>')
@@ -380,7 +382,7 @@ def build_risk_register(fill: dict) -> str:
     return html
 
 
-def _inject_dimension_scores(frag: str, dimension_results: dict) -> str:
+def _inject_dimension_scores(frag: str, dimension_results: dict, score_inputs: dict) -> str:
     for key, result in dimension_results.items():
         marker = f'data-dim="{key}"'
         if marker not in frag:
@@ -394,16 +396,7 @@ def _inject_dimension_scores(frag: str, dimension_results: dict) -> str:
             raise ValueError(f"v2 维度 {key} 缺少 SCORE_BADGE 或 SCORE_DETAIL 占位符")
         score = result["final"]
         badge = f'<span class="badge {badge_class(score)}">{score:.2f}</span>'
-        items = []
-        for step in result.get("rule_steps", []):
-            delta = step.get("delta")
-            delta_text = f"{float(delta):+g}" if delta is not None else "0"
-            items.append(f'<li><code>{_esc(str(step.get("id")))}</code>：'
-                         f'{_esc(str(step.get("evidence", "")))}（{delta_text}）</li>')
-        cap = result.get("cap")
-        cap_text = f'，上限 {cap:g}' if cap is not None else ""
-        detail = (f'<details class="score-detail"><summary>得分链：基础 {result.get("base"):g}'
-                  f'{cap_text}，最终 {score:.2f}</summary><ul>{"".join(items)}</ul></details>')
+        detail = _build_score_detail(key, result, score_inputs.get(key) or {})
         block = block.replace("<!--SCORE_BADGE-->", badge)
         block = block.replace("<!--SCORE_DETAIL-->", detail)
         frag = frag[:start] + block + frag[end:]
@@ -471,8 +464,8 @@ def _build_repl_map(ctx: "RenderContext") -> dict:
     l4_html = fill.get("l4_html", "")
     if sc.get("quality_version") == 2:
         l4_html = l4_html.replace("<!--RISK_REGISTER-->", build_risk_register(fill))
-        l1_html = _inject_dimension_scores(l1_html, sc["dimension_results"])
-        l3_html = _inject_dimension_scores(l3_html, sc["dimension_results"])
+        l1_html = _inject_dimension_scores(l1_html, sc["dimension_results"], sc["score_inputs"])
+        l3_html = _inject_dimension_scores(l3_html, sc["dimension_results"], sc["score_inputs"])
         missing = [key for key in sc["dimension_results"] if f'data-dim="{key}"' not in l1_html + l3_html]
         if missing:
             raise ValueError(f"v2 缺少维度锚点 data-dim: {missing}")
@@ -566,7 +559,7 @@ def _build_repl_map(ctx: "RenderContext") -> dict:
         "VALUATION_PROCESS_HTML": build_valuation_process_card(calc, valuation_calc,
                                                                fill.get("valuation_inputs") or {})
                                   + build_regime_note(fill),
-        "POSITION_CARD_HTML": build_timing_facts(fill, calc)
+        "POSITION_CARD_HTML": build_timing_facts(fill)
                               + build_position_card(quality, valuation, timing, calc, red_flag,
                                                     floor_uplift=valuation_calc.get("floor_uplift"),
                                                     critical=sc.get("critical_weaknesses")),
@@ -584,7 +577,6 @@ def _build_repl_map(ctx: "RenderContext") -> dict:
         "QUALITY_SCORE": f"{quality:.2f}",
         "QUALITY_WORD": _quality_verdict(quality),
         "QUALITY_VERSION": str(sc.get("quality_version", 1)),
-        "SHOW_QUALITY_V": sc.get("quality_version") == 2,
         # 估值分（独立价格轨；徽章四档：≥8 绿 / 6-7.9 蓝 / 4-5.9 橙 / <4 红）
         "VALUATION_SCORE": f"{valuation:.1f}",
         "VALUATION_WORD": _valuation_verdict(valuation),
@@ -767,6 +759,13 @@ def _archive_artifacts(fill: dict, fill_path: str, out_path: str, date: str,
                 print(f"⚠️ 归档文件已存在，将被覆盖: {dst}", file=sys.stderr)
             os.replace(qsf, dst)
             moved.append(os.path.basename(dst))
+        tsf = (fill.get("timing_facts") or {}).get("source_file") or ""
+        if os.path.basename(tsf).startswith("_timing_") and os.path.exists(tsf):
+            dst = os.path.join(arch_dir, f"timing_{code_s}_{date_s}.json")
+            if os.path.exists(dst):
+                print(f"⚠️ 归档文件已存在，将被覆盖: {dst}", file=sys.stderr)
+            os.replace(tsf, dst)
+            moved.append(os.path.basename(dst))
         row = {
             "date": date, "company": fill.get("company"), "code": fill.get("code"),
             "html": os.path.basename(out_path), "quality": quality, "valuation": valuation,
@@ -845,8 +844,8 @@ def _preflight(fill_path: str):
         missing = [key for key in sc["dimension_results"] if f'data-dim="{key}"' not in dimension_html]
         if missing:
             raise ValueError(f"v2 缺少维度锚点 data-dim: {missing}")
-        _inject_dimension_scores(fill.get("l1_html", ""), sc["dimension_results"])
-        _inject_dimension_scores(fill.get("l3_html", ""), sc["dimension_results"])
+        _inject_dimension_scores(fill.get("l1_html", ""), sc["dimension_results"], sc["score_inputs"])
+        _inject_dimension_scores(fill.get("l3_html", ""), sc["dimension_results"], sc["score_inputs"])
     else:
         audit_warnings = validate_content(fill, calc)
         sc = compute_scores(fill)

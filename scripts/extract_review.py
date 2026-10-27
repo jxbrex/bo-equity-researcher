@@ -92,9 +92,18 @@ def extract(path: str) -> dict:
         m = re.search(r'hero-track %s\b[^>]*>.*?s-value[^>]*>([\d.]+)<' % cls, html, re.S)
         return float(m.group(1)) if m else None
 
+    version = detect_quality_version(html, path)
     quality, valuation = _hero_score("quality"), _hero_score("valuation")
     m = re.search(r'hero-timing-mini">时机分 <span class="tv">([\d.]+)<', html)
     timing = float(m.group(1)) if m else None
+    if version == "legacy-single-track":
+        if quality is None:
+            old = re.search(r'hero-score\s+research\b[^>]*>.*?s-value[^>]*>([\d.]+)<', html, re.S)
+            quality = float(old.group(1)) if old else None
+        valuation = None
+        if timing is None:
+            old = re.search(r'hero-score\s+timing\b[^>]*>.*?s-value[^>]*>([\d.]+)<', html, re.S)
+            timing = float(old.group(1)) if old else None
     # 目标价区间 / 现价（hero-data-strip）
     target_range = price = None
     for dm in re.finditer(r'<div class="d-item">(.*?)</div>\s*</div>', html, re.S):
@@ -108,8 +117,7 @@ def extract(path: str) -> dict:
         elif "股价" in lab:
             price = _num(val)
     out["prev"] = {"date": out.get("date"), "quality": quality, "valuation": valuation,
-                   "timing": timing, "target_range": target_range,
-                   "quality_version": detect_quality_version(html, path)}
+                   "timing": timing, "target_range": target_range, "quality_version": version}
     out["price"] = price
 
     secs = _sections(html)
@@ -129,7 +137,8 @@ def extract(path: str) -> dict:
                         scen[i][row[0]] = cell
             out["scenarios"] = scen
             break
-        break
+        if out.get("scenarios"):
+            break
     # 跟踪仪表盘 / 复盘章节表格
     for title, blk in secs.items():
         if "跟踪仪表盘" in title:
@@ -229,6 +238,8 @@ def parse_report_name(path: str):
 
 
 def detect_quality_version(html: str, path: str):
+    if re.search(r'hero-score\s+research\b', html or ""):
+        return "legacy-single-track"
     info = parse_report_name(path)
     if info and info["valuation"] is None:
         return "legacy-single-track"

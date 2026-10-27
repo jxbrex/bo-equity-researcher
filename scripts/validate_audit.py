@@ -934,12 +934,19 @@ def _check_quality_inputs(fill: dict, warns: list) -> None:
               "1F": ("roic", "wacc", "incremental_roic", "roic_period_months",
                      "roic_basis", "cash_runway_months")}
 
-    def _compare(path, fill_value, ref_value):
+    def _compare(dim, path, fill_value, ref_value):
         if fill_value is None and ref_value is not None:
             warns.append(f"quality_inputs.{path} 漏抄（落盘 {ref_value!r}）")
         elif fill_value is not None and ref_value is None:
-            warns.append(f"quality_inputs.{path} 落盘缺失/未取到，但 fill 已有 {fill_value!r}："
-                         "请补替代来源与证据，不得冒充机械照抄")
+            evidence_map = (score_inputs.get(dim) or {}).get("manual_evidence") or {}
+            relative_path = path.split(".", 1)[1]
+            evidence = evidence_map.get(relative_path) if isinstance(evidence_map, dict) else None
+            documented = (isinstance(evidence, dict)
+                          and bool(str(evidence.get("source") or "").strip())
+                          and bool(str(evidence.get("note") or "").strip()))
+            if not documented:
+                warns.append(f"quality_inputs.{path} 落盘缺失/未取到，但 fill 已有 {fill_value!r}："
+                             "请补替代来源与证据，不得冒充机械照抄")
         elif fill_value is not None and fill_value != ref_value:
             warns.append(f"quality_inputs.{path} 与落盘不一致：fill={fill_value!r} vs 落盘={ref_value!r}")
 
@@ -949,6 +956,6 @@ def _check_quality_inputs(fill: dict, warns: list) -> None:
             rv = (package.get(dim) or {}).get(key)
             if isinstance(fv, dict) or isinstance(rv, dict):
                 for child in sorted(set((fv or {}).keys()) | set((rv or {}).keys())):
-                    _compare(f"{dim}.{key}.{child}", (fv or {}).get(child), (rv or {}).get(child))
+                    _compare(dim, f"{dim}.{key}.{child}", (fv or {}).get(child), (rv or {}).get(child))
             else:
-                _compare(f"{dim}.{key}", fv, rv)
+                _compare(dim, f"{dim}.{key}", fv, rv)

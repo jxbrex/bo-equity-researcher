@@ -29,6 +29,10 @@ python "<技能目录>\scripts\em_fetch.py" 600989 --quality-v2 --stock-type=成
 报告日前最新可见报告期；短债覆盖 <1 且该比率 >2 才触发流动性上调一档。
 `roic_basis=normalized` 时，`roic_normalized_components` 必须保留三个完整年度值且与 ROIC
 中位数一致；`latest` 必须显式给 3/6/9/12 个月，缺组成、期间或不一致均不得评分。
+机械落盘缺失但已由公告/年报人工核实的字段，在该维 `score_inputs[dim].manual_evidence`
+按叶级路径登记 `source+note`（如 `f_items.long_debt_down`）；只解释“落盘缺失”，不得覆盖
+已有冲突值，父级打包说明无效。现金跑道使用报告日前最新可见货币资金÷最近完整年度经营
+现金净流出；`st_bonds_payable` 有值时计入短债，其他流动负债不得全包成有息债务。
 
 **妙想 MCP 直调补充**（如 `mcp__mx-ds-mcp-stdio__mx_*` 在工具列表且未明确额度耗尽，脚本盲区/增强项；**MCP 缺席或返回明确积分/额度耗尽提示时，改用 Skill 工具调 `mx-data` skill**，同一东财妙想 API、独立额度，下列定量查询等价适用）：
 - **筹码分布（筹码面）**：tushare `cyq_*` 无权限 → `mx_ashare_finance_data`。获利比例/平均成本逐项单独查询并注明日期；获利比例可能返回为「盈利比率」，不得把股东户数当替代字段。90%成本区间与集中度若未返回则标缺失，不编造。
@@ -72,7 +76,11 @@ E6 主营构成（含**毛利额与毛利占比**，回填 `segments` 图字段�
 - **目标公司 E1 一律主会话自跑**，并加 `--out=_em_[代码]_quote.json` 落盘（fill 的
   `quote.source_file` 引用它，渲染器比对防伪）；子代理只处理 peers 部分。
   落盘文件在渲染成功后由 render 自动归档至报告目录 `_archive/`（v4.10 起），
-  提前移动/删除 = 防伪链断裂拒渲染。
+  `timing_facts.source_file` 同步归档为 `timing_{code}_{date}.json`，同日重取保留人工补齐的
+  chips/capital；该保留只读当前根目录的旧时机文件，归档后须先从 `_archive` 恢复再重取，
+  不会自动继承归档中的人工补齐。提前移动/删除 = 防伪链断裂拒渲染。A 股东财降级或港股无逐机构明细时，
+  可核验的调研明细先放 `_archive/_street_{code}_{date}.json` 再填 `gap_plot.source_file`，
+  不得用无出处数字代替。stdout/stderr 重试日志不得留在报告根目录，可再生日志交付后删除。
 - **禁止指示子代理删除输出文件**；临时文件由主会话确认回传完整后再清理。
 - **回传截断 / 输出文件不存在 / 任一本体数据缺失 → 必须重跑 em_fetch**；禁止凭记忆、
   估算或旧报告数值补任何行情类数字（think 里出现「输出被截断」字样而未重跑 = 违规）。
@@ -185,10 +193,11 @@ E5 已给出一致 EPS 和目标价（档位B）。若要升级档位A（具体�
 
 找到具体假设必须记录来源（券商名+日期）；找不到就停在档位B，禁止编造。
 
-**港股落盘小门（v5.5.1）**：港股 E5 无逐机构明细行（tushare 不覆盖），step 1.2 调研拿到的
-逐家预测要进 gap_plot 图时，先把结果落盘 `_street_{code}_{date}.json`（机构/数值/日期/来源
-四要素），fill 的 `gap_plot.source_file` 指向它、street 照抄其数值——禁直接手填（契约与
-校验细节见 fill-schema.md `gap_plot` 行）。
+**逐机构调研落盘小门（港股及 A 股东财降级）**：E5 无逐机构明细行时（tushare 不覆盖港股，
+或 A 股降级为东财汇总），step 1.2 调研拿到的逐家预测要进 gap_plot 图，先把结果直接落盘
+`_archive/_street_{code}_{date}.json`（机构/数值/日期/来源四要素），fill 的
+`gap_plot.source_file` 指向它、street 照抄其数值——禁直接手填（契约与校验细节见
+fill-schema.md `gap_plot` 行）。
 
 ## Step 1.3：委派子代理（条件强制，委派边界一条规则）
 

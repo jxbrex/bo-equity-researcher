@@ -21,37 +21,88 @@ from conftest import (
 )
 
 
-def test_timing_facts_card_has_sources_and_valuation_context():
+def test_timing_facts_cards_group_metrics_sources_and_context():
     import charts_misc as charts
 
     fill = minimal_fill(timing_facts={
         "source_file": "_timing_600000_2026-08-27.json",
-        "technical": {"rsi14": 55.5, "atr14_pct": 2.4,
+        "technical": {"rsi14": 55.5, "atr14_pct": 2.4, "as_of": "20260826", "sample_days": 281,
                       "macd": {"dif": 0.2, "dea": 0.1, "hist": 0.2},
                       "volume_ratio_20": 1.3, "ma60_slope_20d_pct": 2.5,
                       "ma120_slope_20d_pct": None, "position_52w_pct": 70.0},
         "consensus_levels": {"window_years": 3, "close_high": 15, "close_low": 8,
                              "intraday_high": 16, "intraday_low": 7, "months": 36},
         "chips": {"average_cost": {"value": 11.2, "unit": "元", "date": "2026-08-27",
-                                      "source": "妙想", "query": "平均成本 <script>"}},
+                                      "source": "妙想 <script>", "query": "平均成本 <script>"}},
         "capital": {"main_net_inflow": None,
                     "margin": {"value": 36.33, "unit": "亿元", "date": "2026-08-27",
                                "source": "东方财富妙想", "query": "融资与融券余额",
                                "note": "融资余额36.33亿元；融券余额492.7万元"}},
     })
-    html = charts.build_timing_facts(fill, R.compute_valuation(fill))
-    for text in ("技术、筹码与资金事实", "RSI14", "55.5", "ATR14%", "MACD",
-                 "20 日量比", "MA120 斜率", "数据不足", "近 3 年月末收盘高低",
-                 "近 3 年盘中高低", "平均成本", "11.2元", "主力净流入",
-                 "悲观 6.40-8.00 / 基础 10-12 / 乐观 14-17", "只作事实，不进入评分或仓位",
-                 "技术与历史区间：Tushare 日线/月线，东方财富兜底"):
+    fill["timing_facts"]["capital"]["southbound"] = {
+        "value": 5.4, "unit": "%", "date": "2026-08-27", "source": "东方财富", "query": "北向持股"}
+    html = charts.build_timing_facts(fill)
+    assert html.count('<article class="timing-fact-card"') == 3
+    for group in ("technical", "chips", "capital"):
+        assert f'data-group="{group}"' in html
+    for text in ("技术、筹码与资金事实", "RSI14", "55.5", "ATR14%", "MACD", "20 日量比",
+                 "近 3 年价格区间", "月末收盘", "平均成本", "11.2元", "北向/陆股通持股",
+                 "只作事实，不进入评分或仓位", "公开日线行情", "公开月线行情"):
         assert text in html, text
-    repeating = minimal_fill()
-    repeating["valuation"]["shares"] = 73.33
-    assert "13.6364" not in charts.build_timing_facts(repeating, R.compute_valuation(repeating))
+    assert html.count('role="img"') >= 3 and "70%" in html
     assert "融券余额492.7万元" in html
-    assert "平均成本 &lt;script&gt;" in html and "平均成本 <script>" not in html
+    assert "妙想 &lt;script&gt;" in html and "妙想 <script>" not in html
+    for forbidden in ("<table", "估值三情景对照", "悲观 6.40-8.00", "原查询",
+                      "_timing_600000", "平均成本 <script>", "南向持股"):
+        assert forbidden not in html, forbidden
+    assert 'href="#s8"' in html
     assert charts.build_timing_facts(minimal_fill()) == ""
+    hk = minimal_fill(code="01810", timing_facts=fill["timing_facts"])
+    hk_html = charts.build_timing_facts(hk)
+    assert "南向持股" in hk_html and "北向/陆股通持股" not in hk_html
+
+
+def test_timing_facts_missing_values_are_grouped_without_fake_scales():
+    import charts_misc as charts
+
+    fill = minimal_fill(timing_facts={
+        "technical": {"rsi14": None, "atr14_pct": 2.4, "macd": {"dif": 0.2, "dea": 0.1, "hist": 0.2},
+                      "volume_ratio_20": 1.3, "ma60_slope_20d_pct": 2.5,
+                      "ma120_slope_20d_pct": None, "position_52w_pct": None},
+        "chips": {"profit_ratio": None}, "capital": {"main_net_inflow": None},
+    })
+    html = charts.build_timing_facts(fill)
+    assert "未获取：" in html and "RSI14" in html and "52 周价格位置" in html
+    assert html.count("RSI14") == 1 and html.count("MA120 斜率") == 1
+    assert "left:0%" not in html and "数据不足" not in html
+    assert html.count("未获取") == 3, "每组只在缺省汇总出现一次，不在指标行重复"
+    assert html.count('<article class="timing-fact-card"') == 3
+
+
+def test_timing_facts_missing_intraday_does_not_relabel_close_prices():
+    import charts_misc as charts
+
+    fill = minimal_fill(timing_facts={"consensus_levels": {
+        "window_years": 3, "close_high": 15, "close_low": 8,
+        "intraday_high": None, "intraday_low": None, "months": 36,
+    }})
+    html = charts.build_timing_facts(fill)
+    assert "盘中低 8" not in html and "盘中高 15" not in html
+    assert "未获取：盘中区间" in html
+    assert "月末收盘 8–15" in html
+
+
+def test_timing_facts_escapes_period_labels():
+    import charts_misc as charts
+
+    fill = minimal_fill(timing_facts={"consensus_levels": {
+        "window_years": "<svg onload=alert(1)>", "close_high": 15, "close_low": 8,
+        "intraday_high": 16, "intraday_low": 7, "months": "<img onerror=alert(1)>",
+    }})
+    html = charts.build_timing_facts(fill)
+    assert "<svg onload" not in html and "<img onerror" not in html
+    assert "&lt;svg onload=alert(1)&gt;" in html
+    assert "&lt;img onerror=alert(1)&gt;" in html
 
 
 def test_nice_ticks():

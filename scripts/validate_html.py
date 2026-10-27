@@ -157,7 +157,11 @@ def _check_peers_plot_target(fill: dict, warns: list) -> None:
                          and _num(p.get("roe")) is not None and _num(p.get("roe")) > 0]
             if troe is not None and troe > 0 and len(peers_roe) >= 2:
                 p_lo, p_hi = min(peers_roe), max(peers_roe)
-                if troe < p_lo / 2 or troe > p_hi * 2:
+                meta = str(fill.get("peers_meta") or "")
+                explained = ("目标" in meta and "ROE" in meta
+                             and any(word in meta for word in ("一次性", "非经常性", "扣非"))
+                             and any(word in meta for word in ("年报", "TTM", "加权", "静态", "经调整")))
+                if (troe < p_lo / 2 or troe > p_hi * 2) and not explained:
                     warns.append(f"peers_plot 目标公司 ROE（{troe:g}%）脱离同业量级（同业 {p_lo:g}-{p_hi:g}%）"
                                  f"——ROE 口径疑似不一（年报/加权/TTM、不同年份）或取数错误，请核对")
 
@@ -657,8 +661,17 @@ def _check_peers_bestworst(fill: dict, warns: list) -> None:
                for ci in sorted(numeric - marked) if ci > 0]
     # 审计 P1-9：方向性无意义列（如市值）在 peers_meta 注明后抑制对应列告警
     #（fill-schema 承诺「注明即可」的实现侧——此前文档写了、实现没做，每份规范报告会稳定误报市值列）
-    meta = fill.get("peers_meta") or ""
-    missing = [c for c in missing if c and c not in meta]
+    meta = _plain_text(fill.get("peers_meta") or "")
+    waivers = ("无方向", "不标方向", "不标最优", "不标最差", "不判断优劣", "不评优劣",
+               "事实列", "仅列示", "仅参考")
+    sentences = re.split(r"[。；;]", meta)
+
+    def waived(column):
+        key = _peers_col_key(column)
+        return any(key and key in _peers_col_key(sentence)
+                   and any(word in sentence for word in waivers) for sentence in sentences)
+
+    missing = [c for c in missing if not waived(c)]
     if missing:
         warns.append(f"peers_html 当前指标表数值列缺最优/最差标注：{'、'.join(missing)}"
                      f"——每列按方向性至少标一格（低为优：PE/PB/负债率；高为优：ROE/增速等）；"

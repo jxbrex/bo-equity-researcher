@@ -53,6 +53,20 @@ G_ITEM_IDS = {
     "NO_DILUTION": "no_dilution", "GROSS_MARGIN": "gross_margin_improving",
     "ASSET_TURNOVER": "asset_turnover_improving",
 }
+RULE_LABELS = {
+    "1D.F.HITS": "九项财务检查", "1D.LIQUIDITY": "绝对流动性",
+    "1D.GROSS_MARGIN_PEER.UNKNOWN": "同业毛利率对照",
+    "1D.RED.RECEIVABLES": "应收恶化", "1D.RED.INVENTORY": "存货恶化",
+    "1D.RED.GROSS_MARGIN_ANOMALY": "毛利率异常",
+    "1D.G.ROA": "ROA", "1D.G.CASH_ROA": "现金 ROA", "1D.G.ACCRUAL": "应计质量",
+    "1D.G.LEVERAGE": "财务杠杆", "1D.G.LIQUIDITY": "流动性",
+    "1D.G.NO_DILUTION": "股本变化", "1D.G.GROSS_MARGIN": "毛利率",
+    "1D.G.ASSET_TURNOVER": "资产周转", "1D.G.RD_INTENSITY_EVIDENCE": "研发强度证据",
+    "1D.G.CAPEX_INTENSITY_EVIDENCE": "资本开支强度证据",
+    "1D.CASH_RUNWAY": "现金跑道", "1F.CASH_RUNWAY": "现金跑道",
+    "1E.PLEDGE": "质押", "1E.REDUCTION": "减持", "1E.SUCCESSION": "继任风险",
+    "1E.PENALTIES": "监管处罚", "1F.INCREMENTAL_ROIC": "增量 ROIC",
+}
 GENERIC_RED_FLAGS = {"receivables", "inventory", "gross_margin_anomaly"}
 PROFILE_FLAGS = {
     "generic": GENERIC_RED_FLAGS,
@@ -145,7 +159,8 @@ def _finish(key, band, base, steps, spec, cap=None, status="ok"):
     else:
         current_band = "CUSTOM"
         lo, hi = band
-    final = min(hi, max(lo, pre + points))
+    pre_cap = min(hi, max(lo, pre + points))
+    final = pre_cap
     if cap is not None:
         final = min(final, cap)
     if band in BAND_BASE:
@@ -160,7 +175,8 @@ def _finish(key, band, base, steps, spec, cap=None, status="ok"):
                           "reason": custom.get("reason", ""), "delta": points})
     return {"key": key, "status": status, "band": current_band if band in BAND_BASE else "CUSTOM",
             "base": round(base, 2), "rule_steps": steps, "custom": custom or None,
-            "cap": cap, "final": round(final, 2), "critical": key in CRITICAL_KEYS and final < 4}
+            "pre_cap": round(pre_cap, 2), "cap": cap, "final": round(final, 2),
+            "critical": key in CRITICAL_KEYS and final < 4}
 
 
 def _required(mapping, keys, key):

@@ -410,7 +410,7 @@ def compute_valuation_score(calc: dict, inputs: dict, gap_tier=None):
     }
 
 
-from quality_rules import evaluate_dimensions, DIM_KEYS, CRITICAL_KEYS, RULE_REGISTRY
+from quality_rules import evaluate_dimensions, DIM_KEYS, CRITICAL_KEYS, RULE_REGISTRY, RULE_LABELS
 
 
 def _quality_version(fill):
@@ -495,7 +495,8 @@ def _compute_scores_v2(fill):
     red_deductions = []
     for step in dimension_results["1D"]["rule_steps"]:
         if step["id"].startswith("1D.RED.") and (step.get("delta") or 0) < 0:
-            red_deductions.append({"item": step.get("evidence", ""), "points": -float(step["delta"])})
+            red_deductions.append({"item": RULE_LABELS.get(step["id"], step.get("evidence", "")),
+                                   "points": -float(step["delta"])})
     financial_red_flags = list(red_deductions)
     profile = context.get("industry_profile") or "generic"
     for name, hit in (score_inputs["1D"].get("industry_checks") or {}).items():

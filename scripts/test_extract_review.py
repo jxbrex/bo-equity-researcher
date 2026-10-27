@@ -307,6 +307,38 @@ def test_extract_quality_versions_and_legacy_single_track():
     assert legacy["prev"]["quality"] is None
 
 
+def test_extract_legacy_dual_track_and_scenarios_after_other_valuation_section():
+    html = '''<h1>南京工艺（600889）</h1><span class="topbar-tag active">2026-08-14</span>
+    <div class="hero-score research"><div class="s-value">4.63</div></div>
+    <div class="hero-score timing"><div class="s-value score-mid">5.17</div></div>
+    <div class="d-item"><div class="d-label">目标价区间（12个月）</div><div class="d-value">13-15<span class="unit"> 元</span></div></div>
+    <div class="section"><span class="section-title">估值水平（30%）</span></div>
+    <div class="section"><span class="section-title">估值三情景</span><table>
+      <tr><th>指标</th><th>悲观情景</th><th>基础情景</th><th>乐观情景</th></tr>
+      <tr><td>归母净利</td><td>1 亿</td><td>2 亿</td><td>2 亿</td></tr>
+      <tr><td>PE</td><td>28-32x</td><td>45-51x</td><td>55-61x</td></tr>
+      <tr><td>目标价</td><td>6-7 元</td><td>13-15 元</td><td>22-24 元</td></tr>
+    </table></div><div class="disclaimer"></div></body></html>'''
+    with tempfile.TemporaryDirectory() as d:
+        out = E.extract(_write(d, "南京工艺-600889-4.63-5.17-2026-08-14.html", html))
+    prev = out["prev"]
+    assert prev["quality"] == 4.63 and prev["timing"] == 5.17
+    assert prev["valuation"] is None and prev["quality_version"] == "legacy-single-track"
+    assert [row["归母净利"] for row in out["scenarios"]] == ["1 亿", "2 亿", "2 亿"]
+    assert [row["PE"] for row in out["scenarios"]] == ["28-32x", "45-51x", "55-61x"]
+
+
+def test_extract_stops_after_first_actual_scenario_table():
+    html = '''<div class="section"><span class="section-title">估值三情景</span><table>
+      <tr><th>指标</th><th>基础情景</th></tr><tr><td>归母净利</td><td>2 亿</td></tr>
+      </table></div><div class="section"><span class="section-title">估值附注</span><table>
+      <tr><th>指标</th><th>旧情景</th></tr><tr><td>归母净利</td><td>999 亿</td></tr>
+      </table></div><div class="disclaimer"></div>'''
+    with tempfile.TemporaryDirectory() as d:
+        out = E.extract(_write(d, "测试股份-600000-7.50-6.5-2026-08-08.html", html))
+    assert out["scenarios"] == [{"scenario": "基础情景", "归母净利": "2 亿"}]
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

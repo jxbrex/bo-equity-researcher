@@ -125,14 +125,21 @@ def test_archive_after_render():
     非 _fill_ 命名的 fill（fixture/存量文件）不动；归档在渲染成功之后（防伪链不断）。"""
     with tempfile.TemporaryDirectory() as d:
         quote_path = write_fill({"price": 10, "pe_ttm": 11}, d, name="_em_600000_quote.json")
-        fill = minimal_fill(quote={"source_file": quote_path, "date": "2026-08-27"})
+        chip = {"value": 11.2, "unit": "元", "date": "2026-08-27", "source": "东方财富", "query": "平均成本"}
+        timing_path = write_fill({"code": "600000", "date": "2026-08-27",
+                                  "chips": {"average_cost": chip}, "capital": {}},
+                                 d, name="_timing_600000_2026-08-27.json")
+        fill = minimal_fill(quote={"source_file": quote_path, "date": "2026-08-27"},
+                            timing_facts={"source_file": timing_path, "chips": {"average_cost": chip}})
         p = write_fill(fill, d)
         R.render(p, out_path=os.path.join(d, "out.html"))
         arch = os.path.join(d, "_archive")
         assert not os.path.exists(p), "fill 应被移走"
         assert not os.path.exists(quote_path), "quote 落盘应被移走"
+        assert not os.path.exists(timing_path), "时机证据应被移走"
         assert os.path.exists(os.path.join(arch, "fill_测试股份_600000_2026-08-27.json")), "fill 归档命名"
         assert os.path.exists(os.path.join(arch, "em_600000_quote_2026-08-27.json")), "quote 归档命名"
+        assert os.path.exists(os.path.join(arch, "timing_600000_2026-08-27.json")), "时机证据归档命名"
         row = json.loads(open(os.path.join(arch, "_index.jsonl"), encoding="utf-8").read().strip())
         assert row["company"] == "测试股份" and row["code"] == "600000", "索引行公司/代码"
         assert row["html"] == "out.html" and row["renderer"] == R.RENDERER_VERSION, "索引行 html/渲染器版本"

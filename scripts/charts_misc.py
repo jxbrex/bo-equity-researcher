@@ -111,77 +111,126 @@ def build_growth_plot(fill: dict) -> str:
     return "".join(parts)
 
 
-def build_timing_facts(fill: dict, calc: dict = None) -> str:
-    """技术、筹码、资金事实表；只展示证据，不产生评分或仓位。"""
+def build_timing_facts(fill: dict) -> str:
+    """技术、筹码、资金三组事实卡；只展示证据，不产生评分或仓位。"""
     facts = fill.get("timing_facts")
     if not facts:
         return ""
-    rows = []
-
-    def add(label, value, note):
-        rows.append(f'<tr><th scope="row">{_esc(label)}</th><td>{_esc(value)}</td>'
-                    f'<td>{_esc(note)}</td></tr>')
 
     def number(value, suffix=""):
-        return "数据不足" if value is None else f"{_fmt(value)}{suffix}"
+        return "未获取" if value is None else f"{_fmt(value)}{suffix}"
+
+    def metric(label, value, note=""):
+        detail = f'<small>{_esc(note)}</small>' if note else ""
+        return (f'<div class="fact-metric"><span>{_esc(label)}</span>'
+                f'<strong>{_esc(value)}</strong>{detail}</div>')
+
+    def scale(label, value):
+        if value is None:
+            return ""
+        position = max(0, min(100, float(value)))
+        shown = number(value, "%")
+        return (f'<div class="fact-scale-block"><div class="fact-metric"><span>{_esc(label)}</span>'
+                f'<strong>{shown}</strong></div><div class="fact-scale" role="img" '
+                f'aria-label="{_esc(f"{label} {shown}，0% 为区间低点、100% 为区间高点")}">'
+                f'<span style="left:{position:.2f}%"></span></div></div>')
+
+    def record(label, item):
+        if not item or item.get("value") is None:
+            return ""
+        value = number(item.get("value"), item.get("unit", ""))
+        meta = f"{item.get('date', '日期未注明')} · {item.get('source', '来源未注明')}"
+        note = f'<p>{_esc(item["note"])}</p>' if item.get("note") else ""
+        return (f'<div class="fact-record"><div class="fact-metric"><span>{_esc(label)}</span>'
+                f'<strong>{_esc(value)}</strong></div><small>{_esc(meta)}</small>{note}</div>')
+
+    def missing(labels):
+        return f'<p class="fact-missing">未获取：{_esc("、".join(labels))}</p>' if labels else ""
 
     tech = facts.get("technical") or {}
-    for key, label, suffix in (("rsi14", "RSI14", ""),
-                               ("atr14_pct", "ATR14%", "%"),
-                               ("volume_ratio_20", "20 日量比", "×"),
-                               ("ma60_slope_20d_pct", "MA60 的 20 日斜率", "%"),
-                               ("ma120_slope_20d_pct", "MA120 斜率（20 日）", "%"),
-                               ("position_52w_pct", "52 周价格位置", "%")):
-        add(label, number(tech.get(key), suffix), "同源日线；只作事实，不作涨跌预测")
+    tech_missing = [label for key, label in (("rsi14", "RSI14"), ("atr14_pct", "ATR14%"),
+                    ("volume_ratio_20", "20 日量比"), ("ma60_slope_20d_pct", "MA60 的 20 日斜率"),
+                    ("ma120_slope_20d_pct", "MA120 斜率（20 日）"),
+                    ("position_52w_pct", "52 周价格位置")) if tech.get(key) is None]
     macd = tech.get("macd") or {}
-    macd_text = "数据不足" if any(macd.get(key) is None for key in ("dif", "dea", "hist")) else (
-        f"DIF {_fmt(macd['dif'])} / DEA {_fmt(macd['dea'])} / 柱 {_fmt(macd['hist'])}")
-    add("MACD（12,26,9，柱×2）", macd_text, "同源日线；指数移动平均")
-
-    levels = facts.get("consensus_levels")
-    if levels:
-        years = levels.get("window_years", 3)
-        add(f"近 {years} 年月末收盘高低",
-            f"{_fmt(levels.get('close_high'))} / {_fmt(levels.get('close_low'))}",
-            f"{levels.get('months', '—')} 个月；与盘中高低不同口径")
-        add(f"近 {years} 年盘中高低",
-            f"{_fmt(levels.get('intraday_high'))} / {_fmt(levels.get('intraday_low'))}"
-            if levels.get("intraday_high") is not None else "数据不足",
-            f"OHLC 完整月数 {levels.get('ohlc_months', 0)}；不是券商目标价")
+    if any(macd.get(key) is None for key in ("dif", "dea", "hist")):
+        tech_missing.append("MACD")
+        macd_text = "未获取"
     else:
-        add("近 3 年价格区间", "数据不足", "月线缺失；不手工补高低点")
+        macd_text = f"DIF {_fmt(macd['dif'])} / DEA {_fmt(macd['dea'])} / 柱 {_fmt(macd['hist'])}"
+    as_of = str(tech.get("as_of") or "")
+    as_of = f"{as_of[:4]}-{as_of[4:6]}-{as_of[6:8]}" if len(as_of) == 8 else as_of
+    tech_source = "；".join(x for x in (f"截至 {as_of}" if as_of else "",
+                                      f"{tech.get('sample_days')} 个样本" if tech.get("sample_days") else ""))
+    technical = scale("RSI14", tech.get("rsi14")) + scale("52 周价格位置", tech.get("position_52w_pct"))
+    for key, label, suffix in (("ma60_slope_20d_pct", "MA60 的 20 日斜率", "%"),
+                               ("ma120_slope_20d_pct", "MA120 斜率（20 日）", "%"),
+                               ("volume_ratio_20", "20 日量比", "×"), ("atr14_pct", "ATR14%", "%")):
+        if tech.get(key) is not None:
+            technical += metric(label, number(tech[key], suffix))
+    if macd_text != "未获取":
+        technical += metric("MACD（12,26,9）", macd_text)
+    technical += missing(tech_missing)
 
-    labels = {"average_cost": "平均成本", "profit_ratio": "盈利比率",
-              "main_net_inflow": "主力净流入", "southbound": "南向持股",
-              "margin": "两融"}
-    sources = []
-    for group in ("chips", "capital"):
-        for key, record in (facts.get(group) or {}).items():
-            label = labels.get(key, key)
-            if record is None:
-                add(label, "数据不足", "未获取；不得按中性分处理")
-                continue
-            value = f"{_fmt(record.get('value'))}{record.get('unit', '')}"
-            note = f"；{record['note']}" if record.get("note") else ""
-            add(label, value, f"{record.get('date', '—')}；{record.get('source', '—')}{note}")
-            sources.append(f"{label}：{record.get('source', '—')}，{record.get('date', '—')}，"
-                           f"原查询：{record.get('query', '—')}")
-    if calc and calc.get("rows"):
-        names = ("悲观", "基础", "乐观")
-        add("估值三情景对照", " / ".join(
-            f"{name} {_fmt_px(row['low'])}-{_fmt_px(row['high'])}"
-            for name, row in zip(names, calc["rows"])),
-            "目标价与历史价位并列，不把历史高低当目标")
-    source = "技术与历史区间：Tushare 日线/月线，东方财富兜底；" + (
-        "；".join(sources) if sources else "无可用筹码/资金单项证据")
-    evidence = facts.get("source_file")
-    if evidence:
-        source += f"；证据文件：{evidence}"
-    return ('<span class="section-tag">技术、筹码与资金事实</span>'
-            '<div class="table-scroll" tabindex="0" role="region" aria-label="技术、筹码与资金事实">'
-            '<table><thead><tr><th>指标</th><th>观测值</th><th>口径</th></tr></thead><tbody>'
-            + "".join(rows) + '</tbody></table></div>'
-            + f'<span class="source">{_esc(source)}；只作事实，不进入评分或仓位。</span>')
+    levels = facts.get("consensus_levels") or {}
+    close_lo, close_hi = levels.get("close_low"), levels.get("close_high")
+    intra_lo, intra_hi = levels.get("intraday_low"), levels.get("intraday_high")
+    has_intraday = intra_lo is not None and intra_hi is not None
+    years = levels.get("window_years", 3)
+    range_html = ""
+    if close_lo is not None and close_hi is not None:
+        current = _num(fill.get("price"))
+        lo = min(v for v in (intra_lo if has_intraday else close_lo, current) if v is not None)
+        hi = max(v for v in (intra_hi if has_intraday else close_hi, current) if v is not None)
+        span = hi - lo or 1
+        left, width = (close_lo - lo) / span * 100, (close_hi - close_lo) / span * 100
+        marker = (f'<span class="fact-range-current" style="left:{(current - lo) / span * 100:.2f}%"></span>'
+                  if current is not None else "")
+        aria = f"近 {years} 年月末收盘 {number(close_lo)} 至 {number(close_hi)}"
+        if has_intraday:
+            aria += f"，盘中 {number(intra_lo)} 至 {number(intra_hi)}"
+        aria += f"，现价 {_fmt(current)}" if current is not None else ""
+        range_labels = (f'<div class="fact-range-labels"><span>盘中低 {number(intra_lo)}</span>'
+                        f'<span>盘中高 {number(intra_hi)}</span></div>' if has_intraday else "")
+        range_html = (f'<div class="fact-range-block"><div class="fact-metric"><span>近 {_esc(years)} 年价格区间</span>'
+                      f'<strong>{f"现价 {_fmt(current)}" if current is not None else ""}</strong></div>'
+                      f'<div class="fact-range" role="img" aria-label="{_esc(aria)}">'
+                      f'<span class="fact-range-close" style="left:{left:.2f}%;width:{width:.2f}%"></span>{marker}</div>'
+                      f'{range_labels}'
+                      f'<small>蓝带=月末收盘 {number(close_lo)}–{number(close_hi)}；'
+                      f'{_esc(levels.get("months", "—"))} 个月</small></div>')
+    chip_labels = {"average_cost": "平均成本", "profit_ratio": "盈利比率"}
+    chips = facts.get("chips") or {}
+    chips_html = range_html + "".join(record(label, chips.get(key)) for key, label in chip_labels.items())
+    chips_missing = [label for key, label in chip_labels.items()
+                     if not chips.get(key) or chips[key].get("value") is None]
+    if not levels:
+        chips_missing.insert(0, f"近 {years} 年价格区间")
+    elif not has_intraday:
+        chips_missing.insert(0, "盘中区间")
+    chips_html += missing(chips_missing)
+
+    is_a_share = len(str(fill.get("code") or "")) == 6
+    capital_labels = {"main_net_inflow": "主力净流入（单日）",
+                      "southbound": "北向/陆股通持股" if is_a_share else "南向持股",
+                      "margin": "两融余额"}
+    capital = facts.get("capital") or {}
+    capital_html = "".join(record(label, capital.get(key)) for key, label in capital_labels.items())
+    capital_missing = [label for key, label in capital_labels.items()
+                       if not capital.get(key) or capital[key].get("value") is None]
+    capital_html += missing(capital_missing)
+
+    return ('<span class="section-tag">技术、筹码与资金事实</span><div class="timing-facts-grid">'
+            '<article class="timing-fact-card" data-group="technical"><h3>技术事实</h3>'
+            '<p class="fact-card-sub">趋势、动量与波动，仅描述已发生行情</p>'
+            f'{technical}<footer>来源：Tushare/东方财富公开日线行情{_esc("；" + tech_source if tech_source else "")}。</footer></article>'
+            '<article class="timing-fact-card" data-group="chips"><h3>筹码事实</h3>'
+            '<p class="fact-card-sub">历史价格区间与持仓成本，两种口径分开</p>'
+            f'{chips_html}<footer>来源：Tushare/东方财富公开月线行情；历史价位不是券商目标价。</footer></article>'
+            '<article class="timing-fact-card" data-group="capital"><h3>资金事实</h3>'
+            '<p class="fact-card-sub">只列有日期与来源的单点观测，不画趋势</p>'
+            f'{capital_html}<footer>来源：各项记录的公开数据；单日值不代表趋势。</footer></article></div>'
+            '<p class="timing-facts-context"><a href="#s8">三情景目标价见第 8 章</a>；历史高低点不是目标价。只作事实，不进入评分或仓位。</p>')
 
 
 def build_holders_plot(fill: dict) -> str:

@@ -97,8 +97,10 @@ def _latest_raw(code, as_of):
     if not latest["income"]:
         return None
     end = latest["income"][0]["end_date"]
-    return {api: (latest[api][0] if latest[api] and latest[api][0].get("end_date") == end else {})
-            for api in latest} | {"end_date": end}
+    result = {api: (latest[api][0] if latest[api] and latest[api][0].get("end_date") == end else {})
+              for api in latest} | {"end_date": end}
+    result["latest_balancesheet"] = latest["balancesheet"][0] if latest["balancesheet"] else {}
+    return result
 
 
 def _share_series(code, as_of):
@@ -143,7 +145,10 @@ def _debt(raw):
     required = ("st_borr", "non_cur_liab_due_1y", "lt_borr", "bond_payable", "money_cap")
     if any(bs.get(key) is None for key in required):
         return None, None, None, None
-    st = sum(_num(bs.get(key)) for key in ("st_borr", "non_cur_liab_due_1y"))
+    short_keys = ["st_borr", "non_cur_liab_due_1y"]
+    if bs.get("st_bonds_payable") is not None:
+        short_keys.append("st_bonds_payable")
+    st = sum(_num(bs.get(key)) for key in short_keys)
     lt = sum(_num(bs.get(key)) for key in ("lt_borr", "bond_payable"))
     money = _num(bs.get("money_cap"))
     cover = money / st if st > 0 else 1e9
@@ -162,12 +167,14 @@ def _turnover(raw):
     return revenue / assets if revenue is not None and assets else None
 
 
-def _cash_runway(rows, raw):
+def _cash_runway(rows, raw, latest_raw=None):
     if not rows or not raw:
         return None
-    latest = max(raw)
-    bs = raw[latest].get("balancesheet") or {}
+    bs = ((latest_raw.get("latest_balancesheet") or latest_raw.get("balancesheet"))
+          if latest_raw else raw[max(raw)].get("balancesheet")) or {}
     cash = _num(bs.get("money_cap"))
+    if cash is None and latest_raw:
+        cash = _num((raw[max(raw)].get("balancesheet") or {}).get("money_cap"))
     ocf = _num(rows[0].get("NETCASH_OPERATE_PK"))
     return cash / (-ocf) * 12 if cash is not None and ocf is not None and ocf < 0 else None
 
@@ -216,7 +223,7 @@ def fetch_quality_inputs(code: str, secucode: str, as_of: str, profile: dict) ->
         result["sources"].append({"type": "eastmoney_f10", "as_of": _iso(as_of)})
     result["coverage"]["profile"] = "ok"
     result["coverage"]["disclosure"] = "ok" if rows else "date_unknown"
-    runway = _cash_runway(rows, raw)
+    runway = _cash_runway(rows, raw, latest_raw)
     if kind == "survival_checklist":
         result["status"] = "ok" if runway is not None else "review_only"
         result["1D"] = {"kind": kind, "cash_runway_months": runway}

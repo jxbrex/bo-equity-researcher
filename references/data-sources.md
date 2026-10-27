@@ -89,6 +89,8 @@ https://push2.eastmoney.com/api/qt/stock/get?secid={secid}&fields=f43,f44,f45,f4
 `consensus_levels`（与 E2 同一次月线的近三年月末收盘/盘中高低，非券商目标价）。E1/E2 只共享
 这一份月线，不另发请求。`--out` 同步写 `_timing_{code}_{date}.json`：筹码与资金按市场可得性
 逐项记录数值/单位/日期/真实来源/原查询，未获取为 null；不预设主力净流入、南向或两融接口可用。
+同日重取保留已人工补齐的非空筹码/资金记录，但只读当前根目录旧文件，归档后须先恢复；
+时机证据在渲染成功后自动归档，路径与调研明细落盘规则见 `data-collection.md` Step 1.0。
 
 ---
 

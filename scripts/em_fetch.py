@@ -76,7 +76,7 @@ _CAPTURE: dict = {}
 # import em_market，此处不再转发。
 from em_market import (  # noqa: E402,F401
     kline_url,
-    fetch_pe_pb_band, fetch_quote, fetch_kline_monthly, fetch_timing_material,
+    fetch_pe_pb_band, fetch_quote, fetch_kline_monthly, fetch_timing_material, fetch_capital_material,
 )
 from em_finance import (  # noqa: E402,F401
     _ts_hk_annual_rows, _growth_sigma,
@@ -866,7 +866,8 @@ def main():
                     "technical": timing.get("technical"),
                     "consensus_levels": timing.get("consensus_levels"),
                     "chips": {"average_cost": None, "profit_ratio": None},
-                    "capital": {"main_net_inflow": None, "southbound": None, "margin": None},
+                    "capital": ({"main_net_inflow": None, "southbound": None, "margin": None}
+                                if secid_of(args[0])[2] else fetch_capital_material(args[0])),
                     "sources": {"technical": "em_fetch.py 同源日线",
                                 "consensus_levels": "em_fetch.py 同源月线"},
                 }
@@ -881,13 +882,15 @@ def main():
                 if previous.get("code") == evidence["code"] and previous.get("date") == evidence["date"]:
                     for group in ("chips", "capital"):
                         if isinstance(previous.get(group), dict):
-                            evidence[group].update(previous[group])
+                            for key, record in previous[group].items():
+                                if evidence[group].get(key) is None:
+                                    evidence[group][key] = record
                 evidence_tmp = f"{evidence_path}.{os.getpid()}.tmp"
                 with open(evidence_tmp, "w", encoding="utf-8") as handle:
                     json.dump(evidence, handle, ensure_ascii=False, indent=2)
                 os.replace(evidence_tmp, evidence_path)
                 print(f"[时机证据已落盘] {evidence_path}（fill 的 timing_facts.source_file 引用此文件；"
-                      "筹码/资金单项查证后补齐，缺项保持 null）", file=sys.stderr)
+                      "筹码与未自动覆盖的资金项可单项查证后补齐，缺项保持 null）", file=sys.stderr)
     for peer in (opts.get("peers") or "").split(","):
         peer = peer.strip()
         if peer:
@@ -896,13 +899,14 @@ def main():
 
 
 def _debug_summary() -> None:
-    """EM_FETCH_DEBUG=1：运行末尾 stderr 打一行汇总（请求数/缓存命中/重试等待）。
-    逐请求 [net]/[cache-hit]/[disk-hit] 行仍保留供单点诊断，本行为整体效率画像。"""
+    """EM_FETCH_DEBUG=1：运行末尾 stderr 打一行汇总（请求数/缓存命中/两类等待）。
+    逐请求 [net]/[cache-hit]/[disk-hit]/[rate-wait] 行仍保留供单点诊断。"""
     if not _TS_DEBUG:
         return
     print(f"[em_fetch stats] tushare请求 {_STATS['ts_net']} | 进程缓存命中 {_STATS['ts_mem']} | "
           f"磁盘缓存命中(ts {_STATS['ts_disk']} / em {_STATS['em_disk']}) | "
-          f"东财网络 {_STATS['em_net']} | 网络重试等待 {_STATS['wait']} 次", file=sys.stderr)
+          f"东财网络 {_STATS['em_net']} | 网络重试等待 {_STATS['wait']} 次 | "
+          f"E5频率等待 {_STATS['rate_wait']} 次", file=sys.stderr)
 
 
 if __name__ == "__main__":

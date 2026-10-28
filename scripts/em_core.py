@@ -35,7 +35,7 @@ import urllib.request
 from datetime import date, timedelta
 from functools import lru_cache
 
-from em_cache import (dc_path, dc_read, dc_write,
+from em_cache import (dc_path, dc_read, dc_write, reserve_report_rc_slot,
                       _TTL_QUOTE, _TTL_FIN, _TTL_GOV, _TS_TIER_QUOTE, _TS_TIER_GOV)
 
 
@@ -123,7 +123,8 @@ _TS_DEBUG = os.environ.get("EM_FETCH_DEBUG") == "1"
 
 # 运行统计（EM_FETCH_DEBUG=1 时 main 末尾打一行汇总）：请求数/缓存命中/重试等待。
 # 线程池并发自增用锁保护（值只增不减，开销可忽略）。
-_STATS = {"ts_net": 0, "ts_mem": 0, "ts_disk": 0, "em_net": 0, "em_disk": 0, "wait": 0}
+_STATS = {"ts_net": 0, "ts_mem": 0, "ts_disk": 0, "em_net": 0, "em_disk": 0, "wait": 0,
+          "rate_wait": 0}
 _STATS_LOCK = threading.Lock()
 
 
@@ -161,8 +162,8 @@ _NO_CACHE = os.environ.get("EM_FETCH_NO_CACHE") == "1"
 def ts_call(api_name: str, params: dict = None, fields: str = "") -> list:
     """tushare HTTP API。返回 list[dict]（fields↔items 对齐）。失败抛异常由调用方兜底。
     缓存键归一化：params 里的 "fields" 是 no-op（tushare 只认 payload 顶层 fields），剔除后参与键。
-    线程安全：per-key 锁保证同冷键（内存 miss + 磁盘 miss）只发一次网络；锁只覆盖单键，
-    不同键在 4 worker 线程池下仍并行；第二线程等锁后命中先行者写入的内存缓存直接返回。"""
+    线程安全：per-key 锁保证同冷键（内存 miss + 磁盘 miss）只发一次网络；锁只覆盖单键。
+    report_rc 另走跨进程分钟/小时预算，等待后重查成功缓存；其他 API 不做统一等待。"""
     norm = dict(params or {})
     norm.pop("fields", None)
     key = (api_name, tuple(sorted(norm.items())), fields)
@@ -191,6 +192,26 @@ def ts_call(api_name: str, params: dict = None, fields: str = "") -> list:
         tok = _tushare_token()
         if not tok:
             raise RuntimeError("tushare token 未配置（TUSHARE_TOKEN 环境变量或 ZCode mcp 配置）")
+        while api_name == "report_rc":
+            wait = reserve_report_rc_slot(_CACHE_DIR, time.time())
+            if wait is None:
+                raise RuntimeError("本地 report_rc 小时预算已满（10 次），请走东财兜底")
+            if wait <= 0:
+                break
+            _stat("rate_wait")
+            if _TS_DEBUG:
+                print(f"[rate-wait] report_rc {wait:.1f}s", file=sys.stderr)
+            time.sleep(wait)
+            if key in _TS_CACHE:
+                _stat("ts_mem")
+                return _TS_CACHE[key]
+            cached = dc_read(dp, tier, _NO_CACHE)
+            if cached is not None:
+                _TS_CACHE[key] = cached
+                _stat("ts_disk")
+                if _TS_DEBUG:
+                    print(f"[disk-hit] {api_name} {dict(norm)}", file=sys.stderr)
+                return cached
         payload = {"api_name": api_name, "token": tok, "params": params or {}, "fields": fields}
         req = urllib.request.Request(
             TS_API, data=json.dumps(payload).encode("utf-8"),

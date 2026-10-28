@@ -35,9 +35,13 @@ python "<技能目录>\scripts\em_fetch.py" 600989 --quality-v2 --stock-type=成
 已有冲突值，父级打包说明无效。现金跑道使用报告日前最新可见货币资金÷最近完整年度经营
 现金净流出；`st_bonds_payable` 有值时计入短债，其他流动负债不得全包成有息债务。
 
+**A 股定量不重复查妙想**：E1–E6、审计、业绩预告/快报、治理、分红与披露计划已在脚本摘要或落盘时，
+直接采用，不再用妙想做同义重查。主力净流入与两融自 v0.11.4 起由脚本经 Tushare `moneyflow`/
+`margin_detail` 自动写入时机证据，失败项才走单项补证；省下的妙想额度只用于下列盲区、增强项与必要文本检索。
+
 **妙想 MCP 直调补充**（如 `mcp__mx-ds-mcp-stdio__mx_*` 在工具列表且未明确额度耗尽，脚本盲区/增强项；**MCP 缺席或返回明确积分/额度耗尽提示时，改用 Skill 工具调 `mx-data` skill**，同一东财妙想 API、独立额度，下列定量查询等价适用）：
 - **筹码分布（筹码面）**：tushare `cyq_*` 无权限 → `mx_ashare_finance_data`。获利比例/平均成本逐项单独查询并注明日期；获利比例可能返回为「盈利比率」，不得把股东户数当替代字段。90%成本区间与集中度若未返回则标缺失，不编造。
-- **行业估值水位（估值轨参考）**：`mx_index_block_finance_data(query="[申万煤炭/对应行业] 最新 PE PB 及历史分位")`——从"跟自己历史比"升级为"跟行业当前比"
+- **行业估值水位（估值轨参考）**：`mx_index_block_finance_data(query="[申万煤炭/对应行业] 最新 PE PB 及历史分位")`——2026-10-28 实测 `index_dailybasic` 对申万行业指数返回空、`sw_daily` 无权限，继续走妙想，不用沪深300代替行业
 - **大宗商品价格（P0 第一变量）**：`mx_macro_data(query="[动力煤/布伦特原油/对应品种] 最新价格及近30日走势")`
 - **港股盈利预测（E5 港股补位）**：`mx_hk_finance_data(query="[公司] 券商盈利预测 目标价")`
 
@@ -77,9 +81,9 @@ E6 主营构成（含**毛利额与毛利占比**，回填 `segments` 图字段�
 - **目标公司 E1 一律主会话自跑**，并加 `--out=_em_[代码]_quote.json` 落盘（fill 的
   `quote.source_file` 引用它，渲染器比对防伪）；子代理只处理 peers 部分。
   落盘文件在渲染成功后由 render 自动归档至报告目录 `_archive/`（v4.10 起），
-  `timing_facts.source_file` 同步归档为 `timing_{code}_{date}.json`，同日重取保留人工补齐的
-  chips/capital；该保留只读当前根目录的旧时机文件，归档后须先从 `_archive` 恢复再重取，
-  不会自动继承归档中的人工补齐。提前移动/删除 = 防伪链断裂拒渲染。A 股东财降级或港股无逐机构明细时，
+  `timing_facts.source_file` 同步归档为 `timing_{code}_{date}.json`。同日重取时自动技术/月线/资金项刷新，
+  旧人工记录只补当前仍为 null 的项，筹码与北向/南向等未自动覆盖项保留；该保留只读当前根目录的旧时机文件，
+  归档后须先从 `_archive` 恢复再重取，不会自动继承归档中的人工补齐。提前移动/删除 = 防伪链断裂拒渲染。A 股东财降级或港股无逐机构明细时，
   可核验的调研明细先放 `_archive/_street_{code}_{date}.json` 再填 `gap_plot.source_file`，
   不得用无出处数字代替。stdout/stderr 重试日志不得留在报告根目录，可再生日志交付后删除。
 - **禁止指示子代理删除输出文件**；临时文件由主会话确认回传完整后再清理。
@@ -184,13 +188,17 @@ WebFetch(http://basic.10jqka.com.cn/[代码]/operate.html)   # 项目进展
 
 ## Step 1.2：卖方深度深挖（预期差档位A专用）
 
-E5 已给出一致 EPS 和目标价（档位B）。若要升级档位A（具体假设对照）：
+E5 已给出一致 EPS、目标价、评级和一致预期数值（档位B），这些数值不再用妙想同义重查。
+若要升级档位A（具体假设对照），只补关键假设、预测修订原因等文本证据：
 
-有 WebSearch 时 `WebSearch(query="[Company Name] 券商研报 关键假设 [年份]")`；
-有妙想 MCP/skill 时 `mx_finance_search_news(query="[公司名] 券商研报 关键假设 盈利预测 [年份]")`（MCP 缺席或明确额度耗尽时经 `mx-search` skill）；
-预期修订方向（"近30天上调X家/下调Y家"）：`mx_finance_search_news(query="[公司名] 近一个月 盈利预测 上调 下调 评级变动")`；
-前两者都无时用 E7 搜"研报"或在
-`data.eastmoney.com/report/zw_stock.jshtml?infocode=...` 研报页找假设。
+- WebSearch 或妙想 `mx_finance_search_news` **择一完成一轮**，不足再换通道，不默认双通道各搜一遍：
+  `WebSearch(query="[Company Name] 券商研报 关键假设 [年份]")`，或
+  `mx_finance_search_news(query="[公司名] 券商研报 关键假设 盈利预测 [年份]")`
+  （MCP 缺席或明确额度耗尽时经 `mx-search` skill）。
+- 预期修订方向（"近30天上调X家/下调Y家"）确有必要时再查：
+  `mx_finance_search_news(query="[公司名] 近一个月 盈利预测 上调 下调 评级变动")`。
+- 前两者都无时用 E7 搜"研报"或在
+  `data.eastmoney.com/report/zw_stock.jshtml?infocode=...` 研报页找假设。
 
 找到具体假设必须记录来源（券商名+日期）；找不到就停在档位B，禁止编造。
 
@@ -218,6 +226,10 @@ fill-schema.md `gap_plot` 行）。
 - **peer <3 只：主会话直接跑，不必委派**（委派协商成本高于收益）。
 - **委派期间主会话不空等**：目标公司本体取数、妙想 MCP/skill 检索、定性调研与 peers 委派互不依赖，
   同一回合并行推进（见 SKILL.md Phase 1「并行发起」）。
+
+**2–3 个分析任务并行**：不同股票可并行，`report_rc` 由脚本跨进程按剩余秒数错峰，只阻塞 E5 worker，
+不串行整份研究；同股同日任务须串行或分工作目录，防止 quote/timing/fill/报告互相覆盖。
+东财公开端点仍只有单进程 4 worker，三任务叠加可能触发 429，遇限仍硬停，不宣称已有跨进程东财限流。
 
 公告 PDF 下载提表（纯机械、无本体风险）同样**必须委派**——执行姿势两条纪律
 （小米 01810 复盘 2026-10-07 实证）：①markitdown 转换必带 `PYTHONIOENCODING=utf-8`

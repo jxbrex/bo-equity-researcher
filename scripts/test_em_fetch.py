@@ -1536,6 +1536,8 @@ def test_34_timing_evidence_written_with_null_unavailable(monkeypatch, tmp_path)
         return "摘要"
 
     monkeypatch.setattr(em, "summarize", fake_summary)
+    monkeypatch.setattr(em, "fetch_capital_material", lambda _code: {
+        "main_net_inflow": None, "southbound": None, "margin": None})
     monkeypatch.setattr(em._C, "_tushare_token", lambda: "configured")
     monkeypatch.setattr(sys, "argv", ["em_fetch.py", "600000", f"--out={tmp_path}/quote.json"])
     em.main()
@@ -1567,6 +1569,8 @@ def test_35_timing_evidence_retry_preserves_manual_chip_capital(monkeypatch, tmp
             "consensus_levels": {"close_high": 20, "close_low": 9}}})
         return "摘要"
     monkeypatch.setattr(em, "summarize", fake_summary)
+    monkeypatch.setattr(em, "fetch_capital_material", lambda _code: {
+        "main_net_inflow": None, "southbound": None, "margin": None})
     monkeypatch.setattr(em._C, "_tushare_token", lambda: "configured")
     monkeypatch.setattr(sys, "argv", ["em_fetch.py", "600000", f"--out={tmp_path}/quote.json"])
     em.main()
@@ -1686,3 +1690,310 @@ def test_39_no_e5_rejects_target_evidence_flags(monkeypatch, capsys):
             raise AssertionError(f"--no-e5 {extra} 应拒绝执行")
         assert "禁止与 --out 或 --quality-v2 同用" in capsys.readouterr().err
     assert not calls
+
+
+def test_40_report_rc_budget_slots_and_hourly_cap(tmp_path):
+    import em_cache
+
+    cache_dir = str(tmp_path)
+    reserve = em_cache.reserve_report_rc_slot
+    assert reserve(cache_dir, 1000) == 0
+    assert reserve(cache_dir, 1000) == 60
+    assert reserve(cache_dir, 1001) == 59
+    assert reserve(cache_dir, 1060) == 0
+    for offset in range(60, 481, 60):
+        assert reserve(cache_dir, 1060 + offset) == 0
+    assert reserve(cache_dir, 1600) is None
+    assert reserve(cache_dir, 4720) == 0
+
+
+def test_41_report_rc_budget_rebuilds_corrupt_state(tmp_path, capsys):
+    import em_cache
+
+    (tmp_path / "report_rc_budget.json").write_text("{broken", encoding="utf-8")
+    assert em_cache.reserve_report_rc_slot(str(tmp_path), 1000) == 0
+    assert em_cache.reserve_report_rc_slot(str(tmp_path), 1001) == 59
+    assert "预算" in capsys.readouterr().err
+
+
+class _TsResponse:
+    def __init__(self, code):
+        self.code = code
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def read(self):
+        import json
+        return json.dumps({"code": 0, "data": {"fields": ["ts_code"],
+                                               "items": [[self.code]]}}).encode("utf-8")
+
+
+def test_42_report_rc_budget_wait_rechecks_cache(monkeypatch, tmp_path):
+    import em_cache
+
+    cache_dir = str(tmp_path)
+    start = 1700000000.0
+    params = {"ts_code": "000858.SZ"}
+    key = ("report_rc", (("ts_code", "000858.SZ"),), "")
+    dp = em_core.dc_path(cache_dir, "ts", repr(key))
+    expected = [{"ts_code": "000858.SZ", "np": 123}]
+    assert em_cache.reserve_report_rc_slot(cache_dir, start) == 0
+    now = [start]
+    monkeypatch.setattr(em_core, "_CACHE_DIR", cache_dir)
+    monkeypatch.setattr(em_core, "_NO_CACHE", False)
+    monkeypatch.setattr(em_core, "_TS_CACHE", {})
+    monkeypatch.setattr(em_core, "_tushare_token", lambda: "configured")
+    monkeypatch.setattr(em_core.time, "time", lambda: now[0])
+    monkeypatch.setattr(em_core.urllib.request, "urlopen",
+                        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("不应发网络")))
+
+    def _sleep(seconds):
+        now[0] += seconds
+        em_core.dc_write(dp, expected, False, cache_dir)
+
+    monkeypatch.setattr(em_core.time, "sleep", _sleep)
+    assert em_core.ts_call("report_rc", params) == expected
+    assert em_core._STATS["rate_wait"] >= 1
+
+
+def test_43_report_rc_budget_spaces_three_stocks(monkeypatch, tmp_path):
+    cache_dir = str(tmp_path)
+    start = 1700000000.0
+    now = [start]
+    calls = []
+    monkeypatch.setattr(em_core, "_CACHE_DIR", cache_dir)
+    monkeypatch.setattr(em_core, "_NO_CACHE", False)
+    monkeypatch.setattr(em_core, "_TS_CACHE", {})
+    monkeypatch.setattr(em_core, "_tushare_token", lambda: "configured")
+    monkeypatch.setattr(em_core.time, "time", lambda: now[0])
+    monkeypatch.setattr(em_core.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
+
+    def _urlopen(req, **_kwargs):
+        import json
+        code = json.loads(req.data.decode("utf-8"))["params"]["ts_code"]
+        calls.append(now[0])
+        return _TsResponse(code)
+
+    monkeypatch.setattr(em_core.urllib.request, "urlopen", _urlopen)
+    for code in ("000858.SZ", "600276.SH", "600519.SH"):
+        assert em_core.ts_call("report_rc", {"ts_code": code})[0]["ts_code"] == code
+    assert calls == [start, start + 60, start + 120]
+
+
+def test_44_report_rc_budget_failed_attempt_consumes_slot(monkeypatch, tmp_path):
+    cache_dir = str(tmp_path)
+    start = 1700000000.0
+    now = [start]
+    calls = []
+    monkeypatch.setattr(em_core, "_CACHE_DIR", cache_dir)
+    monkeypatch.setattr(em_core, "_NO_CACHE", True)
+    monkeypatch.setattr(em_core, "_TS_CACHE", {})
+    monkeypatch.setattr(em_core, "_tushare_token", lambda: "configured")
+    monkeypatch.setattr(em_core.time, "time", lambda: now[0])
+    monkeypatch.setattr(em_core.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
+
+    def _urlopen(*_args, **_kwargs):
+        calls.append(now[0])
+        raise OSError("mock network failure")
+
+    monkeypatch.setattr(em_core.urllib.request, "urlopen", _urlopen)
+    for _ in range(2):
+        try:
+            em_core.ts_call("report_rc", {"ts_code": "000858.SZ"})
+            raise AssertionError("网络异常应外溢")
+        except OSError:
+            pass
+    assert calls == [start, start + 60]
+
+
+def test_45_report_rc_budget_hour_full_falls_back_without_network(monkeypatch, tmp_path, capsys):
+    import em_cache
+    import em_owner
+
+    cache_dir = str(tmp_path)
+    start = 1700000000.0
+    for offset in range(0, 600, 60):
+        assert em_cache.reserve_report_rc_slot(cache_dir, start + offset) == 0
+    monkeypatch.setattr(em_core, "_CACHE_DIR", cache_dir)
+    monkeypatch.setattr(em_core, "_NO_CACHE", True)
+    monkeypatch.setattr(em_core, "_TS_CACHE", {})
+    monkeypatch.setattr(em_core, "_tushare_token", lambda: "configured")
+    monkeypatch.setattr(em_core.time, "time", lambda: start + 540)
+    monkeypatch.setattr(em_core.urllib.request, "urlopen",
+                        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("不应发网络")))
+    monkeypatch.setattr(em_owner, "_em_consensus", lambda _code: {"_src": "em"})
+    assert em_owner.fetch_consensus("600276") == {"_src": "em"}
+    assert "本地 report_rc 小时预算已满" in capsys.readouterr().err
+
+
+def test_46_capital_material_normalizes_tushare_amounts(monkeypatch):
+    import em_market as market
+
+    def _rows(api, _params):
+        if api == "moneyflow":
+            return [{"trade_date": "20261027", "buy_lg_amount": 45626.23,
+                     "buy_elg_amount": 23027.38, "sell_lg_amount": 56843.08,
+                     "sell_elg_amount": 22866.75, "net_mf_amount": 9864.95}]
+        assert api == "margin_detail"
+        return [{"trade_date": "20261027", "rzye": 5115618871.0, "rqye": 58975051.0}]
+
+    monkeypatch.setattr(market._C, "ts_call", _rows)
+    result = market.fetch_capital_material("000858")
+    main = result["main_net_inflow"]
+    margin = result["margin"]
+    assert main["value"] == -1.1056 and main["unit"] == "亿元"
+    assert main["date"] == "2026-10-27" and "moneyflow" in main["source"]
+    assert margin["value"] == 51.1562 and margin["unit"] == "亿元"
+    assert margin["date"] == "2026-10-27" and "5897.51" in margin["note"]
+    assert result["southbound"] is None
+
+
+def test_47_capital_material_failures_stay_null(monkeypatch):
+    import em_market as market
+
+    def _rows(api, _params):
+        if api == "moneyflow":
+            raise RuntimeError("mock no permission")
+        return []
+
+    monkeypatch.setattr(market._C, "ts_call", _rows)
+    result = market.fetch_capital_material("000858")
+    assert result == {"main_net_inflow": None, "southbound": None, "margin": None}
+
+
+def test_48_timing_evidence_refreshes_auto_and_preserves_manual_gaps(monkeypatch, tmp_path):
+    import json
+
+    evidence_path = tmp_path / f"_timing_600000_{date.today().isoformat()}.json"
+    chip = {"value": 11.2, "unit": "元", "date": "2026-08-27", "source": "东方财富", "query": "平均成本"}
+    southbound = {"value": 8.2, "unit": "%", "date": "2026-08-27", "source": "东方财富", "query": "北向"}
+    old_margin = {"value": 36.33, "unit": "亿元", "date": "2026-08-27", "source": "东方财富", "query": "两融"}
+    evidence_path.write_text(json.dumps({
+        "code": "600000", "date": date.today().isoformat(),
+        "chips": {"average_cost": chip, "profit_ratio": None},
+        "capital": {"main_net_inflow": None, "southbound": southbound, "margin": old_margin},
+    }, ensure_ascii=False), encoding="utf-8")
+    auto_main = {"value": -1.1056, "unit": "亿元", "date": "2026-10-27",
+                 "source": "Tushare moneyflow", "query": "moneyflow"}
+    auto_margin = {"value": 51.1562, "unit": "亿元", "date": "2026-10-27",
+                   "source": "Tushare margin_detail", "query": "margin_detail"}
+    monkeypatch.setattr(em, "_CAPTURE", {})
+    monkeypatch.setattr(em, "fetch_capital_material", lambda _code: {
+        "main_net_inflow": auto_main, "southbound": None, "margin": auto_margin})
+
+    def fake_summary(*_args):
+        em._CAPTURE.update({"code": "600000", "timing": {
+            "price": 10, "technical": {"rsi14": 66.0},
+            "consensus_levels": {"close_high": 20, "close_low": 9}}})
+        return "摘要"
+
+    monkeypatch.setattr(em, "summarize", fake_summary)
+    monkeypatch.setattr(em._C, "_tushare_token", lambda: "configured")
+    monkeypatch.setattr(sys, "argv", ["em_fetch.py", "600000", f"--out={tmp_path}/quote.json"])
+    em.main()
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    assert evidence["capital"]["main_net_inflow"] == auto_main
+    assert evidence["capital"]["margin"] == auto_margin
+    assert evidence["capital"]["southbound"] == southbound
+    assert evidence["chips"]["average_cost"] == chip
+
+
+def test_49_report_rc_budget_sanitizes_unsafe_timestamps(tmp_path):
+    import em_cache
+    import json
+
+    now = 1700000000.0
+    state = tmp_path / "report_rc_budget.json"
+    state.write_text(json.dumps([now + 86400, float("inf"), 10 ** 400]), encoding="utf-8")
+    assert em_cache.reserve_report_rc_slot(str(tmp_path), now) == 0
+    assert json.loads(state.read_text(encoding="utf-8")) == [now]
+
+
+def test_50_report_rc_budget_rebuilds_non_utf8_state(tmp_path):
+    import em_cache
+
+    (tmp_path / "report_rc_budget.json").write_bytes(b"\xff\xfe\x00")
+    assert em_cache.reserve_report_rc_slot(str(tmp_path), 1700000000.0) == 0
+
+
+def test_51_capital_material_decode_and_value_errors_stay_null(monkeypatch):
+    import json
+    import em_market as market
+
+    def _rows(api, _params):
+        if api == "moneyflow":
+            raise json.JSONDecodeError("broken", "doc", 0)
+        return [{"trade_date": "20261027", "rzye": "--", "rqye": 58975051.0}]
+
+    monkeypatch.setattr(market._C, "ts_call", _rows)
+    result = market.fetch_capital_material("000858")
+    assert result == {"main_net_inflow": None, "southbound": None, "margin": None}
+
+
+def _report_rc_spawn_worker(cache_dir, code, interval, calls, errors):
+    import em_cache
+    import json
+    import time
+
+    em_cache.REPORT_RC_MIN_INTERVAL = interval
+    em_core._CACHE_DIR = cache_dir
+    em_core._NO_CACHE = False
+    em_core._TS_CACHE = {}
+    em_core._TS_DEBUG = False
+    em_core._tushare_token = lambda: "configured"
+
+    def _urlopen(req, **_kwargs):
+        payload = json.loads(req.data.decode("utf-8"))
+        calls.append((payload["params"]["ts_code"], time.time()))
+        return _TsResponse(payload["params"]["ts_code"])
+
+    em_core.urllib.request.urlopen = _urlopen
+    try:
+        em_core.ts_call("report_rc", {"ts_code": code})
+    except Exception as exc:
+        errors.append(str(exc))
+
+
+def _report_rc_lock_crash(lock_path):
+    import em_cache
+    with em_cache._exclusive_file_lock(lock_path):
+        os._exit(1)
+
+
+def test_52_report_rc_budget_multiprocess_lock_and_cache(tmp_path):
+    import json
+    import multiprocessing as mp
+
+    mp.set_start_method("spawn", force=True)
+    cache_dir = str(tmp_path / "shared")
+    with mp.Manager() as manager:
+        calls, errors = manager.list(), manager.list()
+        processes = [mp.Process(target=_report_rc_spawn_worker,
+                                args=(cache_dir, code, 1.0, calls, errors))
+                     for code in ("000858.SZ", "000858.SZ", "600276.SH")]
+        for process in processes:
+            process.start()
+        for process in processes:
+            process.join(20)
+        assert all(not process.is_alive() for process in processes)
+        assert all(process.exitcode == 0 for process in processes)
+        assert not list(errors)
+        records = list(calls)
+        assert len(records) == 2, records
+        times = sorted(item[1] for item in records)
+        assert all(b - a >= 0.9 for a, b in zip(times, times[1:])), times
+        budget = json.loads((tmp_path / "shared" / "report_rc_budget.json").read_text(encoding="utf-8"))
+        assert len(budget) == 2, budget
+
+    lock_dir = str(tmp_path / "crash")
+    crashed = mp.Process(target=_report_rc_lock_crash,
+                         args=(os.path.join(lock_dir, "report_rc_budget.lock"),))
+    crashed.start()
+    crashed.join(5)
+    assert crashed.exitcode == 1
+    import em_cache
+    assert em_cache.reserve_report_rc_slot(lock_dir, time.time()) == 0

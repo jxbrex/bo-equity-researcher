@@ -5,7 +5,8 @@ em_market.py — 行情 / 月K 取数族（Bo-EquityResearcher skill 取数分�
 
 职责：E1 行情（tushare daily_basic 优先、东财 push2 兜底）、E2 月线（tushare 前复权 / 港股日线
 聚合，东财 kline 兜底）、PE/PB 历史分位带、时机素材（MA60/MA120/52 周高低、技术指标、
-三年价格区间）。进程内日线序列缓存 _HK_DAILY_CACHE/_A_DAILY_CACHE 随本块持有（E1 与 E2 共用同一次拉取）。
+三年价格区间）与 A 股资金事实（moneyflow/margin_detail）。进程内日线序列缓存
+_HK_DAILY_CACHE/_A_DAILY_CACHE 随本块持有（E1 与 E2 共用同一次拉取）。
 
 与其他块的边界（重要）：
 - 只依赖 em_core.py，绝不 import 其他取数块（em_finance/em_owner/em_misc 同理）。
@@ -449,3 +450,43 @@ def fetch_timing_material(code: str, is_hk: bool = False, monthly_rows=None):
     except Exception as e:
         print(f"⚠️ fetch_timing_material({code}): {e}", file=sys.stderr)
         return None
+
+
+def fetch_capital_material(code: str) -> dict:
+    out = {"main_net_inflow": None, "southbound": None, "margin": None}
+    ts = to_ts_code(code)
+    beg, end = _win_days(15)
+
+    def _latest(rows, required):
+        rows = [r for r in rows if r.get("trade_date")]
+        if not rows:
+            raise RuntimeError("空返回")
+        row = max(rows, key=lambda r: r["trade_date"])
+        if any(row.get(key) is None for key in required):
+            raise RuntimeError("必要字段缺失")
+        return row
+
+    try:
+        rows = _C.ts_call("moneyflow", {"ts_code": ts, "start_date": beg, "end_date": end})
+        r = _latest(rows, ("buy_lg_amount", "buy_elg_amount", "sell_lg_amount", "sell_elg_amount"))
+        net = (float(r["buy_lg_amount"]) + float(r["buy_elg_amount"])
+               - float(r["sell_lg_amount"]) - float(r["sell_elg_amount"])) / 1e4
+        out["main_net_inflow"] = {
+            "value": round(net, 4), "unit": "亿元", "date": _fmt_date(r["trade_date"]),
+            "source": "Tushare moneyflow（大单+特大单）",
+            "query": f"moneyflow {ts} {beg}-{end}"}
+    except Exception as e:
+        _C._ts_quiet("fetch_capital_material moneyflow", e)
+    try:
+        rows = _C.ts_call("margin_detail", {"ts_code": ts, "start_date": beg, "end_date": end})
+        r = _latest(rows, ("rzye",))
+        record = {
+            "value": round(float(r["rzye"]) / 1e8, 4), "unit": "亿元",
+            "date": _fmt_date(r["trade_date"]), "source": "Tushare margin_detail",
+            "query": f"margin_detail {ts} {beg}-{end}"}
+        if r.get("rqye") is not None:
+            record["note"] = f"融券余额 {float(r['rqye']) / 1e4:.2f} 万元"
+        out["margin"] = record
+    except Exception as e:
+        _C._ts_quiet("fetch_capital_material margin_detail", e)
+    return out

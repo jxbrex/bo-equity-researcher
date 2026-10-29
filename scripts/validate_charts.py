@@ -403,7 +403,7 @@ def _check_slot_widths(fill: dict, warns: list) -> None:
 def _check_threshold_coverage(fill: dict, warns: list) -> None:
     """v5.1.2：4.3 护城河压力测试给出的阈值须在 14 章 triggers/dash_html 有对应行
     （fill-schema 既定「给了阈值的 14 章必须有对应行，否则删阈值句」——此前只写在文档里）。
-    4.3 dim-block 内阈值数字串在 triggers+dash_html 找不到 → 告警（启发式，误报请调表述）。"""
+    4.3 dim-block 内阈值数字串在 triggers+dash_html 找不到 → 告警；年/季度语境不视为阈值。"""
     l1 = fill.get("l1_html") or ""
     m43 = re.search(r"dim-name[^>]*>\s*4\.3", l1)
     if not m43:
@@ -414,7 +414,10 @@ def _check_threshold_coverage(fill: dict, warns: list) -> None:
     missing = []
     for mm in re.finditer(
             r"(?:≥|≤|大于|小于|跌破|突破|升至|降至|超过|低于|高于|超)\s*(\d+(?:\.\d+)?)"
-            r"\s*(?:%|pct|亿|元|万户|万人|倍|x)?", block):
+            r"\s*(%|pct|亿|元|万户|万人|倍|x)?", block):
+        year_context = re.match(r"(?:年|[Qq][1-4](?!\d))", block[mm.end():].lstrip())
+        if mm.group(2) is None and re.fullmatch(r"(?:19|20)\d{2}", mm.group(1)) and year_context:
+            continue
         if not re.search(r"(?<![\d.])" + re.escape(mm.group(1)) + r"(?![\d.])", targets):
             missing.append(mm.group(0).strip())
     if missing:

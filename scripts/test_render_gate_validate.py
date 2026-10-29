@@ -487,6 +487,23 @@ def test_threshold_coverage_validate():
     assert "无对应行" not in warns
 
 
+def test_threshold_coverage_ignores_bare_years():
+    for text in ("订单降至2025年水平、渗透率低于2021年水平", "行业估值低于2016Q3水平"):
+        l1 = _l1_with_43(f"压力测试：{text}时复核，并同步检查订单与现金流变化。")
+        warns = validate_stderr(minimal_fill(l1_html=l1))
+        assert "压力测试阈值" not in warns, f"年份/季度不应被当成跟踪阈值：{warns}"
+
+
+def test_threshold_coverage_keeps_real_numeric_thresholds():
+    cases = (("毛利率降至25%", "25%"), ("产能超过200", "200"),
+             ("产能低于2000吨", "2000"), ("订单降至2025万吨", "2025"),
+             ("营收低于2000", "2000"))
+    for text, value in cases:
+        warns = validate_stderr(minimal_fill(l1_html=_l1_with_43(
+            f"压力测试：{text}时复核，并同步检查订单、资本开支与现金流变化。")))
+        assert "压力测试阈值" in warns and value in warns, f"真实阈值 {value} 不应被漏报"
+
+
 def test_cycle_stages_validate():
     """v4.11.3 阶段卡校验：手写阶段表迁移告警；driver 超宽告警。
     v5.1.2：current ≠1（与渲染同源的有效项口径）→ 拒渲染；缺 name/period 项告警不落图；

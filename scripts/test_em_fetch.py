@@ -1666,6 +1666,19 @@ def test_37_peers_and_no_e5_cli(monkeypatch):
                      ("002001", False), ("600426", False)]
 
 
+def test_cli_help_flags(monkeypatch, capsys):
+    calls = []
+    monkeypatch.setattr(em, "summarize", lambda *args: calls.append(args) or "")
+    monkeypatch.setattr(em._C, "_tushare_token", lambda: "configured")
+    for flag in ("--help", "-h"):
+        monkeypatch.setattr(sys, "argv", ["em_fetch.py", flag])
+        assert em.main() == 0
+        captured = capsys.readouterr()
+        assert "用法:" in captured.out
+        assert captured.err == ""
+    assert not calls
+
+
 def test_38_quality_fallback_uses_v2_risk_wording(monkeypatch):
     monkeypatch.setattr(em, "red_flags", lambda _annual: [])
     monkeypatch.setattr(em, "fetch_audit", lambda _code: None)

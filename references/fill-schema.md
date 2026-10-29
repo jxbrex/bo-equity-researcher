@@ -59,7 +59,7 @@ JSON 原样回填，禁止手估、手算、凭记忆补**。各字段的直填�
 | `red_flag` | 条件 | **红灯标记**：命中红灯填具体项（如 "审计意见非标：无法表示意见"），未命中省略或填 `""`。**熔断硬校验：red_flag 非空时 `position_html` 必须包含「不建议参与」，否则拒渲染** |
 | `thesis_html` | ✓ | Hero 一句话结论（为空 → 告警不拒），**全文提纲挈领句 = 论点 + 关键证据 + 三情景价 + 研究结论**（含 `<span class="scenario-pess/base/opt">` 三情景价）。研究结论只写估值、质量与风险位置，不写分批买卖或加减仓节奏。正例：「全球玻纤龙头+AI电子布第二曲线，中报净利+73.9%兑现高景气，但股东户数单季暴增254.6%且PE处5年90%分位——好公司、坏价格未变。三情景目标价 15.7/37.5/61.8 元，年化中枢 -10.9%——当前价缺乏安全边际」。**只塞三个目标价 = 不合格**（纯文本 <60 字或剥掉三情景价后 <20 字 → 告警）。**一致性硬校验：三个手写价与脚本按 `valuation` 算出的情景中枢价对比，相对偏差 >2% 且绝对差 >0.1 → 拒渲染**；span 类名不齐仅告警；**三 span 全缺且含价格形态 → 拒渲染（v5.1.2，防手写价绕行硬校验）** |
 | `price` / `mcap` / `pe_ttm` | ✓ | Hero 指标卡数值（纯数字字符串）；**price 缺失或无法解析为数字即拒渲染**；**顶层 pe_ttm 与 `valuation_inputs.pe_ttm` 偏差 >1% → 拒渲染（v5.1.2，metric_label 行业口径豁免）；mcap 与 price×valuation.shares 偏差 >5% 告警；horizon 顶层与 valuation 不一致告警；Hero 各 ✓ 字段（含 price_sub_html/mcap_sub/pe_sub）缺失告警（v5.1.2）** |
-| `quote` | 建议 | **E1 落盘防伪（神华 601088 现价造假事故修复）**：`{"source_file":"_em_600989_quote.json","date":"2026-08-28"}`——source_file 指向 `em_fetch --out` 落盘的 E1 JSON；渲染器读取该文件并比对 `price`/`pe_ttm`，**偏差 >1% 拒渲染**（与估值分四件套同级），文件读不到同样拒渲染（防伪链断裂不放行）。**v4.8 扩展到四件套**：`valuation_inputs.pe_ttm` 与落盘 pe_ttm 偏差 >1% 拒；`pe_band` 与落盘历史带完全无交集拒（部分重叠正常）；`risk_free`/`div_yield` 不做硬比对（港股 div_yield 不机械比对；手工估算/税后折算口径须在 .source 注明）。行业口径（`metric_label` 非空）下 pe 两项比对跳过。fill `date` ≥ 2026-09-02 起缺 quote 即拒渲染（此前存量 fill 仅告警豁免），新报告必配。落盘 JSON 另含 `timing`（现价/MA60/MA120/52 周高低，日线序列计算）——**12 章时机判定小表的技术面信号一律取自该字段，禁止手估**（神华假 MA60 同源修复） |
+| `quote` | 建议 | **E1 落盘防伪（神华 601088 现价造假事故修复）**：`{"source_file":"_em_600989_quote.json","date":"2026-08-28"}`——source_file 指向 `em_fetch --out` 落盘的 E1 JSON；`date` 是实际行情交易日，标准格式 `YYYY-MM-DD`；Hero「当前股价」日期照抄此键，8 位 `YYYYMMDD` 自动归一，缺失或其他非法格式回退报告日，不得直接拿报告日冒充交易日；渲染器读取该文件并比对 `price`/`pe_ttm`，**偏差 >1% 拒渲染**（与估值分四件套同级），文件读不到同样拒渲染（防伪链断裂不放行）。**v4.8 扩展到四件套**：`valuation_inputs.pe_ttm` 与落盘 pe_ttm 偏差 >1% 拒；`pe_band` 与落盘历史带完全无交集拒（部分重叠正常）；`risk_free`/`div_yield` 不做硬比对（港股 div_yield 不机械比对；手工估算/税后折算口径须在 .source 注明）。行业口径（`metric_label` 非空）下 pe 两项比对跳过。fill `date` ≥ 2026-09-02 起缺 quote 即拒渲染（此前存量 fill 仅告警豁免），新报告必配。落盘 JSON 另含 `timing`（现价/MA60/MA120/52 周高低，日线序列计算）——**12 章时机判定小表的技术面信号一律取自该字段，禁止手估**（神华假 MA60 同源修复） |
 | `quality_inputs`（落盘子键） | v2 建议必配 | 位于 `quote.source_file` 指向的 JSON，不是 fill 顶层键。由 `em_fetch --quality-v2 --stock-type=成长型 --growth-tier=mid --industry-profile=generic`（按实际分型替换）生成，摘要完整打印 JSON 供照抄。包含 `as_of/profile/status/coverage/sources/meta` 与 1D/1F 机械输入：1D=`f_items/liquidity/red_flags`（生存型含 `cash_runway_months`），其中 `liquidity` 含 `debt_ratio/short_cover/ocf_short_cover`，最后一项用最近完整年度经营现金流÷短期有息负债，供流动性豁免判定；1F=`roic/wacc/incremental_roic/roic_period_months/roic_basis`（生存型含 `cash_runway_months`）。`roic_latest` 只作最新值对照；`roic_normalized_components` 必须保留三个完整年度组成并与最终 ROIC 中位数一致，缺组成或不一致拒评分；`latest` 必须显式给 3/6/9/12 个月。缺失时告警；落盘有而 fill 漏抄、fill 有而落盘缺失、两边不一致均告警；profile 与渲染实际消费的分型不一致、as_of/最新披露/来源日期晚于报告日则拒渲染。未给 profile 时返回 `profile_missing`，不得默认套通用 F；替代人工证据须注明来源，不能冒充机械照抄 |
 | `price_sub_html` / `mcap_sub` / `pe_sub` | ✓ | 指标卡 sub 行（可含 `<span class="up/down">`） |
 | `horizon` | ✓ | 目标价时间维度（如 "12个月"） |
@@ -444,7 +444,8 @@ th 与 rowspan/colspan 均处理），写错或漏写类不影响最终输出。
 （工行 09-11 净息差判断行实证）；tbody 行首格写 `<th>`（如公司名行标题）亦可，样式已与
 td 归一（斑马纹/hover/冻结列全覆盖）。
 v5.8.4 起渲染器统一给 table-scroll 容器注入键盘可达属性（tabindex/role/aria-label，
-纯键盘用户可 Tab 聚焦后方向键横滚），写作侧仍写裸 `<div class="table-scroll">`，无需手加。
+纯键盘用户可 Tab 聚焦后方向键横滚），写作侧仍写裸 `<div class="table-scroll">`，无需手加；
+表格可达性由渲染器负责，写作侧不查外部 Web 规范、不手写重复属性。
 **宽表首列冻结**（≥5 列的数据表，如 10 同业当前指标表与趋势表必用）：`<table class="freeze-first">`——窄屏横向滚动时首列常驻。
 **当前指标表最优/最差标注**（v4.9.1，10 同业对比；补充修订二起随「公司=行」改为**按指标列标注**）：
 每列按指标方向性各标一格——PE/PB/PS/负债率低为优，ROE/毛利率/净利率/增速高为优；最优格

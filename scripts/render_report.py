@@ -63,7 +63,7 @@ from validate import validate_content
 
 # 渲染器版本：嵌入输出 HTML 尾部注释，事后可 grep 验证报告确由本脚本渲染
 # （防"render 报错后手写全文 HTML 绕行"，巨石 2026-08-23 实证）
-RENDERER_VERSION = "v0.11.3"
+RENDERER_VERSION = "v0.11.5"
 
 # Windows 文件名非法字符：\ / : * ? " < > | 及 ASCII 控制字符（\x00-\x1f）
 _WIN_ILLEGAL = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
@@ -470,8 +470,14 @@ def _build_repl_map(ctx: "RenderContext") -> dict:
         missing = [key for key in sc["dimension_results"] if f'data-dim="{key}"' not in l1_html + l3_html]
         if missing:
             raise ValueError(f"v2 缺少维度锚点 data-dim: {missing}")
+    quote_date = str((fill.get("quote") or {}).get("date") or "")
+    if re.fullmatch(r"\d{8}", quote_date):
+        quote_date = f"{quote_date[:4]}-{quote_date[4:6]}-{quote_date[6:]}"
+    elif not re.fullmatch(r"\d{4}-\d{2}-\d{2}", quote_date):
+        quote_date = date
     repl = {
         "DATE": _esc(date),
+        "QUOTE_DATE": _esc(quote_date),
         "COMPANY": _esc(fill["company"]),
         "CODE": _esc(fill["code"]),
         "SUBTITLE": _esc(subtitle),
@@ -736,7 +742,7 @@ def _archive_artifacts(fill: dict, fill_path: str, out_path: str, date: str,
                        quality: float, valuation: float, timing, target_range: str,
                        red_flag: str, backtest: bool, sc: dict = None) -> None:
     """渲染成功后的归档（v4.10 B-min 归档库）：fill 与 E1 防伪落盘移入报告目录 `_archive/`，
-    并往 `_archive/_index.jsonl` 追加一行索引（跨报告对比/评分校准的数据源）。
+    并在 `_archive/_index.jsonl` 登记或更新索引（同一 code/date/html 重渲不重复）。
     只动 `_fill_`/`_em_` 前缀的会话临时文件（测试 fixture 与存量文件不误移）；
     防伪链在 validate 阶段已消费 quote 落盘，渲染成功后移动不断链；
     归档任何失败降级为告警，绝不让已成功的渲染报错。"""
@@ -779,12 +785,28 @@ def _archive_artifacts(fill: dict, fill_path: str, out_path: str, date: str,
             "layer_share": (sc or {}).get("layer_share", {}),
         }
         idx_path = os.path.join(arch_dir, "_index.jsonl")
-        # v5.8.2：追加改「读旧 + 拼新 + PID-tmp + os.replace」原子写（照抄 em_cache.dc_write
-        # 模式）——中断不留半行 JSONL
         old_idx = open(idx_path, encoding="utf-8").read() if os.path.exists(idx_path) else ""
+        row_json = json.dumps(row, ensure_ascii=False)
+        lines, replaced = [], False
+        for line in old_idx.splitlines():
+            try:
+                old = json.loads(line)
+            except ValueError:
+                old = None
+            same_report = (isinstance(old, dict) and
+                           all(old.get(key) == row.get(key) for key in ("code", "date", "html")))
+            if same_report:
+                if not replaced:
+                    lines.append(row_json)
+                    replaced = True
+            else:
+                lines.append(line)
+        if not replaced:
+            lines.append(row_json)
+        # 同一输出报告重渲只更新原行；不同 html 各自保留。PID-tmp + os.replace 防半行 JSONL。
         tmp_idx = f"{idx_path}.{os.getpid()}.tmp"
         with open(tmp_idx, "w", encoding="utf-8") as f:
-            f.write(old_idx + json.dumps(row, ensure_ascii=False) + "\n")
+            f.write("\n".join(lines) + "\n")
         os.replace(tmp_idx, idx_path)
         print(f"归档 → {arch_dir}" + (f"（{'、'.join(moved)} + _index.jsonl）" if moved else "（_index.jsonl）"))
     except OSError as e:

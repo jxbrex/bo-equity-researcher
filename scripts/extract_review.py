@@ -43,7 +43,7 @@ def _txt(html: str) -> str:
 def _sections(html: str) -> dict:
     """按 section 切块 → {章节标题: 块 html}"""
     out = {}
-    for m in re.finditer(r'<div class="section">(.*?)(?=<div class="section">|<div class="disclaimer">)',
+    for m in re.finditer(r'<div class="section"(?:\s[^>]*)?>(.*?)(?=<div class="section"(?:\s[^>]*)?>|<div class="disclaimer">)',
                          html, re.S):
         blk = m.group(1)
         t = re.search(r'<span class="section-title">(.*?)</span>', blk, re.S)
@@ -145,6 +145,9 @@ def extract(path: str) -> dict:
             out["dash_tables"] = _tables(blk)
         if "回测复盘" in title:
             out["review_tables"] = _tables(blk)
+    if not out.get("scenarios"):
+        print("警告：未提取到旧三情景（scenarios）——请核对估值章节结构，回测 fill 不得手工重建",
+              file=sys.stderr)
     # 空结果告警：锚点全空且无任何章节表格 → 大概率模板结构已变更，避免静默输出空 JSON
     anchors_empty = all(out["prev"].get(k) is None for k in ("quality", "valuation", "timing",
                                                              "target_range"))

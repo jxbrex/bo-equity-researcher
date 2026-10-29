@@ -339,6 +339,39 @@ def test_extract_stops_after_first_actual_scenario_table():
     assert out["scenarios"] == [{"scenario": "基础情景", "归母净利": "2 亿"}]
 
 
+def test_extract_current_section_id_and_scenarios():
+    html = '''<div class="section" id="s8"><span class="section-title">估值三情景</span><table>
+      <tr><th>指标</th><th>悲观情景</th><th>基础情景</th><th>乐观情景</th></tr>
+      <tr><td>触发条件</td><td>订单下滑</td><td>订单企稳</td><td>订单加速</td></tr>
+      <tr><td>归母净利</td><td>80 亿</td><td>90 亿</td><td>100 亿</td></tr>
+      <tr><td>PE</td><td>18-20x</td><td>22-25x</td><td>26-30x</td></tr>
+      <tr><td>目标价</td><td>18-20 元</td><td>25-28 元</td><td>32-38 元</td></tr>
+      </table></div>
+    <div class="section" id="s14"><span class="section-title">跟踪仪表盘</span><table>
+      <tr><th>指标</th><th>当前值</th></tr><tr><td>订单</td><td>100 亿</td></tr>
+      </table></div>
+    <div class="section" id="s15"><span class="section-title">回测复盘</span><table>
+      <tr><th>假设</th><th>实际</th></tr><tr><td>90 亿</td><td>92 亿</td></tr>
+      </table></div><div class="disclaimer"></div>'''
+    with tempfile.TemporaryDirectory() as d:
+        out = E.extract(_write(d, "测试股份-600000-7.50-6.5-2026-08-08.html", html))
+    assert [row["触发条件"] for row in out["scenarios"]] == ["订单下滑", "订单企稳", "订单加速"]
+    assert [row["归母净利"] for row in out["scenarios"]] == ["80 亿", "90 亿", "100 亿"]
+    assert [row["PE"] for row in out["scenarios"]] == ["18-20x", "22-25x", "26-30x"]
+    assert [row["目标价"] for row in out["scenarios"]] == ["18-20 元", "25-28 元", "32-38 元"]
+    assert out["dash_tables"][0]["rows"] == [["订单", "100 亿"]]
+    assert out["review_tables"][0]["rows"] == [["90 亿", "92 亿"]]
+
+
+def test_extract_warns_when_scenarios_missing():
+    import contextlib
+    import io
+    buf = io.StringIO()
+    with tempfile.TemporaryDirectory() as d, contextlib.redirect_stderr(buf):
+        E.extract(_write(d, "测试股份-600000-7.50-6.5-2026-08-08.html", FAKE_REPORT))
+    assert "未提取到旧三情景" in buf.getvalue()
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

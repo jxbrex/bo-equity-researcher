@@ -58,7 +58,7 @@ metadata:
   （回测模式 `…-复盘-{日期}.html`；港股代码 5 位数字不带后缀，如 `06082`）。
   模型不要自己命名文件。
 - **归档目录 `_archive/`**（v4.10 起）：渲染成功后 fill、E1 防伪落盘与 `timing_facts.source_file`
-  时机证据由脚本自动移入报告目录 `_archive/`（改名含公司名/代码/日期），并追加索引
+  时机证据由脚本自动移入报告目录 `_archive/`（改名含公司名/代码/日期），并登记或更新索引
   `_archive/_index.jsonl`——跨报告对比与评分校准的数据源；不再删除。
 - **Fallback**：用户明确要求 Markdown 时输出 `.md`，章节顺序与 HTML 版一致（评分用 🟢🟡🔴 徽章 emoji）。
 - 用户要求"直接输出/快速总结"时才在对话内联输出，否则一律写文件。
@@ -73,6 +73,11 @@ metadata:
 - 禁止暗色背景、渐变、投影、外部字体/CDN/JS
 - **色值/字体/布局/类名的全部权威定义在 `assets/report-template.html` + `references/fill-schema.md`，
   模型从不手写 CSS，也不许 Read 模板"学习结构"——写 fragment 需要的类名与骨架见 fill-schema.md**
+- **固定模板 Web 规则已收口（v5.8.4 审核落地）**：本地字体与零外链、响应式表格、标题/段落
+  折行、`prefers-reduced-motion`、延迟渲染与打印回退、表格键盘可达、SVG 可访问名，均由模板、
+  渲染器与 `visual_check.py` 承载。只写 fill JSON 或既有 fragment 不属于手写 Web UI/CSS，
+  **报告产出期禁止调用 modern-web-guidance 或 npx 联网检索**；仅修改模板或新增前端组件时，
+  才在仓库维护流程中另行审核，并把结论固化到模板/脚本/测试，不进入每次报告流程。
 
 ---
 
@@ -344,7 +349,7 @@ if 命中红灯项（财务造假/ST/立案调查/主营不可逆衰退/审计�
    未装 Chrome/Edge 时脚本自动跳过、不阻塞交付。
 3. **完成后（归档由脚本自动完成，v4.10 起不再删除）**：render 成功即把 `_fill_[代码].json`
    与 `quote.source_file` 引用的 E1 落盘移入报告目录 `_archive/`（改名
-   `fill_{公司名}_{代码}_{日期}.json` / `em_{代码}_quote_{日期}.json`），并追加索引行到
+   `fill_{公司名}_{代码}_{日期}.json` / `em_{代码}_quote_{日期}.json`），并登记或更新索引行到
    `_archive/_index.jsonl`。`timing_facts.source_file` 时机证据同时自动归档为
    `timing_{代码}_{日期}.json`；同日重取时自动技术/月线/资金项刷新，旧人工记录只补当前仍为 null 的项，
    筹码与北向/南向等未自动覆盖项保留。保留只读当前根目录的旧时机文件，归档后须先恢复再重取，

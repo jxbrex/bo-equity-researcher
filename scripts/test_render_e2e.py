@@ -42,6 +42,37 @@ def test_currency_hkd():
     assert "{{CUR}}" not in html, "{{CUR}} 必须被替换"
 
 
+def test_hero_price_uses_quote_date():
+    from conftest import prepare_v2_quote
+    with tempfile.TemporaryDirectory() as d:
+        fill = prepare_v2_quote(v2_fill(date="2026-10-29", cycle_html="<p>估值周期分析</p>"), d)
+        fill["quote"]["date"] = "2026-10-28"
+        path = write_fill(fill, d)
+        html = open(R.render(path, out_path=os.path.join(d, "out.html")), encoding="utf-8").read()
+    assert "当前股价（2026-10-28 收盘）" in html
+    assert "报告日期：2026-10-29" in html
+    assert "当前股价（2026-10-29 收盘）" not in html
+
+
+def test_hero_price_date_falls_back_to_report_date():
+    html = render_v2_fill(v2_fill(date="2026-10-29", cycle_html="<p>估值周期分析</p>"))
+    assert "当前股价（2026-10-29 收盘）" in html
+
+
+def test_hero_price_date_normalizes_compact_and_rejects_invalid():
+    from conftest import prepare_v2_quote
+    for raw, expected in (("20261028", "2026-10-28"),
+                          ("东财实时", "2026-10-29"),
+                          ("2026-10-28 15:00", "2026-10-29")):
+        with tempfile.TemporaryDirectory() as d:
+            fill = prepare_v2_quote(v2_fill(date="2026-10-29", cycle_html="<p>估值周期分析</p>"), d)
+            fill["quote"]["date"] = raw
+            path = write_fill(fill, d)
+            html = open(R.render(path, out_path=os.path.join(d, "out.html")), encoding="utf-8").read()
+        assert f"当前股价（{expected} 收盘）" in html
+        assert f"当前股价（{raw} 收盘）" not in html or raw == expected
+
+
 def test_review_dumbbell():
     """回测模式：prev 填了才出三轨哑铃图；回测章=第 13 章（v4.8.1 起提前，在跟踪仪表盘之前）。"""
     fill = minimal_fill(prev={"date": "2026-08-08", "quality": 7.0, "valuation": 5.5,
@@ -147,7 +178,32 @@ def test_archive_after_render():
         R.render(p2, out_path=os.path.join(d, "out2.html"))
         assert os.path.exists(p2), "非 _fill_ 前缀 fill 不得被移动"
         n = len(open(os.path.join(arch, "_index.jsonl"), encoding="utf-8").read().strip().splitlines())
-        assert n == 2, "每次渲染追加一行索引"
+        assert n == 2, "不同输出文件各登记一行索引"
+
+
+def test_archive_same_report_rerender_is_idempotent():
+    fill = minimal_fill()
+    with tempfile.TemporaryDirectory() as d:
+        out = os.path.join(d, "out.html")
+        R.render(write_fill(fill, d), out_path=out)
+        R.render(write_fill(minimal_fill(price="11"), d), out_path=out)
+        lines = open(os.path.join(d, "_archive", "_index.jsonl"), encoding="utf-8").read().splitlines()
+    assert len(lines) == 1, f"同一输出报告重渲不应重复登记，实际 {len(lines)} 行"
+    row = json.loads(lines[0])
+    assert row["html"] == "out.html" and row["price"] == "11", "索引应保留最新一次渲染内容"
+
+
+def test_archive_index_preserves_legacy_rows():
+    with tempfile.TemporaryDirectory() as d:
+        arch = os.path.join(d, "_archive")
+        os.makedirs(arch)
+        idx = os.path.join(arch, "_index.jsonl")
+        with open(idx, "w", encoding="utf-8") as f:
+            f.write('{"legacy": true}\nnot-json\n')
+        R.render(write_fill(minimal_fill(), d), out_path=os.path.join(d, "out.html"))
+        lines = open(idx, encoding="utf-8").read().splitlines()
+    assert lines[:2] == ['{"legacy": true}', "not-json"], "旧索引异常行应原样保留"
+    assert len(lines) == 3
 
 
 def test_if_block_guardrails():

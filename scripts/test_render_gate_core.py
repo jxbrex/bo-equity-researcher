@@ -1120,3 +1120,19 @@ def test_v2_industry_red_flags_derive_warning_without_second_deduction():
         fill["conclusion_html"] = "利润真实性存疑：资产质量两项恶化。" + fill["conclusion_html"]
         fill["score_inputs"]["1F"]["counter_evidence"] = "资产质量恶化可能拖累未来资本回报"
         R.validate_content(fill, R.compute_valuation(fill), sc)
+
+
+def test_fixed_web_guidance_contract():
+    template_path = os.path.join(os.path.dirname(R.__file__), "..", "assets", "report-template.html")
+    template = open(template_path, encoding="utf-8").read()
+    for marker in (
+        "text-wrap: balance",
+        "text-wrap: pretty",
+        "prefers-reduced-motion: no-preference",
+        "@supports (content-visibility: auto)",
+        "content-visibility: visible",
+    ):
+        assert marker in template, f"固定 Web 契约锚点缺失：{marker}"
+    html = render_fill(minimal_fill())
+    assert ('<div class="table-scroll" tabindex="0" role="region" '
+            'aria-label="数据表格（可横向滚动）">') in html

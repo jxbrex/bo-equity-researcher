@@ -777,6 +777,9 @@ def summarize(code: str, years: int, searches: list = None, include_e5: bool = T
 
 
 def main():
+    if any(a in ("--help", "-h") for a in sys.argv[1:]):
+        print(__doc__)
+        return 0
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     opts = {}
     for a in sys.argv[1:]:

@@ -205,6 +205,35 @@
 
 ## 版本历史
 
+### V0.11.5（2026-10-29）— 真实报告运行复核：回测提取、行情日期、归档幂等与 Web 规则收口
+
+> 复核国电南瑞与浪潮信息两份真实会话：两份报告最终均成功交付，双视口无问题；本轮只修会复现的仓库缺陷，
+> 不重写已交付报告，也不把日志噪声扩成重构。固定报告的 Web 规则收回本地模板与测试，运行期不再重复联网查询。
+
+- **旧报告提取兼容当前章节标签**（scripts/extract_review.py）：`_sections` 原只认无属性的
+  `<div class="section">`，当前 `<div class="section" id="s8">` 会导致三情景、仪表盘与复盘表整体
+  静默缺席；现兼容带属性章节，并在 scenarios 缺失时明确告警。国电南瑞 2026-09-24 实样已直接提取
+  三情景、复盘表和仪表盘，不再需要手工重建 `prev.scenarios`。
+- **Hero 行情日与报告日分离**（assets/report-template.html + scripts/render_report.py）：新增
+  `QUOTE_DATE`，取 `quote.date` 而非报告日；支持 `YYYYMMDD` 归一，缺失或非法格式回退报告日。
+  浪潮信息同类 10-29 报告日 / 10-28 交易日夹具通过，非法文本不会直接印上首屏。
+- **归档索引幂等**（scripts/render_report.py）：同一 `(code,date,html)` 重渲更新原行，不再重复追加；
+  不同输出文件名仍分别保留，旧 JSONL 异常行原样保留，原子写不变。历史重复行只在未来重渲时自然归并，
+  本轮不回溯清理用户档案。
+- **CLI 与填报降噪**：`em_fetch.py --help/-h` 正常打印帮助并返回 0；3B 文档明确 visibility.level
+  四枚举，避免把档位描述「合约级可见度」当合法值；4.3 阈值识别仅在年/季度语境豁免四位年份，
+  `2000吨`、`2025万吨` 与无单位 `2000` 等真实阈值仍要求 14 章跟踪。
+- **固定 Web 规则收口**（SKILL.md + references/fill-schema.md + scripts/test_render_gate_core.py）：
+  本地字体/零外链、响应式表格、折行、reduced-motion、延迟渲染与打印回退、表格键盘可达和 SVG
+  可访问名明确由模板/渲染器/visual_check 承载；只填 fill JSON 或既有 fragment 时禁止调用
+  modern-web-guidance 或 npx，模板维护与新增前端组件才另行审核。契约测试经临时变异验证可抓缺失。
+- **验证**：基线 538 passed，终审修复后全套 **549 passed**；golden 13 项通过且零 diff；
+  `visual_check.py` 1280/390 无溢出/折行/裁切。DeepSeek-flash 独立终审发现 quote.date 格式与四位
+  真实阈值两个边界问题，均先 RED 再 GREEN；另复核确认国电南瑞「同业子进程覆盖 quote/timing」
+  是误判，源码只在 `--out` 下落盘，未修假想竞态。`RENDERER_VERSION` v0.11.3 → v0.11.5。
+  本版尚需用户确认后提交发布；旧议题完整结转至 `handoffs/v0.11.5-handoff.md`，历史 handoff
+  归档与发布动作留待用户确认。
+
 ### V0.11.4（2026-10-28）— Tushare 优先、妙想减量与多任务并发
 
 > 目标调整为让 Tushare 多承担固定字段取数、节省妙想每日积分，并覆盖 2–3 个主报告同时运行。

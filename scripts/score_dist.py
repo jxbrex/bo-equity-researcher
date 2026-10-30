@@ -157,12 +157,24 @@ def _base_row(path):
 
 
 def _attach_fill(rows, fills):
+    html_counts = {}
+    for row in rows:
+        key = (row.get("code"), row.get("report_date"))
+        html_counts[key] = html_counts.get(key, 0) + 1
     for row in rows:
         key = (row.get("code"), row.get("report_date"))
         candidates = fills.get(key) or []
         if candidates:
-            preferred = [item for item in candidates if os.path.basename(item[0]).endswith(os.path.basename(row["path"]))]
-            path, fill = preferred[0] if preferred else sorted(candidates, key=lambda item: item[0])[0]
+            report_dir = os.path.dirname(os.path.abspath(row["path"]))
+            same_dir = [item for item in candidates
+                        if os.path.dirname(os.path.dirname(os.path.abspath(item[0]))) == report_dir]
+            if len(same_dir) == 1:
+                path, fill = same_dir[0]
+            elif len(candidates) == 1 and html_counts[key] == 1:
+                path, fill = candidates[0]
+            else:
+                row["fill_conflict"] = True
+                continue
             row["fill_path"], row["fill"] = path, fill
             row["stock_type"] = fill.get("stock_type") or row.get("stock_type") or "未知"
             row["quality_version"] = fill.get("quality_version", row["quality_version"])
@@ -446,6 +458,8 @@ def scan_reports(root: str, fetch_missing: bool = False, evidence_dir: str = Non
     _attach_fill(rows, fills)
     _arbitrate(rows, preferred)
     for row in rows:
+        if row.get("fill_conflict") and row["status"] == "review_only":
+            row.update(status="conflict", canonical=False, reason="同代码同日期 fill 归属冲突")
         _score_row(row, evidence_dir, fetch_missing)
         decision = reviews.get((row.get("code"), row.get("report_date")))
         if decision:

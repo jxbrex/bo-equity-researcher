@@ -309,6 +309,8 @@ def _em_hkf10_annual_rows(code: str, n_years: int = 4) -> list:
     try:
         items = _em_dc("RPT_HKF10_FN_MAININDICATOR", f'(SECUCODE="{code}.HK")',
                        max(20, n_years * 6), "REPORT_DATE")
+    except RateLimitError:
+        raise
     except Exception:
         return []
     rows = []
@@ -559,6 +561,8 @@ def fetch_dupont_factors(secucode: str) -> dict:
         if p:
             out["prev"] = p
         return out
+    except RateLimitError:
+        raise
     except Exception:
         return {}
 
@@ -612,6 +616,8 @@ def fetch_risk_free():
             row = ((d.get("result") or {}).get("data") or [{}])[0]
             y = row.get("EMM00166466")
             return ((row.get("SOLAR_DATE") or "")[:10], round(float(y), 2)) if y is not None else None
+        except RateLimitError:
+            raise
         except Exception:
             return None
 

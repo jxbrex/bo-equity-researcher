@@ -6,7 +6,7 @@
 quality_inputs 双向照抄/profile/披露日对账、gap_plot 分布图与 street 落盘源、
 gap_history 态度变化、dupont 杜邦乘积链、period_track 第 3 章照抄对账、growth_consistency 增速换算对账，
 及 _strict_num/_req_strict/_tol_floor/_audit_pairs 等比对工具
-（_quote_ref 为跨域公共层，见 validate.py）。
+（_quote_ref 为跨域公共层，见 validate_common.py）。
 契约：raise = 硬拒渲染；warns.append = 软告警。
 """
 import json, re
@@ -21,7 +21,7 @@ from charts_base import (
     _period_ratio,
     _PERIOD_VERDICTS)
 from charts_gap import _gh_sort_key
-from validate import (
+from validate_common import (
     _is_hk_code,
     _quote_ref,
     _scenario_by_key)

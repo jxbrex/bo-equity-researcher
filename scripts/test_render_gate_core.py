@@ -767,6 +767,14 @@ def test_zero_crossing_pe_band_friendly_reject():
     raise AssertionError("跨 0 带应拒渲染但未拒")
 
 
+@pytest.mark.parametrize("pe_ttm", [0, -5])
+def test_nonpositive_pe_ttm_cannot_score_as_cheap(pe_ttm):
+    fill = minimal_fill(valuation_inputs={"pe_ttm": pe_ttm, "pe_band": [14.5, 15.5],
+                                          "div_yield": 2, "risk_free": 1.7})
+    calc = R.compute_valuation(fill)
+    assert R.compute_valuation_score(calc, fill["valuation_inputs"]) is None
+
+
 def test_archive_overwrite_warns():
     """#9: 同日重渲时归档 os.replace 静默覆盖上版 fill/quote——补覆盖告警，
     与 _write_html 的输出覆盖告警对称。"""

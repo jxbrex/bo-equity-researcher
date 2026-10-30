@@ -9,6 +9,7 @@ DCF 双卡、regime 偏离系列（pe_band/base_band_regime_dev、regime_scale_d
 决策链（_position_steps 纯函数 + build_position_card + 14 章临界升档行）。
 依赖方向：最底层共享层，被 charts/validate/render_report 导入；自身仅依赖标准库。
 """
+import math
 import re
 import statistics
 import sys
@@ -117,9 +118,13 @@ def _num(v):
     """"390.40" / "18,062.5" / 390.4 → float；取首个数字串，失败返回 None。
     v5.1.2：U+2212 负号（−）归一为 ASCII -——研报/网页复制来的「−1」此前被解析为 +1。"""
     if isinstance(v, (int, float)):
-        return float(v)
-    m = re.search(r"-?\d[\d,]*\.?\d*", str(v).replace("−", "-"))
-    return float(m.group(0).replace(",", "")) if m else None
+        number = float(v)
+    else:
+        m = re.search(r"-?\d[\d,]*\.?\d*", str(v).replace("−", "-"))
+        if not m:
+            return None
+        number = float(m.group(0).replace(",", ""))
+    return number if math.isfinite(number) else None
 
 
 def _fmt(v):
@@ -360,7 +365,7 @@ def compute_valuation_score(calc: dict, inputs: dict, gap_tier=None):
     band = inputs.get("pe_band") or []
     if not isinstance(band, (list, tuple)):
         band = []  # 字符串 "12-16" 按字符切片静默错算（与 _scenario_numbers 守卫同口径）
-    if pe_ttm is None or len(band) < 2:
+    if pe_ttm is None or pe_ttm <= 0 or len(band) < 2:
         return None
     band = [_num(band[0]), _num(band[1])]
     # 带中点 ≤0（跨 0 带如 [-5,5]）时 _map_warranted 的 pe_ttm÷中点 除零/变号裸崩——

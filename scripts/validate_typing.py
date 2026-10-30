@@ -5,13 +5,13 @@
 内容：typing_v2 校验组（枚举标准化/型↔层占比对账/扣非 CAGR 对账/typing_evidence
 必填键/撞车白名单/weights 完整性）及 _bar_values/_hist_cagr/_cagr_adj_reasons
 与分型常量（_TYPE_LAYER/_GROWTH_LAYER/_TYPE_EVIDENCE_KEYS/_TYPE_NONDEFAULT_WEIGHTS
-/_CAGR_ADJ_*）。_normalize_stock_type/_resolve_type_tier 为跨域公共层（validate.py）。
+/_CAGR_ADJ_*）。_normalize_stock_type/_resolve_type_tier 为跨域公共层（validate_common.py）。
 契约：raise = 硬拒渲染；warns.append = 软告警。
 """
 import re
 from scoring import (
     _num)
-from validate import (
+from validate_common import (
     _is_hk_code,
     _normalize_stock_type,
     _resolve_type_tier)

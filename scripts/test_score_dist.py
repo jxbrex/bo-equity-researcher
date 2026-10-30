@@ -122,6 +122,48 @@ def test_same_day_can_be_arbitrated_by_archive_index(tmp_path):
     assert sum(r["status"] == "duplicate" for r in rows) == 1
 
 
+def test_same_day_html_and_fill_stay_in_same_report_directory(tmp_path):
+    for folder, quality, marker, indexed in (("a", 7.0, "WRONG-A", False),
+                                             ("z", 6.0, "RIGHT-Z", True)):
+        base = tmp_path / folder
+        fill = _fill(lineage_marker=marker)
+        _html(base / f"测试股份-600000-{quality:.1f}-5.0-2026-01-01.html",
+              "测试股份", "600000", quality, "2026-01-01")
+        _write_fill(base, fill, index=indexed)
+    row = next(r for r in sd.scan_reports(str(tmp_path)) if r["canonical"])
+    assert os.path.basename(os.path.dirname(row["path"])) == "z"
+    assert os.path.basename(os.path.dirname(os.path.dirname(row["fill_path"]))) == "z"
+    assert row["fill"]["lineage_marker"] == "RIGHT-Z"
+
+
+def test_ambiguous_fill_ownership_enters_conflict(tmp_path):
+    fill = _fill()
+    _html(tmp_path / "测试股份-600000-6.0-5.0-2026-01-01.html",
+          "测试股份", "600000", 6.0, "2026-01-01")
+    first = _write_fill(tmp_path, fill, index=True)
+    second = first.with_name("fill_测试股份_600000_2026-01-01_另一版本.json")
+    second.write_text(json.dumps(fill, ensure_ascii=False), encoding="utf-8")
+    rows = sd.scan_reports(str(tmp_path))
+    assert len(rows) == 1
+    assert rows[0]["status"] == "conflict" and not rows[0]["canonical"]
+
+
+def test_same_day_single_fill_does_not_bind_across_html_directories(tmp_path):
+    _html(tmp_path / "a" / "测试股份-600000-6.0-5.0-2026-01-01.html",
+          "测试股份", "600000", 6.0, "2026-01-01")
+    _write_fill(tmp_path / "a", _fill(lineage_marker="A-ONLY"))
+    html_name = "测试股份-600000-7.0-5.0-2026-01-01.html"
+    _html(tmp_path / "b" / html_name, "测试股份", "600000", 7.0, "2026-01-01")
+    archive = tmp_path / "b" / "_archive"
+    archive.mkdir(parents=True)
+    index_row = {"company": "测试股份", "code": "600000", "date": "2026-01-01", "html": html_name}
+    (archive / "_index.jsonl").write_text(json.dumps(index_row, ensure_ascii=False), encoding="utf-8")
+    rows = sd.scan_reports(str(tmp_path))
+    b_row = next(r for r in rows if os.path.basename(os.path.dirname(r["path"])) == "b")
+    assert b_row["status"] == "conflict" and not b_row["canonical"]
+    assert not any(r["canonical"] for r in rows)
+
+
 def test_missing_evidence_does_not_score(tmp_path):
     fill = _fill()
     _html(tmp_path / "测试股份-600000-6.0-5.0-2026-01-01.html", "测试股份", "600000", 6.0, "2026-01-01")

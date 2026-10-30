@@ -35,7 +35,7 @@ def _stmt(code, api, as_of, annual=True):
     if annual:
         rows = [r for r in rows if (r.get("end_date") or "").endswith("1231")]
     if api in ("income", "balancesheet"):
-        rows = [r for r in rows if str(r.get("report_type")) == "1"]
+        rows = [r for r in rows if str(r.get("report_type")) in {"1", "4"}]
     return rows
 
 

@@ -21,7 +21,7 @@ from charts_base import (
     _YOY_TEXT,
     parse_stage_period)
 from charts_cycle import _pe_band_ok
-from validate import (
+from validate_common import (
     _HTML_FIELDS,
     _resolve_type_tier,
     _anchor_unanchored_type)

@@ -11,7 +11,7 @@ import tempfile
 from html import unescape as _html_unescape
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from validate import _is_hk_code
+from validate_common import _is_hk_code
 from conftest import (
     minimal_fill, full_fill, expect_valueerror, validate_stderr, write_fill,
     render_fill, period_fill,
@@ -647,11 +647,11 @@ def test_gap_history_prose_dupe():
 
 
 def test_gh_sort_key_single_source():
-    """v5.8.2：validate 漏抄判定的排序键与渲染端同源——validate 直接 import
+    """v5.8.2：validate_audit 漏抄判定的排序键与渲染端同源——直接 import
     charts_gap._gh_sort_key（v5.8.1 的内联复制已删，渲染端排序策略再变时校验端跟随）。"""
     import charts_gap
-    import validate
-    assert validate._gh_sort_key is charts_gap._gh_sort_key, \
+    import validate_audit
+    assert validate_audit._gh_sort_key is charts_gap._gh_sort_key, \
         "校验端排序键必须与渲染端是同一函数对象（同源 import，禁内联复制）"
 
 

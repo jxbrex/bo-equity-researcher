@@ -2022,3 +2022,56 @@ def test_52_report_rc_budget_multiprocess_lock_and_cache(tmp_path):
     assert crashed.exitcode == 1
     import em_cache
     assert em_cache.reserve_report_rc_slot(lock_dir, time.time()) == 0
+
+
+def _expect_rate_limit(call):
+    try:
+        call()
+    except em_core.RateLimitError:
+        return
+    raise AssertionError("RateLimitError 应穿透，不得静默降级")
+
+
+def test_53_monthly_rate_limit_passthrough(monkeypatch):
+    import em_market
+
+    monkeypatch.setattr(em_market._C, "get", lambda _url: {"data": {"klines": ["2026-10-01,23.31"]}})
+    monkeypatch.setattr(em_market, "fetch_quote",
+                        lambda *_args: (_ for _ in ()).throw(em_core.RateLimitError("HTTP 429 mock")))
+    _expect_rate_limit(lambda: em_market._em_kline_monthly("1.600000", 1, False))
+
+
+def test_54_dupont_rate_limit_passthrough(monkeypatch):
+    import em_finance
+
+    monkeypatch.setattr(em_finance, "_em_f10",
+                        lambda *_args, **_kwargs: (_ for _ in ()).throw(em_core.RateLimitError("HTTP 429 mock")))
+    _expect_rate_limit(lambda: em_finance.fetch_dupont_factors("600000.SH"))
+
+
+def test_55_hkf10_rate_limit_passthrough(monkeypatch):
+    import em_finance
+
+    monkeypatch.setattr(em_finance, "_em_dc",
+                        lambda *_args: (_ for _ in ()).throw(em_core.RateLimitError("HTTP 429 mock")))
+    _expect_rate_limit(lambda: em_finance._em_hkf10_annual_rows("00700"))
+
+
+def test_56_risk_free_rate_limit_not_cached(monkeypatch):
+    import em_finance
+
+    cache = {}
+    monkeypatch.setattr(em_finance, "_RF_CACHE", cache)
+    calls = []
+
+    def flaky_get(_url):
+        calls.append(_url)
+        if len(calls) == 1:
+            raise em_core.RateLimitError("HTTP 429 mock")
+        return {"result": {"data": [{"SOLAR_DATE": "2026-10-30", "EMM00166466": 1.75}]}}
+
+    monkeypatch.setattr(em_finance._C, "get", flaky_get)
+    _expect_rate_limit(em_finance.fetch_risk_free)
+    assert cache == {}, "429 失败不得进入按日缓存"
+    assert em_finance.fetch_risk_free() == ("2026-10-30", 1.75)
+    assert len(calls) == 2, "失败后下一次调用必须重新请求"

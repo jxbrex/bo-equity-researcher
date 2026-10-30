@@ -3,6 +3,18 @@
 本文件收纳 SKILL.md 正文剔除的事故实证典故，格式为「规则 → 典故来源」，按主题分组。
 规则本体以 SKILL.md / references/*.md 为准，此处只保留来历备查。
 
+## 2026-10-30 热核审计第 1–6 项修复（v0.11.7）
+
+- 非正 `pe_ttm` 不再进入“越低越便宜”映射；东财月线、杜邦、港股年表与无风险利率四处 429 恢复硬停，
+  无风险利率限流失败不进入按日缓存。
+- `score_dist` 同日 HTML 只绑定同报告目录的唯一 fill，归属不明标冲突；多份 HTML 时禁止跨目录使用
+  全局唯一 fill，财务机械输入保留重述报表并由既有最新公告逻辑选择调整行。
+- 共享 `_num` 对 NaN/Infinity（含超长数字字符串）返回 None，散点图 bands 同样校验；
+  公共校验工具移至 `validate_common.py`，五个域模块解除循环导入，`validate.py` 仅保留实际调度所需导入。
+- 新增 14 项反例均先 RED 后 GREEN；全量 `python -m pytest scripts/ -q -p no:cacheprovider` →
+  **570 passed**。正常输入的 13 项 golden 全过、未重建；`RENDERER_VERSION` v0.11.6 → v0.11.7。
+  本版经用户确认后按仓库流程提交、push/tag/Release/deploy。
+
 ## 2026-10-30 防复发修订（v0.11.6）
 
 - 九维 `score_inputs` 字段契约补全：逐维字段/类型/枚举/必填条件、12 种 industry_profile、

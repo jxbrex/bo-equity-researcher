@@ -15,6 +15,21 @@ from conftest import (
     _period_ref_file, v2_fill, prepare_v2_quote, render_v2_fill,
 )
 
+def test_validate_domain_modules_standalone_import():
+    import subprocess
+
+    failures = {}
+    scripts_dir = os.path.dirname(os.path.abspath(__file__))
+    for name in ("validate_audit", "validate_charts", "validate_html",
+                 "validate_typing", "validate_valuation"):
+        result = subprocess.run([sys.executable, "-c", f"import {name}"], cwd=scripts_dir,
+                                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                                env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
+        if result.returncode:
+            failures[name] = (result.stderr or result.stdout).strip().splitlines()[-1]
+    assert not failures, failures
+
+
 def test_validate_warns_reach_stderr():
     """v4.9 validate 告警路径：触发告警的 fill → stderr 有「内容校验」前缀输出。"""
     fill = minimal_fill(subtitle="测试行业 · 报告日期：2026-01-01")

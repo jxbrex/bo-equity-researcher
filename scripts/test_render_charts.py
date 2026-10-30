@@ -261,6 +261,33 @@ def test_peers_label_within_bounds():
     assert found, "右缘同业标签未渲染"
 
 
+def test_num_rejects_nonfinite_values():
+    from scoring import _num
+
+    for value in (float("nan"), float("inf"), float("-inf"), "9" * 400):
+        assert _num(value) is None
+
+
+def test_peers_plot_nonfinite_bands_are_rejected():
+    for field, baseline in (("pe_bands", 15), ("roe_bands", 8)):
+        for bad in (float("nan"), float("inf"), float("-inf")):
+            plot = {"points": [{"name": "同业甲", "roe": 12, "pe": 15},
+                               {"name": "同业乙", "roe": 18, "pe": 20}],
+                    field: [baseline, bad]}
+            assert R.build_peers_plot({"peers_plot": plot}) == ""
+
+
+def test_peers_plot_nonfinite_point_is_skipped():
+    for bad in (float("nan"), float("inf"), float("-inf")):
+        html = R.build_peers_plot({"peers_plot": {"points": [
+            {"name": "坏值", "roe": bad, "pe": 10},
+            {"name": "同业甲", "roe": 12, "pe": 15},
+            {"name": "同业乙", "roe": 18, "pe": 20}]}})
+        assert "坏值" not in html
+        assert "同业甲" in html and "同业乙" in html
+        assert "nan" not in html.lower() and "inf" not in html.lower()
+
+
 def test_segments_chain_charts():
     """v4.8 业务构成图（4.1 锚点 <!--SEGMENTS-->）与产业链图（4.2 锚点 <!--CHAIN-->）：
     锚点在位→原位替换；锚点缺失→追加章末+告警；字段缺失→锚点静默清除；占比和偏离→告警。"""

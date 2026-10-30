@@ -3,7 +3,7 @@
 基于「质量 × 估值 × 时机」三轨评分框架的个股深度分析技能（Kimi Code / ZCode 通用）。
 一键取数、脚本拼装，产出单文件自包含 HTML 研究报告。
 
-当前发布：**v0.11.3**（2026-10-27）。由 v5.10.1 重置发布编号，不是评分口径回退；
+当前发布：**v0.11.7**（2026-10-30）。由 v5.10.1 重置发布编号，不是评分口径回退；
 `quality_version: 2` 保持不变。
 
 > ⚠️ 本技能产出的报告为 AI 生成的研究笔记，不构成投资建议。
@@ -254,7 +254,8 @@ bo-equity-researcher/
 │   ├── em_cache.py             # 磁盘缓存原语 + TTL 分档常量（em_fetch 拆分模块）
 │   ├── render_report.py        # fill JSON → 最终 HTML（评分计算+图形生成+校验+自动命名）
 │   ├── align_fix.py            # 表格对齐自动修正机（渲染末道 transform）+ 时机小表自动补类
-│   ├── validate.py             # fill 内容校验总入口 + 跨域公共层（调度清单/re-export）
+│   ├── validate.py             # fill 内容校验调度入口（固定顺序调用五个域模块）
+│   ├── validate_common.py      # 跨校验域公共常量与工具（无反向依赖）
 │   ├── validate_audit.py       # 照抄对账/落盘防伪/质量输入与预期差校验
 │   ├── validate_charts.py      # 图字段、复盘结构、周期与敏感性覆盖校验
 │   ├── validate_html.py        # 正文 HTML 纪律与写作/结构校验

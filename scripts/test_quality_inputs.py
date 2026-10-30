@@ -64,6 +64,18 @@ def test_duplicate_period_uses_available_then_no_later_restatement(monkeypatch):
     assert result["meta"]["latest_parent_net_profit"] == 100
 
 
+def test_restated_income_uses_latest_adjusted_row(monkeypatch):
+    rows = [
+        {"end_date": "20251231", "report_type": "1", "ann_date": "20260320", "total_revenue": 100},
+        {"end_date": "20251231", "report_type": "4", "ann_date": "20260410", "total_revenue": 80},
+    ]
+    monkeypatch.setattr(qi._C, "ts_call", lambda *args, **kwargs: rows)
+    visible, _ = qi._visible(qi._stmt("600000", "income", "20261231"), "20261231")
+    selected = qi._pick_latest_per_period(visible)[0]
+    assert selected["report_type"] == "4"
+    assert selected["total_revenue"] == 80
+
+
 def test_missing_ann_date_is_date_unknown_not_ok(monkeypatch):
     rows = _bundle(_rows(2025, None))
     _install(monkeypatch, rows)

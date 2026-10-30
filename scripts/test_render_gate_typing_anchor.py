@@ -94,7 +94,7 @@ def test_typing_v2_weights_half_filled():
 def test_hist_cagr_guard():
     """P0-2（v5.4.0 审计）：_hist_cagr 的扣非柱值必须与 years 等长且全可解析，否则 None——
     zip 静默截断会把 CAGR 窗口算错，而本数驱动拒渲染门禁（明细缺失即拒）。"""
-    from validate import _hist_cagr
+    from validate_typing import _hist_cagr
     assert _hist_cagr(minimal_fill()) is not None    # 夹具扣非柱 [75,79,83,86,88] / 5 年
     short = minimal_fill()
     short["fin_trend"]["panels"][1]["bars"][1]["values"] = [75, 79]           # 短柱

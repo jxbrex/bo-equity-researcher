@@ -18,7 +18,7 @@ from scoring import (
     _parse_horizon_months,
     REGIME_DEV_THRESHOLD,
     regime_scale_devs)
-from validate import (
+from validate_common import (
     _scenario_by_key,
     _normalize_stock_type,
     _resolve_type_tier,

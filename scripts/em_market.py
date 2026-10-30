@@ -210,6 +210,8 @@ def _em_kline_monthly(secid: str, years: int, is_hk: bool = False) -> list:
             latest = out[-1]["close"]
             if latest and abs(latest - ref) / ref > 0.5 and abs(latest * 100 - ref) / ref < 0.2:
                 out = [{**k, "close": round(k["close"] * 100, 2)} for k in out]
+    except RateLimitError:
+        raise
     except Exception:
         pass
     return out

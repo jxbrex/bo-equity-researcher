@@ -170,8 +170,10 @@ def build_peers_plot(fill: dict) -> str:
     if not pp:
         return ""
     points = pp.get("points") or []
-    pe_bands = pp.get("pe_bands") or [15.0, 25.0]
-    roe_bands = pp.get("roe_bands") or [8.0, 15.0]
+    pe_bands = [_num(v) for v in (pp.get("pe_bands") or [15.0, 25.0])]
+    roe_bands = [_num(v) for v in (pp.get("roe_bands") or [8.0, 15.0])]
+    if len(pe_bands) != 2 or len(roe_bands) != 2 or any(v is None for v in pe_bands + roe_bands):
+        return ""
     pts = []
     for p in points:
         roe, pe = _num(p.get("roe")), _num(p.get("pe"))

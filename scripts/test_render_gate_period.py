@@ -304,7 +304,7 @@ def test_period_track_key_drift():
     （conftest._PERIOD_REF_KEYS）三处必须对齐——任一处加键忘同步即红
     （end_date/gm 为生产端内部键，不入参照）。"""
     import em_finance
-    import validate as V
+    import validate_audit as V
     ref = set(_PERIOD_REF_KEYS)
     assert set(em_finance._PERIOD_TRACK_KEYS) - {"end_date", "gm"} == ref, \
         "生产端常量 vs 落盘参照键集漂移"

@@ -20,7 +20,7 @@ from charts_base import (
     _C_BLUE,
     _sensitivity_items,
     _gap_dim_ok)
-from validate import (
+from validate_common import (
     _HTML_FIELDS,
     _HTML_TABLE_FIELDS,
     _quote_ref,

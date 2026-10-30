@@ -505,6 +505,35 @@ def test_growth_plot():
     R.validate_content(f, R.compute_valuation(f))   # 未盈利豁免，不拒
 
 
+def test_growth_plot_without_consensus_and_with_text_yoy():
+    fill = minimal_fill(growth_plot={
+        "hist": [{"y": "2023", "np": 10.0}, {"y": "2024", "np": "扭亏"}, {"y": "2025", "np": 12.0}],
+        "fcst": [{"y": "2026E", "np_lo": 5, "np_hi": 10, "np_consensus": None}]})
+    html = build_growth_plot(fill)
+    assert html and "扭亏" in html
+    assert "polygon" not in html and "差 " not in html
+    assert "无当前卖方净利一致预期" in html
+    R.validate_content(fill, R.compute_valuation(fill))
+
+
+def test_growth_plot_is_optional_when_latest_profit_is_negative():
+    fill = minimal_fill(growth_plot=None)
+    for panel in fill["fin_trend"]["panels"]:
+        for bar in panel.get("bars") or []:
+            if "归母净利" in str(bar.get("name")) and "扣非" not in str(bar.get("name")):
+                bar["values"][-1] = -0.5
+    R.validate_content(fill, R.compute_valuation(fill))
+
+
+def test_scenario_profit_and_price_precision():
+    fill = minimal_fill(price="15.72")
+    for scenario, profit in zip(fill["valuation"]["scenarios"], (0.325, 0.64, 0.85)):
+        scenario["profit"] = profit
+    html = R.build_scenario_block(R.compute_valuation(fill))
+    assert "0.33 亿" in html and "0.64 亿" in html and "0.85 亿" in html
+    assert "现价 15.72" in html
+
+
 def test_scenario_cards_eval_colors():
     """v4.9 颜色语义拆分：三指标卡赔率/离散度用 good/bad（评价色），中枢期望收益仍 up/down。"""
     calc = R.compute_valuation(minimal_fill())

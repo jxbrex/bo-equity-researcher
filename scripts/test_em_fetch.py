@@ -1689,6 +1689,18 @@ def test_38_quality_fallback_uses_v2_risk_wording(monkeypatch):
     assert "D→红灯" in text
 
 
+def test_38b_red_flags_turnover_uses_full_five_year_window():
+    rows = [{"YSZKZZTS": receivable, "CHZZTS": inventory, "NCO_NETPROFIT": 1.0, "XSMLL": 25.0}
+            for receivable, inventory in ((176, 140), (137, 119), (152, 127), (137, 110), (104, 76))]
+    flags = em.red_flags(rows)
+    assert sum(item.startswith("✗") for item in flags) == 2
+    short_rows = rows[:2]
+    assert sum(item.startswith("△") for item in em.red_flags(short_rows)) >= 2
+    cash_rows = [dict(row, NCO_NETPROFIT=value)
+                 for row, value in zip(rows, (1.0, 1.0, 1.0, 0.5, 0.5))]
+    assert em.red_flags(cash_rows)[0].startswith("✓")
+
+
 def test_39_no_e5_rejects_target_evidence_flags(monkeypatch, capsys):
     calls = []
     monkeypatch.setattr(em, "summarize", lambda *args: calls.append(args) or "")

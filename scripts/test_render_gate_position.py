@@ -336,7 +336,7 @@ def test_consensus_np_cross_check():
         assert "consensus_np" in out and "漏抄" in out, "落盘有 fill 无应软告警"
         # 双向皆缺 → 通过且无告警
         out2 = validate_stderr(minimal_fill(quote={"source_file": ref2, "date": "2026-08-27"}))
-        assert "consensus_np" not in out2, "双向皆缺不应告警"
+        assert "valuation_inputs.consensus_np" not in out2, "估值输入双向皆缺不应告警"
 
 
 def test_edge_upgrade_rows():

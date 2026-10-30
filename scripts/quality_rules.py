@@ -247,7 +247,9 @@ def _eval_1a(spec, context):
         band = "B"
     else:
         band = "C"
-    steps = [{"id": "1A.GROWTH.CHECK", "evidence": f"增速{growth}%/TAM{tam}/渗透率{penetration}%", "delta": 0}]
+    tam_txt = "未获取" if tam is None else f"{tam:g}"
+    penetration_txt = "未获取" if penetration is None else f"{penetration:g}%"
+    steps = [{"id": "1A.GROWTH.CHECK", "evidence": f"增速{growth}%/TAM{tam_txt}/渗透率{penetration_txt}", "delta": 0}]
     if top_missing:
         steps.append({"id": "1A.TOP_EVIDENCE.UNKNOWN", "evidence": "缺" + "/".join(top_missing) + "，最高只能落B档", "delta": 0})
     return _finish("1A", band, BAND_BASE[band][2], steps, spec, cap=7.9 if top_missing else None)

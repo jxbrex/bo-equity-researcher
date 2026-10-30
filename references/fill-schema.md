@@ -43,7 +43,7 @@ JSON 原样回填，禁止手估、手算、凭记忆补**。各字段的直填�
 | `date` | ✓ | 报告日期，必须严格 YYYY-MM-DD 格式（不匹配即拒渲染） |
 | `subtitle` | ✓ | 副标题（行业标签 · 一句话定位）。**禁止包含报告日期**——模板 Hero 自动追加「｜报告日期：date」，手写会渲染出两次 |
 | `quality_version` | 条件（新报告必填 2） | 报告日 ≥2026-10-24 必须显式填 `2`；既有三轨报告缺省为 1，pre-v4 单轨综合分标 `legacy-single-track`。不同版本只并列质量分，不计算差值；v1 字段仅供历史重渲 |
-| `score_inputs` | v2 必填 | **九维结构化评分输入**，键为 1A-1F/3A-3C；规则、必需事实、档位与行业映射唯一权威见 `scoring.md`「九维规则总表」。脚本计算最终分与得分链，缺失不出中性分、不重归一化。每维可含 `counter_evidence`（≥8 或 ≤3 时必填）与 `custom`（清单外 ±1，须 `id/points/reason/evidence`，复合调整合计仍限 ±1）；1D 用 `red_flags`/`red_flag_materiality`，F 因果归并须 `f_causal_evidence`，行业 `not_applicable` 须 `industry_check_evidence`；声明不具重大性时 `red_flag_materiality_evidence` 必须含 `scale`（含数值规模）与 `source`（可核验来源），缺任一仍扣分；成长型 1D 另可在 `g_checks` 填 `rd_intensity_evidence`/`capex_intensity_evidence`，只展示、不另算 G 分；1F 最新累计期须显式给 3/6/9/12 个月，正常化须 `roic_normalized_components` 三个完整年度值并与 ROIC 中位数一致，缺组成或不一致拒评分；3B 每项贡献须为 0—1 有限数；3C 仅过去、超期或非法月份不得回退 C。**机械落盘缺失但已人工核实的字段，在该维 `manual_evidence` 按不含维度名的叶级路径登记，如 `"f_items.long_debt_down":{"source":"2025年报…","note":"两年长期有息负债逐项对照"}`；`source` 与 `note` 均必填，父级打包说明无效。它只解释“落盘缺失”，不得覆盖落盘已有但不同的值；漏抄与冲突仍告警。展示层只把规则 ID 放 `data-rule-id`，报告正文改为最终分/定档起点/实际加减分/生效上限与中文分组依据，不显示内部编号、Python 布尔值或字典** |
+| `score_inputs` | v2 必填 | **九维结构化评分输入**，键为 1A-1F/3A-3C；**字段名、类型、枚举、必填条件与行业变体见下方「score_inputs 九维字段契约」**；规则、档位与行业映射见 `scoring.md`「九维规则总表」。脚本计算最终分与得分链，缺失不出中性分、不重归一化。每维可含 `counter_evidence`（≥8 或 ≤3 时必填）与 `custom`（清单外 ±1，须 `id/points/reason/evidence`，复合调整合计仍限 ±1）；1D 用 `red_flags`/`red_flag_materiality`，F 因果归并须 `f_causal_evidence`，行业 `not_applicable` 须 `industry_check_evidence`；声明不具重大性时 `red_flag_materiality_evidence` 必须含 `scale`（含数值规模）与 `source`（可核验来源），缺任一仍扣分；成长型 1D 另可在 `g_checks` 填 `rd_intensity_evidence`/`capex_intensity_evidence`，只展示、不另算 G 分；1F 最新累计期须显式给 3/6/9/12 个月，正常化须 `roic_normalized_components` 三个完整年度值并与 ROIC 中位数一致，缺组成或不一致拒评分；3B 每项贡献须为 0—1 有限数；3C 仅过去、超期或非法月份不得回退 C。**机械落盘缺失但已人工核实的字段，在该维 `manual_evidence` 按不含维度名的叶级路径登记，如 `"f_items.long_debt_down":{"source":"2025年报…","note":"两年长期有息负债逐项对照"}`；`source` 与 `note` 均必填，父级打包说明无效。它只解释“落盘缺失”，不得覆盖落盘已有但不同的值；漏抄与冲突仍告警。展示层只把规则 ID 放 `data-rule-id`，报告正文改为最终分/定档起点/实际加减分/生效上限与中文分组依据，不显示内部编号、Python 布尔值或字典** |
 | `scores` | v1 必填；v2 禁填 | 旧三轨 9 维最终分对象。v2 非空即拒渲染，不得用手工分替代 `score_inputs` |
 | `valuation_score` | 无需填写 | **估值分永远由脚本计算**（四件套，见 `valuation_inputs`），fill 里不再需要该字段——填了也被脚本计算值覆盖 |
 | `valuation_inputs` | ✓ | **估值分四件套输入（必填，缺键拒渲染）**：`{"pe_ttm":13.5,"pe_band":[14.5,15.5],"div_yield":1.6,"risk_free":1.7}`（pe_ttm 现价 PE、pe_band 合理带 [低,高]、div_yield 税后股息率 %、risk_free 无风险利率 %）。脚本据此自动算估值分，并在 8 估值章末尾汇总卡生成四件套明细（7 章只汇总质量分，不重复估值/时机明细）。**可选 `metric_label`**（如 "P/NAV"、"P/rNPV"、"P/EV"、"经调整PE"）：行业附录市值口径（见 `scoring.md`「市值口径三情景」节）下替换过程卡 PE(TTM) 标签，pe_ttm/pe_band 数值语义随之变为对应比率，映射公式不变；**可选 `consensus_np`**（v5.0，当年卖方一致预期归母净利均值，亿元，照抄 em_fetch 落盘 `consensus_np.np_avg`，禁手估；v5.1.0 起东财降级源亦落盘：当年 EPS 均值×总股本换算，落盘 `src` 键标记口径）——乐观税门禁输入（规则语义唯一权威见 `scoring.md`「决策层三机制（v5.0）」节，不复述）；无卖方覆盖则不填，过程卡自动标注「乐观税未检」 |
@@ -60,7 +60,7 @@ JSON 原样回填，禁止手估、手算、凭记忆补**。各字段的直填�
 | `thesis_html` | ✓ | Hero 一句话结论（为空 → 告警不拒），**全文提纲挈领句 = 论点 + 关键证据 + 三情景价 + 研究结论**（含 `<span class="scenario-pess/base/opt">` 三情景价）。研究结论只写估值、质量与风险位置，不写分批买卖或加减仓节奏。正例：「全球玻纤龙头+AI电子布第二曲线，中报净利+73.9%兑现高景气，但股东户数单季暴增254.6%且PE处5年90%分位——好公司、坏价格未变。三情景目标价 15.7/37.5/61.8 元，年化中枢 -10.9%——当前价缺乏安全边际」。**只塞三个目标价 = 不合格**（纯文本 <60 字或剥掉三情景价后 <20 字 → 告警）。**一致性硬校验：三个手写价与脚本按 `valuation` 算出的情景中枢价对比，相对偏差 >2% 且绝对差 >0.1 → 拒渲染**；span 类名不齐仅告警；**三 span 全缺且含价格形态 → 拒渲染（v5.1.2，防手写价绕行硬校验）** |
 | `price` / `mcap` / `pe_ttm` | ✓ | Hero 指标卡数值（纯数字字符串）；**price 缺失或无法解析为数字即拒渲染**；**顶层 pe_ttm 与 `valuation_inputs.pe_ttm` 偏差 >1% → 拒渲染（v5.1.2，metric_label 行业口径豁免）；mcap 与 price×valuation.shares 偏差 >5% 告警；horizon 顶层与 valuation 不一致告警；Hero 各 ✓ 字段（含 price_sub_html/mcap_sub/pe_sub）缺失告警（v5.1.2）** |
 | `quote` | 建议 | **E1 落盘防伪（神华 601088 现价造假事故修复）**：`{"source_file":"_em_600989_quote.json","date":"2026-08-28"}`——source_file 指向 `em_fetch --out` 落盘的 E1 JSON；`date` 是实际行情交易日，标准格式 `YYYY-MM-DD`；Hero「当前股价」日期照抄此键，8 位 `YYYYMMDD` 自动归一，缺失或其他非法格式回退报告日，不得直接拿报告日冒充交易日；渲染器读取该文件并比对 `price`/`pe_ttm`，**偏差 >1% 拒渲染**（与估值分四件套同级），文件读不到同样拒渲染（防伪链断裂不放行）。**v4.8 扩展到四件套**：`valuation_inputs.pe_ttm` 与落盘 pe_ttm 偏差 >1% 拒；`pe_band` 与落盘历史带完全无交集拒（部分重叠正常）；`risk_free`/`div_yield` 不做硬比对（港股 div_yield 不机械比对；手工估算/税后折算口径须在 .source 注明）。行业口径（`metric_label` 非空）下 pe 两项比对跳过。fill `date` ≥ 2026-09-02 起缺 quote 即拒渲染（此前存量 fill 仅告警豁免），新报告必配。落盘 JSON 另含 `timing`（现价/MA60/MA120/52 周高低，日线序列计算）——**12 章时机判定小表的技术面信号一律取自该字段，禁止手估**（神华假 MA60 同源修复） |
-| `quality_inputs`（落盘子键） | v2 建议必配 | 位于 `quote.source_file` 指向的 JSON，不是 fill 顶层键。由 `em_fetch --quality-v2 --stock-type=成长型 --growth-tier=mid --industry-profile=generic`（按实际分型替换）生成，摘要完整打印 JSON 供照抄。包含 `as_of/profile/status/coverage/sources/meta` 与 1D/1F 机械输入：1D=`f_items/liquidity/red_flags`（生存型含 `cash_runway_months`），其中 `liquidity` 含 `debt_ratio/short_cover/ocf_short_cover`，最后一项用最近完整年度经营现金流÷短期有息负债，供流动性豁免判定；1F=`roic/wacc/incremental_roic/roic_period_months/roic_basis`（生存型含 `cash_runway_months`）。`roic_latest` 只作最新值对照；`roic_normalized_components` 必须保留三个完整年度组成并与最终 ROIC 中位数一致，缺组成或不一致拒评分；`latest` 必须显式给 3/6/9/12 个月。缺失时告警；落盘有而 fill 漏抄、fill 有而落盘缺失、两边不一致均告警；profile 与渲染实际消费的分型不一致、as_of/最新披露/来源日期晚于报告日则拒渲染。未给 profile 时返回 `profile_missing`，不得默认套通用 F；替代人工证据须注明来源，不能冒充机械照抄 |
+| `quality_inputs`（落盘子键） | v2 建议必配 | 位于 `quote.source_file` 指向的 JSON，不是 fill 顶层键。由 `em_fetch --quality-v2 --stock-type=成长型 --growth-tier=mid --industry-profile=generic`（按实际分型替换）生成，摘要完整打印 JSON 供照抄。包含 `as_of/profile/status/coverage/sources/meta` 与按 profile 变化的 1D/1F 机械输入：通用 F  profile 为 `f_items/liquidity/red_flags` 与 ROIC 组，金融/开发地产主要为专项 `red_flags`，互联网平台为 `review_only` 与专项 flag，生存型为 `cash_runway_months`；不是每个 profile 都有 f_items/liquidity/ROIC，缺项只能人工补证，详见下方行业矩阵。通用 F 的 `liquidity` 含 `debt_ratio/short_cover/ocf_short_cover`，最后一项用最近完整年度经营现金流÷短期有息负债，供流动性豁免判定；通用 1F=`roic/wacc/incremental_roic/roic_period_months/roic_basis`。`roic_latest` 只作最新值对照；`roic_normalized_components` 必须保留三个完整年度组成并与最终 ROIC 中位数一致，缺组成或不一致拒评分；`latest` 必须显式给 3/6/9/12 个月。缺失时告警；落盘有而 fill 漏抄、fill 有而落盘缺失、两边不一致均告警；profile 与渲染实际消费的分型不一致、as_of/最新披露/来源日期晚于报告日则拒渲染。未给 profile 时返回 `profile_missing`，不得默认套通用 F；替代人工证据须注明来源，不能冒充机械照抄 |
 | `price_sub_html` / `mcap_sub` / `pe_sub` | ✓ | 指标卡 sub 行（可含 `<span class="up/down">`） |
 | `horizon` | ✓ | 目标价时间维度（如 "12个月"） |
 | `target_range` / `target_sub_html` | ✓ | 目标价区间卡。**target_range = 基础情景目标价区间**（如 "86-93"），脚本按 `valuation` 自算，不一致按计算值覆盖——**不是三情景全区间**（误填成悲观~乐观全区间会被覆盖）；target_sub_html 写该区间对应现价的空间说明（**只写定性，禁写具体百分比/价格数字——区间被脚本覆盖后手写数字与卡面失配，v5.1.2 起告警**） |
@@ -71,6 +71,7 @@ JSON 原样回填，禁止手估、手算、凭记忆补**。各字段的直填�
 | `l4_html` | ✓ | **风险章正文**：红灯 hero 三卡 + 风险登记/旧版黄灯区 + 损失预演三联卡。**v2 在黄灯区只写且只写一个 `<!--RISK_REGISTER-->` 锚点**，由脚本按 `risk_items` 注入「风险事实｜证据与当前值｜影响去向｜对应位置｜跟踪指标」表，来源随证据列展示；不得保留「黄灯扣分」文案或手写第二张风险表。v1 保留旧黄灯扣分明细表（见下方历史骨架）；两版的损失预演三联卡均不可缺 |
 | `valuation_method` / `stock_type` | ✓ | 7 卡片头（如 "PE历史时段匹配法" / "周期股"）。**stock_type 枚举（v5.3.0 判据 v2）**：`周期股` / `稳定价值[...]`（子类括号注明，如 `稳定价值/金融（银行）`）/ `成长型` / `成熟/停滞` / `未盈利/管线` / `困境反转`——判据见 `scoring.md`「分型判据（v2）」节；旧值「稳健成长股」映射成长型·中速层、「快速成长（股）」映射成长型·高速层（脚本自动映射+告警提示改新名）；**无法映射到六型 → 拒渲染** |
 | `growth_tier` | 条件（成长型必填，v5.3.0） | 成长型增速分层声明：`"high"`（历史 CAGR >25% → 60:40 + 高速层权重）/ `"mid"`（5-25% → 70:30 + 默认权重）。脚本按 fin_trend「**扣非**净利」年序列复算历史 CAGR 对账（**跨层告警**；v5.4.0 起归母柱不再作对账基准——口径例外走 `typing_evidence.cagr_adjustments`；序列 <3 年或含非正值跳过对账、标「人工判定」不告警；`cagr_adjustments` 非空则按声明调整口径处理、脚本不复算）。stock_type 为旧值「稳健/快速成长」时可省（按映射默认），新报告必填——缺失告警 |
+| `industry_profile` | 可选（六类专项行业必配） | 九维行业结构开关，12 个合法值及 1B/1D/1F 分支见下方「industry_profile 变体矩阵」。缺省只推断 financial_*/pre_profit/turnaround/generic；`pharma_pipeline/pharma_device/pharma_cxo/resources_upstream/internet_platform/realestate_development` 必须显式填写。fill 与落盘的 stock_type/industry_profile/growth_tier 三键逐字一致 |
 | `typing_evidence` | 条件（v5.3.0，首版软约束） | **分型判据答案结构化**（判据不再是自由心证；判据全文见 `scoring.md`「分型判据（v2）」节）。按型填对应键：**周期股**=`commodity_link`（归因：商品/资本开支/采购节奏）+`volatility_fact`（佐证三选一原文）+`comparable_periods`（≥2 可比时段）；**成长型**=`cagr_hist`（历史 CAGR 中枢，含口径说明）+`driver_nature`（量/份额/定价权）+`shock_history`（腰斩史归因）；**成熟/停滞**=`cagr_hist`+`growth_narrative`（增长叙事质判）+`three_exclusions`（无商品归因/特许高分红/催化剂）；**稳定价值**=`franchise`（特许/牌照）+`dividend_streak`（连续分红年数）；**未盈利/管线**=`loss_reason`+`milestones`；**困境反转**=`normal_anchor`+`catalyst_timeline`+`cash_runway`。值为一句原文（含数据出处）。缺失/缺键 → 告警（首版软约束，观察一轮后升拒渲染）。**可选 `cagr_adjustments`（v5.4.0，条件强制）**：历史 CAGR 不用默认扣非口径时逐条落明细 `[{"year":2024,"item":"处置子公司股权收益","amount":-6.2,"reason":"一次性损益剔除"}]`——四键 year/item/amount/reason 齐全且非空（amount 单位亿元）。**三条件任一命中即强制**（分型要求 cagr_hist 键时）：①code 为 5 位数字（港股经调整口径）②fin_trend 扣非柱不可用（无柱/含非正值/有效年 <3/与 years 不等长/含非数字）③`cagr_hist` 含「剔除/口径调整/重述/正常化/经调整」——明细缺失或四键不全 → **拒渲染**；三条件均不成立却填了 → 软告警（防口径漂移） |
 | `typing_clash` | 条件（低成本撞车必答，v5.3.0） | **撞车声明**（白名单共存对仅 {周期股, 成长型}）：`{"with":"周期股","primary_reason":"主型选定理由（三层递进仲裁：存量结构→波动归因→方法可行性）","cross_check":"对照方法目标价 X-Y 元，互证/背离说明（≥30 字）"}`——`with` 非白名单对（涉红灯豁免或 L1:L3 跳变 ≥15pct）→ **拒渲染**（高成本撞车必须消歧，禁止共存声明）；cross_check 缺失或 <30 字 → 告警 |
 | `valuation` | ✓ | **结构化三情景假设（必填，不完整拒渲染）**——脚本算出目标价区间/EPS/较现价/中枢/赔率/离散度，并自动生成 7 情景表+三指标卡+走廊图，target_range 不一致会被计算值覆盖：`{"shares":46.27,"horizon":"12个月","scenarios":[{"key":"pess","label":"悲观","trigger":"价格战重启","profit":850,"pe":[16,18]},{"key":"base","label":"基础","trigger":"出货+30%","profit":930,"pe":[22,25]},{"key":"opt","label":"乐观","trigger":"储能超级周期","profit":1000,"pe":[26,30]}]}`（shares 亿股、profit 归母净利亿元、pe 区间）。**必须含 pess/base/opt 三情景；每情景需 profit（净利）+ pe 区间 + horizon（可放情景级或 valuation 级）**。**口径二选一**：行业附录市值口径（NAV/rNPV/SOTP，见 `scoring.md`「市值口径三情景」节）每情景用 `"mcap":[低,高]`（目标总市值，亿元）替代 profit+pe——目标价 = mcap÷shares 脚本换算，情景表自动改显示「目标市值」行；三情景必须同口径、同情景不得双填，混用/双填/mcap 区间非法一律拒渲染；**shares ≤0、利润口径 PE 区间倒挂（高<低）或为负同样拒渲染**。**trigger 长度/目标价格式化/floor 地板证据/估值锚纪律（pe_band_evidence + rollback_html 双尺）等细则见下方「估值锚纪律与三情景细则」节（v5.4.1 自本行拆出，内容不变）** |
@@ -90,7 +91,7 @@ JSON 原样回填，禁止手估、手算、凭记忆补**。各字段的直填�
 | `fin_trend` | ✓ | **财务健康五年组合图墙**（v4.9，脚本生成两列双轴组合图面板，**替代 4.4 手写年表**——年表禁写——**v5.1.2 起检测：fin_trend 已填时 l1_html 含 ≥4 个年份列的表 → 告警**；锚点 `<!--FIN_TREND-->` 写 l1_html 的 4.4 维度块内）：`{"years":["2021",…,"2025"],"panels":[{"title":"营收 × 毛利率","bars":[{"name":"营收","unit":"亿","values":[301.7,…]}],"lines":[{"name":"毛利率","pct":true,"values":[36.7,…]}]},…]}`（bars/lines[].values 与 years 等长、全为数字；每面板=0-2 柱+0-2 线、柱线至少其一（v4.9.1 起支持无柱纯线面板，只出右轴）；**有效面板 <3 或年数 <3 拒渲染**。数据照抄 em_fetch E3 年表，禁手估；行业分型换面板先查对应附录。柱色规则/标准 4 面板/行业专项指标口径等细则见下方「fin_trend 图墙细则」节（v4.10.1 自本行拆出）） |
 | `dupont` | 可选 | **杜邦归因乘积链**（v5.8.0，脚本生成 HTML 节点卡：净利率 × 总资产周转率 × 权益乘数 = ROE（加权）四节点横排，各带去年同期值与变化幅度（净利率/ROE 计 pct 点、周转/权益乘数计 %），挂 4.6 维度块——锚点 `<!--DUPONT-->` 写在 l1_html 的 4.6 维度块内，锚点缺失则图追加第 4 章末尾并告警；字段未填锚点静默清除；四因子缺一图不生成）：`{"period":"2026三季","roe":16.1,"nm":30.4,"turn":0.313,"em":1.70,"prev":{"roe":8.3,"nm":19.2,"turn":0.258,"em":1.65},"verdict":"净利率是主驱动（贡献约六成）——周期上行期价驱动特征，与 4.4 毛利率归因一致"}`。**四因子+prev 一律照抄 em_fetch「杜邦因子」照抄行/落盘 `dupont` 键**（东财 F10 ROEJQ/XSJLL/TOAZZL/QYCS，报告期累计口径非年化，禁手算；validate 同源对账）；`verdict` 是唯一手填槽位（≥20 字：哪个因子主驱动、与 4.4 归因是否一致）；去年同期缺则 `prev` 整键省略（图自动只显示本期）。**dupont 已填时 4.6 正文不再罗列四因子数值**（图已承载），正文只写结论与口径注意；港股无 F10 口径、本字段不适用（勿填，不告警） |
 | `earnings_stability` | 可选（v5.2.0 软锚） | **盈利波动性读数**（MSCI 增速波动口径——扣非净利**同比增速**的标准差，非利润水平波动；**只展示不进定档**）：`{"sigma":8.2,"peer_median":21.0,"verdict":"增速波动显著低于同业，回报可预测性高"}`——**sigma 照抄 E3「扣非增速波动」行（禁手算；渲染器按 fin_trend 扣非柱复算比对，偏差 >0.15pct 告警）**；`peer_median`=同行业可比公司 σ 中位数（不可得填 null → 角标只显 σ，禁编造）；`verdict`=一句定性判词（4.6 维度块正文引用）。周期股只作同业相对判读；σ 不适用（扣非跨亏/有效增速点 <3，E3 行标「不适用/数据不足」）或未盈利/管线分型时**整字段不填**（港股 E3 无此行，同样整字段不填）。呈现 = 4.4 图墙净利面板角标（脚本生成，禁手写） |
-| `growth_plot` | ✓（未盈利/管线分型豁免） | **利润增长图**（v4.9，脚本生成，挂 5.1 利润增长——锚点 `<!--GROWTH-->` 写 l3_html 的 5.1 维度块首）：`{"hist":[{"y":"2023","rev":5.3,"np":15.0},…近3-5年],"fcst":[{"y":"2026E","np_lo":2,"np_hi":6,"np_consensus":4.7,"rev":3.0},…未来1-2年]}`（增速均为百分数；hist 取 E3 年表同比（rev 可省）；np_lo/np_hi=本文净利增速区间（与 valuation 三情景口径一致）、**np_consensus=卖方一致预期（E5 研报汇总，必填——图的核心是预期差；v5.1.2 起换算对账：与落盘 `consensus_np.np_avg` 换算增速（基数=fin_trend「归母净利」柱末年值）差 >2pct 告警，且 valuation 基础情景 profit 换算增速应落在 [np_lo−2, np_hi+2]，条件不齐静默跳过）**、fcst.rev 可省。hist 有效年 <3 或 fcst 无有效年 → 拒渲染；**fcst 年份口径（v5.6.1）**：fcst 预测年度须覆盖 `valuation` 三情景 profit 对应年度——脚本按 fin_trend 归母柱末年基数换算 base 增速与 fcst 区间对账，利润为次后年口径时 fcst 合并为「2026-27E」式累计增速行，勿一年一行错配）。图上自动标预期差（本文中枢−一致预期），9 章预期差对照表保留、不重复展开。stock_type 含「未盈利/管线」时本字段豁免） |
+| `growth_plot` | 条件（未盈利/管线或最新归母净利 ≤0 时豁免） | **利润增长图**（挂 5.1，锚点 `<!--GROWTH-->`）：`{"hist":[{"y":"2023","rev":5.3,"np":15.0},…],"fcst":[{"y":"2026E","np_lo":2,"np_hi":6,"np_consensus":4.7},…]}`。hist 取 E3 同比，负基数年份照抄「扭亏/转亏/减亏/增亏」文字，禁止自行换算百分比；**最新归母净利 ≤0 时整个字段省略**，5.1 正文用 valuation 利润金额与情景表达，不画预测增速。np_lo/np_hi=本文预测区间；**np_consensus 仅在单年预测年与落盘 `consensus_np.year` 相同且有 `np_avg` 时填写**，无覆盖则省略或为 null；累计行和其他年份没有同键对账源时也须省略，在正文或 gap 章说明，严禁用单篇旧研报或另一年的预测冒充。共识换算差 >2pct 告警；落盘有对应当年共识而漏填也会告警。fcst 预测年度仍须覆盖 valuation 利润年度，基础情景换算增速应落在 [np_lo−2, np_hi+2]。hist 有效年 <3 或 fcst 无有效年 → 拒渲染；2026-10-31 起新 fill 的上年归母净利 ≤0 却填数字增速 → 拒渲染，旧 fill 仅告警 |
 | `holders` | 可选 | **股东户数趋势图**（v4.8，第 12 章；**v4.9.1 起移至章首**（时机判定小表前）——阅读流=证据（户数趋势）→判定（时机小表）→结论（三轨判定卡），与第 11 章 PE 历史带垫章首先例一致）：`[{"date":"2025-03-31","num":188153,"chg":5.2},…]`（旧→新，chg=环比% 可省；**v4.11.0 起照抄 E4「季度序列」行**（日期 8 位或带杠均可，图内归一）——季末口径近 12 期 + 最新点（新于末季末才保留），间隔均匀；不定期披露点不再上图（天齐 2026-07 月内四期、横标一排 26-07 实证）；≥3 期才生成（**有效点口径 v5.1.2 起与图内过滤同源：num 可解析且带日期**）；环比着色按筹码语义：户数增=分散=红，户数减=集中=绿。港股 E4 不支持则不填） |
 | `consensus` | 可选 | **卖方一致目标价带**（v4.8，叠加在第 8 章目标价走廊上的灰色区间带）：`{"lo":294,"hi":331}`——E5 目标价区间（tushare report_rc 聚合或东财 DEC_AIMPRICEMIN/MAX）直接回填；缺失不画。「卖方怎么看 vs 我们怎么算」一眼对照，与第 9 章预期差呼应 |
 | `period_track` | 条件（最新期非年报必填） | **最新报告期透视章数据源**（v5.0 起，脚本生成第 3 章：进度小结条+累计一览卡+进度子弹图+单季双联图，v5.0.1 结构；**最新报告期为一季/中报/三季时必填；最新期为年报（is_annual=true）时勿填——整章消失**）。照抄键一律取自 em_fetch「报告期进度」照抄行 / 落盘 JSON `period_track` 键（渲染器与落盘交叉校验，禁手估）。**字段键清单（照抄键/手填键全表）与写作细则见下方「period_track 写作细则」节**（v5.4.1 起行内键清单并入该节，内容不变） |
@@ -105,6 +106,223 @@ JSON 原样回填，禁止手估、手算、凭记忆补**。各字段的直填�
 | `calib_note` | 可选 | 免责声明后缀（如 "PE估值经历史时段匹配法回测校准"） |
 | `prev` | 回测必填 | **上版锚点**：`{"date":"2026-08-08","quality":7.87,"valuation":6.5,"timing":5.50,"quality_version":1,"target_range":"396-832","scenarios":[…]}`。`quality_version` 由 extract_review 从 Hero 提取；缺标记的旧三轨回退 1，pre-v4 单轨标 `legacy-single-track`，不得当作 v1 质量分；旧双轨研究综合分也归此类，**没有独立估值分不属于 `prev.valuation` 缺失，不再告警**。**只有同版三轨质量分计算差值**，跨版本仅并列并标「口径不同」，旧单轨即使两版同 legacy 也不进入分布/漂移/校准；估值与时机算法未改，仍按原口径比较。**`prev.scenarios` 必填**——照抄 extract_review 输出的 scenarios 数组原文（禁手改），是锚移动台账与 PE 带移动校验的共同数据源。跨版正文凡出现「较上版/新增/证伪」类表述必须挂 `.rev` 高亮（<3 处告警；普通业务新增不触发）。**`prev.charts` 必填**：照抄上版 fill 图字段事实 `{"gap_plot":true,"fin_trend_panels":4,"growth_fcst_years":2,"pe_history":true}`，缺失或旧有新无逐项软告警；`review_html` 同一句已含图名与减配原因时不重复报警，禁填 PE 历史带的分型不报错配，历史 PE 失真且明确替代锚时不强贴 calib |
 | `review_html` | 回测必填 | **R 回测复盘章节**正文（复盘四格表 + 新财报关键数据 vs 原假设对比表）；prev 与 review_html 必须成对出现。**禁止另存独立 `_复盘.md`**——复盘内容只进 R 章节 |
+
+### score_inputs 九维字段契约（代码权威）
+
+本节只回答“字段怎么写”。档位、权重与加减分规则见 `scoring.md`；字段名以
+`scripts/quality_rules.py` 实际读取为准，机械落盘对账以 `scripts/validate_audit.py` 为准。
+**禁止为参考字段结构读取其他公司 fill；使用本节表格与文末脱敏示例。**
+
+通用约定：
+- 比率字段除特别说明外接受小数（`0.55`）或带 `%` 的字符串（`"55%"`）；`55` 不带 `%`
+  会被当成 55 而不是 55%。ROIC/WACC/COE 使用小数，百分比增速使用数值百分数（`18`=18%）。
+- 每维均可挂 `counter_evidence`：该维**最终分 ≥8 或 ≤3** 时必填，去空白后至少 4 字。
+- 每维均可挂 `custom`：单对象或对象数组，子键为 `id/points/reason/evidence`；单维合计
+  绝对值 ≤1，非零调整必须四键齐全，且只能在原档位区间内调整，不能跨档。
+- `manual_evidence` 只用于 1D/1F 落盘缺值的人工补证，其他七维写了也不消费；结构为
+  `{"叶级路径":{"source":"可核验来源","note":"事实与口径"}}`，两键均必填，父级打包无效。
+
+#### 1A 赛道与宏观
+
+| 字段 | 类型 / 合法值 | 必填与缺失后果 |
+|---|---|---|
+| `stage` | `mature/成熟期`、`decline/衰退期`、`growth/成长期` | 必填；未知或缺失 → missing |
+| `policy` | 顺风：`tailwind/顺风/positive/favorable/friendly/supportive`；中性：`neutral/中性/中性偏暖/偏暖`；中性偏紧：`mixed/中性偏紧/偏负/偏空/unfavorable/negative`；明确打压：`打压/suppressed` | 必填；不可解析 → missing。`negative` 当前映射为中性偏紧 |
+| `demand_decline_2y` | bool | 成熟期必填 |
+| `structure_ok` | bool | 成熟期必填 |
+| `price_mechanism_ok` | bool | 成熟期必填 |
+| `substitution_low` | bool/null | 成熟期可选；null=替代威胁未知，封顶 7.9 |
+| `growth` | number，% | 成长期必填 |
+| `tam` | number，亿元 | 成长期可选；缺失封顶 7.9 |
+| `penetration` | number，% | 成长期可选；缺失封顶 7.9 |
+
+#### 1B 产业链位置
+
+通用价值链形状（未列入两轴 profile 时）：
+
+| 字段 | 类型 / 合法值 | 必填与缺失后果 |
+|---|---|---|
+| `cost_quartile` | int `1/2/3/4`，或 `第一/第二/第三/第四（四分位）` | 必填；数值 1 或“第一”均算成本强 |
+| `price_transmission` | bool | 必填 |
+| `bargaining_status` | string；`实质丧失` 为特殊判定 | 必填 |
+| `customer_concentration` | ratio 或 `%` 字符串 | 可选；与供应商项任一缺失封顶 7.9 |
+| `supplier_concentration` | ratio 或 `%` 字符串 | 同上 |
+| `upstream_self_supply` | ratio 或 `%` 字符串 | 可选；>0.5 为成本强证据 |
+
+两轴形状（`financial_bank/financial_insurance/financial_broker/internet_platform/pharma_cxo`）：
+
+| 字段 | 类型 / 合法值 | 必填与缺失后果 |
+|---|---|---|
+| `cost_strength` | `strong/neutral/weak` | 必填 |
+| `pricing_strength` | `strong/neutral/weak` | 必填 |
+| `bargaining_status` | string；`实质丧失` 为特殊判定 | 必填 |
+| `customer_concentration` / `supplier_concentration` | ratio 或 `%` 字符串 | 任一缺失封顶 7.9 |
+
+#### 1C 商业模式与护城河
+
+| 字段 | 类型 / 合法值 | 必填与缺失后果 |
+|---|---|---|
+| `moats` | array<object> | 必填；null → missing，空数组 → D |
+| `moats[].verified` | bool | 每条必填 |
+| `moats[].rhetoric` | bool | 每条必填 |
+| `moats[].type` | string | 有效护城河（verified=true 且 rhetoric=false）必填 |
+| `moats[].replication` | string，复制难度证据 | 有效护城河必填 |
+| `moats[].evidence` | string，可核验来源 | 有效护城河必填 |
+| `moats[].trend` | `widening/stable/narrowing/unknown/null` | 可选；缺省或 unknown/null 封顶 7.9；其他值 → missing |
+| `pressure` | `扛得住/警惕/扛不住/unknown/null` | 可选；缺省或 unknown/null、扛不住封顶 7.9；其他值 → missing |
+| `inverse_position` | bool | 可选；有效护城河 ≤1 条时 true 封顶 7.9 |
+
+#### 1D 财务健康
+
+通用 F 式（`generic/pharma_device/pharma_cxo/resources_upstream/internet_platform`）：
+
+| 字段 | 类型 / 合法值 | 必填与缺失后果 |
+|---|---|---|
+| `f_items` | object，固定 9 个 bool：`profit_positive/ocf_positive/roa_improving/cash_quality_ok/long_debt_down/short_cover_improving/no_dilution/gross_margin_improving/asset_turnover_improving` | 9 键全部必填 |
+| `liquidity.debt_ratio` | ratio，有息负债÷总资产 | 必填 |
+| `liquidity.short_cover` | number，货币资金÷短期有息负债 | 必填 |
+| `liquidity.ocf_short_cover` | number，最近完整年度经营现金流÷短期有息负债 | 可选；short_cover<1 且本项 >2 时流动性上调 |
+| `red_flags` | object，键集合见行业矩阵 | 通用 profile 允许项除 gross_margin_anomaly 外均必填 bool；不得添加集合外键 |
+| `red_flags.gross_margin_anomaly` | bool/null | 可选；缺失或 null 封顶 7.9 |
+| `red_flag_materiality` | `{flag: bool}`；false=声明不重大 | 可选；须配下一项证据才免扣 |
+| `red_flag_materiality_evidence` | `{flag:{"scale":"含数字的规模","source":"来源"}}` | 条件必填 |
+| `f_causal_groups` | `{组名:[9 个 f_items 键之一,…]}` | 可选；组间不得重复，每组必须配证据 |
+| `f_causal_evidence` | `{组名:"非空因果说明"}` | 使用因果组时必填 |
+| `g_checks.rd_intensity_evidence` | string | 成长型可选，只展示不加分 |
+| `g_checks.capex_intensity_evidence` | string | 同上 |
+
+行业清单（`financial_*/realestate_development`）与生存型（`pharma_pipeline/pre_profit/turnaround`）：
+
+| 字段 | 类型 / 合法值 | 必填与缺失后果 |
+|---|---|---|
+| `industry_checks` | `{flag: bool 或 "not_applicable"}`，键集合见行业矩阵 | 行业清单必填；生存型可替代现金跑道；全部 not_applicable → missing |
+| `industry_check_evidence` | `{flag:"非空说明"}` | 每个 not_applicable 项必填 |
+| `cash_runway_months` | number，月 | 生存型未提供 industry_checks 时必填；使用跑道时 1D/1F 各填一次 |
+
+#### 1E 治理与资本配置
+
+| 字段 | 类型 / 合法值 | 必填与缺失后果 |
+|---|---|---|
+| `pledge_pct` | ratio 或 `%` 字符串 | 必填 |
+| `reduction_pct` | ratio 或 `%` 字符串 | 必填 |
+| `penalties` | bool；无处罚必须写 `false` | 必填；代码对任意真值均扣分，不要写字符串“无” |
+| `age` | number | 可选；缺失只记录未知 |
+| `succession_plan` | bool | 可选 |
+| `dividend.payout_streak` | number，年 | 可选 |
+| `dividend.growth_streak` | number，年 | 可选 |
+| `buyback.cancel` | bool | 可选 |
+| `long_record` | object | 可选；`dividend_growth/low_buyback` 为认可键，`ma_roic` 会拒评分 |
+
+#### 1F 资本回报质量
+
+| 字段 | 类型 / 合法值 | 必填与缺失后果 |
+|---|---|---|
+| `roic` | 小数或 `%` 字符串 | 通用口径必填；绝对值 >1 拒评分 |
+| `wacc` | 小数，>0 | 通用口径必填 |
+| `incremental_roic` | 小数 | 可选 |
+| `roic_basis` | `latest/normalized`，默认 latest | 周期股与 resources_upstream 必须 normalized |
+| `roic_period_months` | `3/6/9/12` | latest 必填 |
+| `roic_normalized_components` | 恰 3 个小数 | normalized 必填；中位数须与 roic 一致 |
+| `return_metric` | 银行=`ROTCE` 或 `ROE_NORMALIZED`；保险/券商=`ROE_NORMALIZED` | 金融口径必填，替代 roic/wacc |
+| `normalized_return` | 小数 | 金融口径必填 |
+| `coe` | 小数，>0 | 金融口径必填 |
+| `dupont_driver` | string；`杠杆` 触发封顶 7.9 | 可选 |
+| `cash_runway_months` | number，月 | 生存型 roic 为空时必填；即使 1D 改用 industry_checks，1F 仍须另给跑道或 ROIC |
+
+#### 3A 利润增长
+
+| 字段 | 类型 / 合法值 | 必填与缺失后果 |
+|---|---|---|
+| `growth_lo` | number，% | 必填；唯一定档增速输入 |
+| `growth_hi` | number 或含数字字符串 | 必填并参与解析校验，但不参与定档 |
+| `driver_status` | `已验证/部分兑现/未验证` | 必填 |
+
+#### 3B 项目确定性
+
+`projects` 与 `visibility` 至少填一种；`projects` 不得为空数组（会 missing），
+`visibility` 空数组合法但落 D。各项贡献权重按 `contribution` 表达。
+
+| 字段 | 类型 / 合法值 | 必填与缺失后果 |
+|---|---|---|
+| `projects[].name` | string | 展示与 primary_group 匹配时使用；primary_group 场景必填 |
+| `projects[].stage` | `已投产/试生产/在建/审批中/资金未落实/规划/意向` | 每项必填 |
+| `projects[].contribution` | number，0—1 有限数 | 权重加权时必填 |
+| `projects[].primary` | bool | 权重和≠1 时可指定唯一主来源 |
+| `visibility[].name` | string | 展示与 primary_group 匹配时使用；primary_group 场景必填 |
+| `visibility[].level` | `合约级/可量化扩张/趋势平缓/纯叙事` | 每项必填 |
+| `visibility[].contribution` | number，0—1；单项缺省按 1 | 权重加权时必填 |
+| `visibility[].value` | 任意非 null 的数量或事实 | 非纯叙事项必填；缺失按 2 分且封顶 5.0 |
+| `primary_group` | string 数组，元素须为项目/可见度名称 | 权重和≠1 时可选；不得与 primary 同用 |
+
+权重和为 1±0.01 时加权；否则回退唯一 primary 或 primary_group，组合取最弱项并封顶 7.9。
+
+#### 3C 催化剂
+
+| 字段 | 类型 / 合法值 | 必填与缺失后果 |
+|---|---|---|
+| `events` | array<object> | 必填；空数组 → D |
+| `events[].name` | string | 非评分代码消费，可留作写作备注 |
+| `events[].month` | `YYYY-MM`（也接受 `YYYY-M`） | 可选；缺失只算方向，完整日期或超窗不计入重估 |
+| `events[].revaluation` | bool | 可选；true 且处于报告月起 0—12 个月窗口才计入 A/B |
+| `events[].evidence` | string | 非评分代码消费，可留作来源备注 |
+
+#### industry_profile 变体矩阵
+
+顶层 `industry_profile` 可显式填写下列 12 值；缺省时只按 stock_type 推断
+`financial_bank/financial_insurance/financial_broker/pre_profit/turnaround/generic`。
+未盈利/管线不会自动推断成 `pharma_pipeline`；`pharma_pipeline/pharma_device/pharma_cxo/
+resources_upstream/internet_platform/realestate_development` 必须显式填写。
+fill 与 quote 落盘 `quality_inputs.profile` 的 `stock_type/industry_profile/growth_tier`
+三键须逐字一致；stock_type 的括号子类也计入字符串。
+
+| profile | 1B 形状 | 1D 形状与 flag 键 | 1F 口径 |
+|---|---|---|---|
+| `generic` | 价值链 | 通用 F：`receivables/inventory/gross_margin_anomaly` | ROIC |
+| `pharma_device` | 价值链 | 通用 F，同 generic | ROIC |
+| `pharma_cxo` | 两轴 | 通用 F，另加 `order_cancellation/price_war` | ROIC |
+| `resources_upstream` | 价值链 | 通用 F，同 generic | ROIC，强制 normalized |
+| `internet_platform` | 两轴 | 通用 F：`adjusted_profit_divergence/investment_impairment/goodwill` | ROIC |
+| `financial_bank` | 两轴 | 行业清单：`npl_trend/provision_trend/loan_migration/cet1` | ROTCE 或 ROE_NORMALIZED/COE |
+| `financial_insurance` | 两轴 | 行业清单：`solvency/combined_ratio/reserve/investment_assumption` | ROE_NORMALIZED/COE |
+| `financial_broker` | 两轴 | 行业清单：`proprietary_exposure/net_capital/credit_impairment/leverage` | ROE_NORMALIZED/COE |
+| `pharma_pipeline` | 价值链 | 生存清单：`cash_runway/capitalized_rd/license_in/clinical_disclosure` | 跑道或 ROIC |
+| `realestate_development` | 价值链 | 行业清单：`short_cover/hidden_debt/contract_liability/capitalized_interest` | ROIC |
+| `pre_profit` | 价值链 | 生存清单：`cash_runway/financing_gap` | 跑道或 ROIC |
+| `turnaround` | 价值链 | 生存清单：`cash_runway/catalyst/normal_anchor` | 跑道或 ROIC |
+
+金融与开发地产的落盘机械字段仍可能位于 `quality_inputs.1D.red_flags`，fill 评分输入须按
+上表写入 `industry_checks`，不要混用容器。`internet_platform` 的 fill 仍用通用 F，但机械落盘
+只提供 `review_only` 与专项 flag，不自动提供 f_items/liquidity/ROIC；这些缺项须用公告人工核实并
+逐叶写 manual_evidence，不得冒充机械照抄。其 1D 当前也会因无 gross_margin_anomaly 键封顶 7.9，
+这是代码现状，不擅自当成设计意图改规则。
+
+#### manual_evidence 叶级路径白名单
+
+- 1D：`f_items.<9 个固定键>`、`liquidity.debt_ratio/short_cover/ocf_short_cover`、
+  `red_flags.<flag>`、`cash_runway_months`。
+- 1F：`roic`、`wacc`、`incremental_roic`、`roic_period_months`、`roic_basis`、
+  `cash_runway_months`。
+- 路径不含维度名；只在 fill 有值而落盘为 null 时补来源，不得覆盖已有冲突值或豁免漏抄。
+
+#### 完整脱敏 generic 示例
+
+以下仅演示字段形状，数值均为虚构占位，不得当作任何公司事实或评分建议：
+
+```json
+{
+  "score_inputs": {
+    "1A": {"stage":"growth","growth":18,"tam":1200,"penetration":20,"policy":"tailwind","substitution_low":true,"counter_evidence":"占位反方证据：行业增速可能回落"},
+    "1B": {"cost_quartile":1,"price_transmission":true,"bargaining_status":"正常","customer_concentration":0.2,"supplier_concentration":0.3,"upstream_self_supply":0.6,"counter_evidence":"占位反方证据：原料自给优势可能减弱"},
+    "1C": {"moats":[{"verified":true,"rhetoric":false,"type":"technology","replication":"占位复制周期与成本","evidence":"占位公开来源","trend":"stable"}],"pressure":"扛得住","counter_evidence":"占位反方证据：竞争者可能复制"},
+    "1D": {"f_items":{"profit_positive":true,"ocf_positive":true,"roa_improving":true,"cash_quality_ok":true,"long_debt_down":true,"short_cover_improving":true,"no_dilution":true,"gross_margin_improving":true,"asset_turnover_improving":true},"liquidity":{"debt_ratio":0.1,"short_cover":3.0,"ocf_short_cover":2.5},"red_flags":{"receivables":false,"inventory":false,"gross_margin_anomaly":false},"counter_evidence":"占位反方证据：现金流改善尚未跨周期"},
+    "1E": {"pledge_pct":0.0,"reduction_pct":0.0,"penalties":false,"age":50,"succession_plan":true,"dividend":{"payout_streak":5,"growth_streak":3},"buyback":{"cancel":true},"long_record":{"dividend_growth":true},"counter_evidence":"占位反方证据：资本配置记录可能变化"},
+    "1F": {"roic":0.18,"wacc":0.08,"incremental_roic":0.15,"roic_basis":"latest","roic_period_months":12,"dupont_driver":"净利率","counter_evidence":"占位反方证据：高回报可能均值回归"},
+    "3A": {"growth_lo":25,"growth_hi":35,"driver_status":"已验证","counter_evidence":"占位反方证据：订单增速不等于利润增速"},
+    "3B": {"visibility":[{"name":"占位合同负债","level":"合约级","contribution":1.0,"value":"占位金额与日期"}],"counter_evidence":"占位反方证据：交付与验收仍不确定"},
+    "3C": {"events":[{"name":"占位年报验证","month":"2027-04","revaluation":true,"evidence":"占位披露计划"},{"name":"占位项目验收","month":"2027-06","revaluation":true,"evidence":"占位项目公告"}],"counter_evidence":"占位反方证据：事件可能延期"}
+  }
+}
+```
 
 ### fin_trend 图墙细则（v4.10.1 自字段表行拆出）
 

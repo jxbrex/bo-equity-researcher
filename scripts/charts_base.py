@@ -37,6 +37,7 @@ _C_RED = "#c75b5b"         # 红（评价）：不利/下调/悲观/质量差
 _C_ORANGE = "#c08a2e"      # 橙：中档/基础情景
 # 徽章深色字典（跟随模板 .badge-* 加深系：白字/小字 AA 对比度；评分条色用，与 pastel 评价色区分）
 _C_BADGE_DEEP = {"badge-green": "#4d804d", "badge-orange": "#96691a", "badge-red": "#b84a4a"}
+_YOY_TEXT = ("扭亏", "转亏", "减亏", "增亏")
 
 
 def _fmt_px(v):
@@ -478,7 +479,7 @@ def _inject_chart_anchors(html: str, items: tuple, owner: str, tail: str, hint: 
 __all__ = [
     "_C_LABEL", "_C_GRID", "_C_AXIS", "_C_BLUE", "_C_PAPER", "_C_INK", "_C_BLACK",
     "_C_STONE", "_C_OLIVE", "_C_SAND", "_C_SAND_LT", "_C_TRACK", "_C_PAPER_CELL",
-    "_C_GOOD_LINE", "_C_YEAR_GRID", "_C_GREEN", "_C_RED", "_C_ORANGE", "_C_BADGE_DEEP",
+    "_C_GOOD_LINE", "_C_YEAR_GRID", "_C_GREEN", "_C_RED", "_C_ORANGE", "_C_BADGE_DEEP", "_YOY_TEXT",
     "_fmt_px", "_fmt_amt", "_SCENARIO_COLORS", "_prev_track_rows",
     "_var_key", "_sensitivity_items", "_first_var_name", "_gap_dim_ok", "_period_ratio",
     "parse_stage_period", "_PERIOD_VERDICTS", "_arrow_dumbbell",

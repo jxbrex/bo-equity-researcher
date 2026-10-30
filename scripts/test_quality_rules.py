@@ -116,6 +116,14 @@ def test_growth_industry_uses_existing_thresholds():
     assert qr.evaluate_dimension("1A", spec, CTX)["final"] == 9
 
 
+def test_growth_industry_missing_values_do_not_render_none():
+    spec = {"stage": "growth", "growth": 16, "tam": None, "penetration": None,
+            "policy": "tailwind"}
+    result = qr.evaluate_dimension("1A", spec, CTX)
+    evidence = result["rule_steps"][0]["evidence"]
+    assert "None" not in evidence and evidence.count("未获取") == 2
+
+
 def test_custom_cannot_cross_band_or_cap():
     result = qr.evaluate_dimension("1C", _moat_spec(count=1, custom=_custom(1)), CTX)
     assert result["band"] == "B"

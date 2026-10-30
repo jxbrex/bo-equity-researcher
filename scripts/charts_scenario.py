@@ -101,12 +101,21 @@ def build_scenario_block(calc: dict, cur: str = "元") -> str:
 
     def row(name, fmt): return f"<tr><td>{name}</td>" + "".join(f'<td class="num">{fmt(r)}</td>' for r in rows) + "</tr>"
 
+    def _profit(v):
+        if abs(v) < 0.01:
+            text = f"{v:.3f}"
+        elif abs(v) < 100:
+            text = f"{v:.2f}"
+        else:
+            text = f"{v:,.0f}"
+        return text.rstrip("0").rstrip(".") if "." in text else text
+
     if calc.get("mode") == "mcap":
         # 市值口径（NAV/rNPV/SOTP 行业附录）：无净利/EPS/PE 行，改显示目标市值区间
         driver_rows = [row("目标市值", lambda r: f"{r['mcap_lo']:,.0f}-{r['mcap_hi']:,.0f} 亿")]
     else:
         driver_rows = [
-            row("归母净利", lambda r: f"{r['profit']:,.0f} 亿"),
+            row("归母净利", lambda r: _profit(r['profit']) + " 亿"),
             row("EPS", lambda r: f"{r['eps']:.2f}"),
             row("PE", lambda r: f"{r['pe_lo']:g}-{r['pe_hi']:g}x"),
         ]
@@ -122,7 +131,7 @@ def build_scenario_block(calc: dict, cur: str = "元") -> str:
 
     c, odds, disp = calc["central"], calc["odds"], calc["dispersion"]
     c_cls = "up" if c >= 0 else "down"
-    c_sub = f'基础中值 {_fmt_px(calc["rows"][1]["mid"] if len(calc["rows"])>1 else calc["rows"][0]["mid"])} ÷ 现价 {_fmt_px(calc["price"])} − 1（{_esc(calc["horizon"])}）'
+    c_sub = f'基础中值 {_fmt_px(calc["rows"][1]["mid"] if len(calc["rows"])>1 else calc["rows"][0]["mid"])} ÷ 现价 {_fmt(calc["price"])} − 1（{_esc(calc["horizon"])}）'
     if c < 0:
         c_sub += "；中枢为负 → 回避"
     # v4.9 颜色语义拆分：中枢期望收益是方向量（随 .up/.down 红涨绿跌）；

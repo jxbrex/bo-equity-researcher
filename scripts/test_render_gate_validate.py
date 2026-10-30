@@ -144,7 +144,7 @@ def test_gap_growth_consensus_validate():
     assert "np_consensus" in warns and "基础情景换算增速" in warns
 
 
-def test_growth_consensus_skips_cumulative_year_ranges():
+def test_growth_consensus_rejects_unverifiable_cumulative_year_ranges():
     for label in ("2026-27E", "2026-2027E"):
         fill = minimal_fill(
             quote={"source_file": _period_ref_file("v512_g", {"consensus_np": 120})},
@@ -154,9 +154,57 @@ def test_growth_consensus_skips_cumulative_year_ranges():
                 {"title": "毛利", "lines": [{"name": "毛利率", "pct": True, "values": [29.0, 30.0, 31.0]}]}]},
             growth_plot={"hist": [{"y": "2023", "np": 10.0}, {"y": "2024", "np": 11.0},
                                   {"y": "2025", "np": 12.0}],
-                         "fcst": [{"y": label, "np_lo": -50, "np_hi": 100, "np_consensus": 56.9}]})
-        out = validate_stderr(fill)
-        assert "np_consensus" not in out and "基础情景换算增速" not in out
+                         "fcst": [{"y": label, "np_lo": -50, "np_hi": 10, "np_consensus": 56.9}]})
+        fill["valuation"]["scenarios"][1]["profit"] = 200
+        fill["valuation"]["scenarios"][2]["profit"] = 300
+        from validate_audit import _check_growth_consistency
+        warns = []
+        _check_growth_consistency(fill, warns)
+        out = "\n".join(warns)
+        assert "无法按单年一致预期对账" in out and "基础情景换算增速" in out
+
+
+def test_growth_consensus_requires_verifiable_source_and_presence():
+    base = minimal_fill(
+        quote={"source_file": _period_ref_file("v512_g_present", {"consensus_np": 120})},
+        fin_trend={"years": ["2023", "2024", "2025"], "panels": [
+            {"title": "盈利", "bars": [{"name": "归母净利", "unit": "亿", "values": [80.0, 90.0, 100.0]}]},
+            {"title": "营收", "bars": [{"name": "营收", "unit": "亿", "values": [800.0, 900.0, 1000.0]}]},
+            {"title": "毛利", "lines": [{"name": "毛利率", "pct": True, "values": [29.0, 30.0, 31.0]}]}]},
+        growth_plot={"hist": [{"y": "2023", "np": 10.0}, {"y": "2024", "np": 11.0},
+                              {"y": "2025", "np": 12.0}],
+                     "fcst": [{"y": "2026E", "np_lo": 5, "np_hi": 10, "np_consensus": None}]})
+    assert "落盘有一致预期但 growth_plot 漏填" in validate_stderr(base)
+    base["quote"] = {"source_file": _period_ref_file("v512_g_absent", {"consensus_np": None})}
+    base["growth_plot"]["fcst"][0]["np_consensus"] = 20
+    assert "不得用单篇旧研报" in validate_stderr(base)
+
+
+def test_growth_negative_base_gates_numeric_growth():
+    from validate_audit import _check_growth_consistency
+    for label in ("2024A", "2024年报"):
+        fill = {"date": "2026-10-31",
+                "fin_trend": {"years": ["2023年报", "2024年报", "2025年报"], "panels": [
+                    {"bars": [{"name": "归母净利", "values": [-0.5, 0.4, 0.5]}]}]},
+                "growth_plot": {"hist": [{"y": label, "np": 100}], "fcst": []}}
+        try:
+            _check_growth_consistency(fill, [])
+        except ValueError as exc:
+            assert "禁止填数字同比增速" in str(exc)
+        else:
+            raise AssertionError("年份后缀不得绕过负基数门禁")
+    fill["growth_plot"] = {"hist": [], "fcst": [{"y": "2026E", "np_lo": 100, "np_hi": 200}]}
+    fill["fin_trend"]["panels"][0]["bars"][0]["values"] = [-2.0, -1.0, -0.5]
+    try:
+        _check_growth_consistency(fill, [])
+    except ValueError as exc:
+        assert "最新年亏损" in str(exc)
+    else:
+        raise AssertionError("最新年亏损时不得输出预测增速")
+    fill["date"] = "2026-10-30"
+    warns = []
+    _check_growth_consistency(fill, warns)
+    assert warns and "最新年亏损" in warns[0]
 
 
 def test_l4_yellow_points_validate():

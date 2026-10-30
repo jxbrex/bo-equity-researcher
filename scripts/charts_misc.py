@@ -11,25 +11,22 @@ from math import isfinite
 from scoring import _num, _fmt, _esc, _parse_prev_scenarios
 from charts_base import *
 def build_growth_plot(fill: dict) -> str:
-    """05 未来预期·5.1 利润增长图（fill["growth_plot"] 必填字段，锚点 <!--GROWTH-->，v4.9）：
-    历史段=收入增速（沙柱）+归母净利增速（钢蓝柱）并列；预测段=本文净利增速区间（钢蓝区间竖条）
-    +卖方一致预期（黑◆），组下标预期差（本文中枢−一致预期）。全图中性色，不含涨跌红绿。
-    growth_plot: {"hist":[{"y":"2023","rev":5.3,"np":15.0}, ...],
-                  "fcst":[{"y":"2026E","np_lo":2,"np_hi":6,"np_consensus":4.7,"rev":3.0}, ...]}
-    （增速均为百分数；hist 近 3-5 年取 E3 年表同比，np_lo/np_hi=本文情景区间、np_consensus=卖方一致
-    预期（E5，必填——图的核心是预期差）、fcst.rev 可省。hist 有效年 <3 或 fcst 空 → 返回空串）"""
+    """5.1 利润增长图：历史数字同比或扭亏等文字 + 本文预测区间 + 可选卖方共识。"""
     gp = fill.get("growth_plot") or {}
     hist = []
     for h in gp.get("hist") or []:
-        y, npv = str(h.get("y") or "").strip(), _num(h.get("np"))
-        if not y or npv is None:
+        y = str(h.get("y") or "").strip()
+        raw_np = h.get("np")
+        npv = _num(raw_np)
+        np_label = str(raw_np).strip() if isinstance(raw_np, str) and str(raw_np).strip() in _YOY_TEXT else None
+        if not y or (npv is None and np_label is None):
             continue
-        hist.append({"y": y, "rev": _num(h.get("rev")), "np": npv})
+        hist.append({"y": y, "rev": _num(h.get("rev")), "np": npv, "np_label": np_label})
     fcst = []
     for f in gp.get("fcst") or []:
         y = str(f.get("y") or "").strip()
         lo, hi, cons = _num(f.get("np_lo")), _num(f.get("np_hi")), _num(f.get("np_consensus"))
-        if not y or lo is None or hi is None or hi < lo or cons is None:
+        if not y or lo is None or hi is None or hi < lo:
             continue
         fcst.append({"y": y, "lo": lo, "hi": hi, "cons": cons, "rev": _num(f.get("rev"))})
     if len(hist) < 3 or not fcst:
@@ -38,21 +35,23 @@ def build_growth_plot(fill: dict) -> str:
     W, H, L, R, T, B = 1000, 288, 56, 20, 30, 48   # v4.9 二轮：高度 340→288（用户反馈再压低）
     n = len(hist) + len(fcst)
     slot = (W - L - R) / n
-    all_v = [h["np"] for h in hist] + [h["rev"] for h in hist if h["rev"] is not None] \
-        + [v for f in fcst for v in (f["lo"], f["hi"], f["cons"])] \
+    has_cons = any(f["cons"] is not None for f in fcst)
+    all_v = [h["np"] for h in hist if h["np"] is not None] \
+        + [h["rev"] for h in hist if h["rev"] is not None] \
+        + [v for f in fcst for v in (f["lo"], f["hi"], f["cons"]) if v is not None] \
         + [f["rev"] for f in fcst if f["rev"] is not None]
     lo_d, hi_d = _pad_domain(min(all_v + [0]), max(all_v + [0]), 0.15)
     Y = _lin_map(lo_d, hi_d, H - B, T)
     y0 = Y(0)
 
-    parts = ['<span class="section-tag">利润增长：历史 → 本文预测 vs 卖方一致</span>',
-             _svg_open(W, H, "利润增长")]
-    # 图例（左上，单行）
+    title = "利润增长：历史 → 本文预测" + (" vs 卖方一致" if has_cons else "")
+    parts = [f'<span class="section-tag">{title}</span>', _svg_open(W, H, "利润增长")]
     lx = _legend_row(parts, [("收入增速（实际）", _C_SAND), ("净利增速（实际）", _C_BLUE)], L)
     lx = _legend_row(parts, [("本文净利预测区间", _C_BLUE,
                               f'fill-opacity="0.3" stroke="{_C_BLUE}" stroke-width="1"')], lx)
-    parts.append(f'<polygon points="{lx + 6},8 {lx + 12},13 {lx + 6},18 {lx},13" fill="{_C_BLACK}"/>')
-    parts.append(f'<text x="{lx + 18}" y="16" font-size="11" fill="{_C_LABEL}">卖方一致预期</text>')
+    if has_cons:
+        parts.append(f'<polygon points="{lx + 6},8 {lx + 12},13 {lx + 6},18 {lx},13" fill="{_C_BLACK}"/>')
+        parts.append(f'<text x="{lx + 18}" y="16" font-size="11" fill="{_C_LABEL}">卖方一致预期</text>')
     # 横网格 + y 轴刻度 + 零基线
     _hgrid_ticks(parts, Y, _ticks(lo_d, hi_d, 5), L, W - R, L - 8, "%")
     parts.append(f'<line x1="{L}" y1="{y0:.1f}" x2="{W - R}" y2="{y0:.1f}" stroke="{_C_AXIS}" stroke-width="1.4"/>')
@@ -70,7 +69,7 @@ def build_growth_plot(fill: dict) -> str:
     diffs = []
     for i, g in enumerate(hist + fcst):
         cx = L + i * slot + slot / 2
-        if i < len(hist):   # 历史组：收入（沙）+净利（钢蓝）并列柱
+        if i < len(hist):
             bw = min(slot * 0.3, 34)
             for k, (v, c) in enumerate(((g["rev"], _C_SAND), (g["np"], _C_BLUE))):
                 if v is None:
@@ -80,9 +79,12 @@ def build_growth_plot(fill: dict) -> str:
                 parts.append(f'<rect x="{x:.1f}" y="{top:.1f}" width="{bw:.1f}" height="{h:.1f}" rx="3" fill="{c}"/>')
                 parts.append(f'<text x="{x + bw / 2:.1f}" y="{top - 4:.1f}" text-anchor="middle" font-size="10" '
                              f'fill="{_C_INK if v == g["np"] else _C_LABEL}">{_s(v)}</text>')
+            if g["np_label"]:
+                parts.append(f'<text x="{cx + 2 + bw / 2:.1f}" y="{y0 - 4:.1f}" text-anchor="middle" font-size="10" '
+                             f'fill="{_C_BLUE}">{g["np_label"]}</text>')
             parts.append(f'<text x="{cx:.1f}" y="{H - B + 16}" text-anchor="middle" font-size="11" '
                          f'fill="{_C_LABEL}">{_esc(g["y"])}</text>')
-        else:               # 预测组：本文区间竖条 + 一致预期◆ + 组下预期差
+        else:
             bw = min(slot * 0.34, 38)
             x = cx - bw / 2
             parts.append(f'<rect x="{x:.1f}" y="{Y(g["hi"]):.1f}" width="{bw:.1f}" '
@@ -92,24 +94,29 @@ def build_growth_plot(fill: dict) -> str:
                          f'fill="{_C_BLUE}">{_s(g["hi"])}</text>')
             parts.append(f'<text x="{cx:.1f}" y="{Y(g["lo"]) + 12:.1f}" text-anchor="middle" font-size="10" '
                          f'fill="{_C_BLUE}">{_s(g["lo"])}</text>')
-            gy = Y(g["cons"])
-            parts.append(f'<polygon points="{cx:.1f},{gy - 7:.1f} {cx + 7:.1f},{gy:.1f} {cx:.1f},{gy + 7:.1f} '
-                         f'{cx - 7:.1f},{gy:.1f}" fill="{_C_BLACK}"/>')
-            parts.append(f'<text x="{cx + 10:.1f}" y="{gy - 9:.1f}" font-size="10" '
-                         f'stroke="{_C_PAPER_CELL}" stroke-width="3" paint-order="stroke" '
-                         f'fill="{_C_BLACK}">一致 {_s(g["cons"])}</text>')
-            d = (g["lo"] + g["hi"]) / 2 - g["cons"]
-            diffs.append(f'{_esc(g["y"])} {d:+.1f}pct')
+            if g["cons"] is not None:
+                gy = Y(g["cons"])
+                parts.append(f'<polygon points="{cx:.1f},{gy - 7:.1f} {cx + 7:.1f},{gy:.1f} {cx:.1f},{gy + 7:.1f} '
+                             f'{cx - 7:.1f},{gy:.1f}" fill="{_C_BLACK}"/>')
+                parts.append(f'<text x="{cx + 10:.1f}" y="{gy - 9:.1f}" font-size="10" '
+                             f'stroke="{_C_PAPER_CELL}" stroke-width="3" paint-order="stroke" '
+                             f'fill="{_C_BLACK}">一致 {_s(g["cons"])}</text>')
+                d = (g["lo"] + g["hi"]) / 2 - g["cons"]
+                diffs.append(f'{_esc(g["y"])} {d:+.1f}pct')
+                parts.append(f'<text x="{cx:.1f}" y="{H - B + 31}" text-anchor="middle" font-size="10" '
+                             f'fill="{_C_STONE}">差 {d:+.1f}pct</text>')
             parts.append(f'<text x="{cx:.1f}" y="{H - B + 16}" text-anchor="middle" font-size="11" '
                          f'font-weight="600" fill="{_C_INK}">{_esc(g["y"])}</text>')
-            parts.append(f'<text x="{cx:.1f}" y="{H - B + 31}" text-anchor="middle" font-size="10" '
-                         f'fill="{_C_STONE}">差 {d:+.1f}pct</text>')
     parts.append(_svg_close())
-    parts.append(_chart_source(
-        "利润增长", "历史定期报告（同比）、券商盈利预测汇总、本文预测区间",
-        '柱=历史增速（沙=收入、钢蓝=归母净利，'
-        '取历史年报同比），区间竖条=本文净利增速预测区间，◆=卖方一致预期（券商研报汇总）；'
-        f'预期差（本文中枢−一致预期）：{"；".join(diffs)}；全图为中性色，红涨绿跌仅用于股价方向'))
+    source = "历史定期报告（同比）、本文预测区间" + ("、券商盈利预测汇总" if has_cons else "")
+    note = ('柱=历史增速（沙=收入、钢蓝=归母净利，取历史年报同比；扭亏等负基数年份只标文字），'
+            '区间竖条=本文净利增速预测区间')
+    if has_cons:
+        note += '，◆=卖方一致预期（券商研报汇总）；预期差（本文中枢−一致预期）：' + "；".join(diffs)
+    else:
+        note += '；无当前卖方净利一致预期，不画共识点、不计算预期差'
+    note += '；全图为中性色，红涨绿跌仅用于股价方向'
+    parts.append(_chart_source("利润增长", source, note))
     return "".join(parts)
 
 

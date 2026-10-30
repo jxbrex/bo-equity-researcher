@@ -683,13 +683,14 @@ def red_flags(annual: list) -> list:
     annual: 年报列表（新→旧，东财键名同构）。
     三态输出：✓=真通过（有数据且未恶化）/ ✗=真恶化 / △=数据不足——数据缺失显示△，
     绝不显示✓（"✓ API未触发"是虚假通过，芯原股份实证）。
-    （v5.1.5 自 em_fetch 挪入本块——纯财务判断函数，与 forensic 同族同文件）"""
+    （v5.1.5 自 em_fetch 挪入本块——纯财务判断函数，与 forensic 同族同文件；
+    现金含量用近 3 期，应收/存货用完整 annual，与 quality_inputs 五年口径一致）"""
     flags = []
-    annual = annual[:3]
 
     # 1. 利润现金含量（经营现金流/净利润 <0.7 视为不达标；数值为倍数如 1.48=148%；
     #    口径：净利润为负的年份该比率无意义，上游已置 None 跳过，不计入连续年数）
-    vals = [r.get("NCO_NETPROFIT") for r in annual if r.get("NCO_NETPROFIT") is not None]
+    cash_annual = annual[:3]
+    vals = [r.get("NCO_NETPROFIT") for r in cash_annual if r.get("NCO_NETPROFIT") is not None]
     if len(vals) >= 2:
         bad_n = sum(1 for v in vals if v < 0.7)
         if _nco_bad(vals, 2):

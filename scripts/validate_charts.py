@@ -18,6 +18,7 @@ from charts_base import (
     _sensitivity_items,
     _var_key,
     _gap_dim_ok,
+    _YOY_TEXT,
     parse_stage_period)
 from charts_cycle import _pe_band_ok
 from validate import (
@@ -46,7 +47,7 @@ _REV_CLASS_RE = re.compile(r"\sclass\s*=\s*[\"'][^\"']*\brev\b[^\"']*[\"']", re.
 def _check_chart_fields(fill: dict) -> None:
     """v4.9 必填图字段硬校验：fin_trend（4.4 小图墙，替手写年表）/ growth_plot（5.1 增长图）。
     两字段数据均来自标准采集（E3 年表 / E5 一致预期），缺失=空心趋势章节 → 拒渲染。
-    growth_plot 豁免：stock_type 含「未盈利/管线」（净利无意义）。"""
+    growth_plot 豁免：stock_type 含「未盈利/管线」，或 fin_trend 最新归母净利 ≤0（预测增速无意义）。"""
     ft = fill.get("fin_trend")
     if not isinstance(ft, dict):
         raise ValueError('fin_trend 为必填字段（v4.9 起 4.4 财务健康年表由脚本图墙替代）：'
@@ -74,22 +75,35 @@ def _check_chart_fields(fill: dict) -> None:
                          f"归母净利+扣非净利×净利率×ROE / 经营现金流+自由现金流×现金含量（阈值0.7) / "
                          f"应收+存货周转天数（纯双线）；每面板 1-2 柱或 1-2 线、柱线至少其一，"
                          f"values 与 years 等长且全为数字）")
+    latest_np = None
+    for p in ft.get("panels") or []:
+        if not isinstance(p, dict):
+            continue
+        for b in p.get("bars") or []:
+            name = str((b or {}).get("name") or "")
+            if "归母净利" in name and "扣非" not in name:
+                values = [_num(v) for v in (b.get("values") or [])]
+                if values and len(values) == len(years) and None not in values:
+                    latest_np = values[-1]
+    growth_optional = latest_np is not None and latest_np <= 0
     st = str(fill.get("stock_type") or "")
-    if "未盈利" not in st and "管线" not in st:
+    if "未盈利" not in st and "管线" not in st and not growth_optional:
         gp = fill.get("growth_plot")
         if not isinstance(gp, dict):
-            raise ValueError('growth_plot 为必填字段（v4.9 起 5.1 利润增长配历史+预测图）：'
+            raise ValueError('growth_plot 为必填字段（最新年亏损时豁免，正文用利润金额情景）：'
                              '{"hist":[{"y":"2023","rev":…,"np":…}, ...≥3年], '
-                             '"fcst":[{"y":"2026E","np_lo":…,"np_hi":…,"np_consensus":…}, ...]}'
-                             '——历史取 E3 同比，一致预期取 E5；未盈利/管线分型豁免')
-        hist_ok = [h for h in gp.get("hist") or [] if h.get("y") and _num(h.get("np")) is not None]
+                             '"fcst":[{"y":"2026E","np_lo":…,"np_hi":…}, ...]}'
+                             '——历史取 E3 同比；无卖方覆盖时 np_consensus 省略')
+        hist_ok = [h for h in gp.get("hist") or []
+                   if h.get("y") and (_num(h.get("np")) is not None
+                                      or str(h.get("np") or "").strip() in _YOY_TEXT)]
         fcst_ok = [f for f in gp.get("fcst") or []
                    if f.get("y") and _num(f.get("np_lo")) is not None and _num(f.get("np_hi")) is not None
-                   and _num(f.get("np_hi")) >= _num(f.get("np_lo")) and _num(f.get("np_consensus")) is not None]
+                   and _num(f.get("np_hi")) >= _num(f.get("np_lo"))]
         if len(hist_ok) < 3:
-            raise ValueError(f"growth_plot.hist 有效年 {len(hist_ok)} < 3（需 y + np 增速；rev 可省）")
+            raise ValueError(f"growth_plot.hist 有效年 {len(hist_ok)} < 3（需 y + 数字增速或扭亏等文字；rev 可省）")
         if not fcst_ok:
-            raise ValueError("growth_plot.fcst 无有效年（需 y + np_lo ≤ np_hi + np_consensus）")
+            raise ValueError("growth_plot.fcst 无有效年（需 y + np_lo ≤ np_hi；np_consensus 在无覆盖时可省）")
 
 
 # v5.8.2：第 11 章绑定告警表驱动（3 处同骨架收敛）——「{字段} 已填但 cycle_html 缺失」
@@ -187,8 +201,7 @@ def _prev_chart_facts(fill: dict) -> dict:
     fcst_n = sum(1 for f in ((fill.get("growth_plot") or {}).get("fcst") or [])
                  if isinstance(f, dict) and str(f.get("y") or "").strip()
                  and _num(f.get("np_lo")) is not None and _num(f.get("np_hi")) is not None
-                 and _num(f.get("np_hi")) >= _num(f.get("np_lo"))
-                 and _num(f.get("np_consensus")) is not None)
+                 and _num(f.get("np_hi")) >= _num(f.get("np_lo")))
     return {"gap_plot": len(gap_dims) >= 2, "fin_trend_panels": panels,
             "growth_fcst_years": fcst_n, "pe_history": _pe_band_ok(fill)}
 

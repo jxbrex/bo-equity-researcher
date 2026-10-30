@@ -598,15 +598,17 @@ def _check_consensus_np(fill: dict, warns: list) -> None:
 
 
 def _check_growth_consistency(fill: dict, warns: list) -> None:
-    """v5.1.2：growth_plot 增速与落盘一致预期/valuation 基础情景换算对账（条件不齐静默跳过）——
-    基数=fin_trend「归母净利」柱末年值（标准 4 面板之一）；落盘 np_avg÷基数−1 vs
-    fcst.np_consensus（>2pct 告警）；base.profit÷基数−1 应落在 [np_lo−2, np_hi+2]（越界告警）。
-    合并年份区间（如 2026-27E）的 np_consensus 是累计增速，不套用上一年度的单年换算公式。
-    基数 ≤0（亏损期）换算无意义，跳过。"""
+    """growth_plot 与 fin_trend、E5 落盘及 valuation 的同源对账。"""
     ft = fill.get("fin_trend") or {}
     gp = fill.get("growth_plot") or {}
-    years = [str(y) for y in (ft.get("years") or [])]
+    raw_years = [str(y) for y in (ft.get("years") or [])]
+
+    def _year(value):
+        match = re.search(r"20\d{2}", str(value or ""))
+        return match.group(0) if match else None
+
     base_np = None
+    np_by_year = {}
     for p in ft.get("panels") or []:
         if not isinstance(p, dict):
             continue
@@ -614,38 +616,72 @@ def _check_growth_consistency(fill: dict, warns: list) -> None:
             nm = str((b or {}).get("name") or "")
             if "归母净利" in nm and "扣非" not in nm:
                 vals = [_num(x) for x in (b.get("values") or [])]
-                if vals and len(vals) == len(years) and None not in vals:
+                if vals and len(vals) == len(raw_years) and None not in vals:
                     base_np = vals[-1]
+                    np_by_year = {_year(y): v for y, v in zip(raw_years, vals) if _year(y)}
+
+    def _reject_or_warn(message):
+        date = str(fill.get("date") or "")
+        if not date or date >= "2026-10-31":
+            raise ValueError(message)
+        warns.append(message)
+
+    for h in gp.get("hist") or []:
+        if not isinstance(h, dict):
+            continue
+        year = _year(h.get("y"))
+        if not year:
+            continue
+        prev_year = str(int(year) - 1)
+        if prev_year in np_by_year and np_by_year[prev_year] <= 0 and _num(h.get("np")) is not None:
+            _reject_or_warn(f"growth_plot {h['y']} 的上年归母净利 {np_by_year[prev_year]:g} 亿 ≤0，"
+                            "禁止填数字同比增速；请改用扭亏/转亏/减亏/增亏")
     fcst = [f for f in (gp.get("fcst") or []) if isinstance(f, dict)]
-    if base_np is None or base_np <= 0 or not years or not fcst:
+    if base_np is not None and base_np <= 0:
+        for f in fcst:
+            if any(_num(f.get(key)) is not None for key in ("np_lo", "np_hi", "np_consensus")):
+                _reject_or_warn("最新年亏损，预测增速无定义：请删除 growth_plot，"
+                                "在正文用 valuation 的利润金额与情景表达")
+                break
         return
-    m_y = re.fullmatch(r"20\d{2}", years[-1])
-    if not m_y:
+    if base_np is None or not raw_years or not fcst:
         return
-    last_year = int(m_y.group(0))
+    last_year = _year(raw_years[-1])
+    if not last_year:
+        return
+    last_year = int(last_year)
     cnp = (_quote_ref(fill) or {}).get("consensus_np") or {}
     np_avg = _num(cnp.get("np_avg"))
+    cnp_yr = _num(cnp.get("year"))
     _base_sc = _scenario_by_key((fill.get("valuation") or {}).get("scenarios"), "base")
     base_profit = _num(_base_sc.get("profit")) if _base_sc else None
     for f in fcst:
-        ym = re.search(r"20\d{2}", str(f.get("y") or ""))
-        if not ym or int(ym.group(0)) != last_year + 1:
-            continue
-        cnp_yr = _num(cnp.get("year"))
-        cumulative_year = re.search(r"20\d{2}\s*[-–—/]\s*(?:20)?\d{2}E\b", str(f.get("y") or ""))
-        if not cumulative_year and np_avg and cnp_yr and int(cnp_yr) == last_year + 1:
-            g_cons = (np_avg / base_np - 1) * 100
-            npc = _num(f.get("np_consensus"))
-            if npc is not None and abs(npc - g_cons) > 2:
-                warns.append(f"growth_plot {f['y']} np_consensus（{npc:g}%）与落盘一致预期换算增速"
-                             f"（{g_cons:.1f}%＝np_avg {np_avg:g}亿÷上年归母净利 {base_np:g}亿−1）差 "
-                             f"{abs(npc - g_cons):.1f}pct > 2pct：一致预期照抄 E5 落盘（v5.1.2）")
-        if base_profit:
+        y_text = str(f.get("y") or "").strip()
+        single = re.fullmatch(r"(20\d{2})E", y_text)
+        npc = _num(f.get("np_consensus"))
+        if npc is not None:
+            if np_avg is None:
+                warns.append(f"growth_plot {y_text or '?'} 填了 np_consensus（{npc:g}%），"
+                             "但 quote 落盘无 consensus_np.np_avg：不得用单篇旧研报冒充当前一致预期")
+            elif not single or not cnp_yr or int(cnp_yr) != int(single.group(1)):
+                warns.append(f"growth_plot {y_text or '?'} 的 np_consensus 无法按单年一致预期对账："
+                             "仅允许预测年与落盘 consensus_np.year 相同的单年行；累计/其他年份请省略")
+            elif int(single.group(1)) == last_year + 1:
+                g_cons = (np_avg / base_np - 1) * 100
+                if abs(npc - g_cons) > 2:
+                    warns.append(f"growth_plot {y_text} np_consensus（{npc:g}%）与落盘一致预期换算增速"
+                                 f"（{g_cons:.1f}%＝np_avg {np_avg:g}亿÷上年归母净利 {base_np:g}亿−1）差 "
+                                 f"{abs(npc - g_cons):.1f}pct > 2pct：一致预期照抄 E5 落盘")
+        elif single and np_avg is not None and cnp_yr and int(cnp_yr) == int(single.group(1)):
+            warns.append(f"落盘有一致预期但 growth_plot 漏填：{y_text} np_consensus；"
+                         "不得将该年误标为无卖方覆盖")
+        year_match = re.search(r"20\d{2}", y_text)
+        if year_match and int(year_match.group(0)) == last_year + 1 and base_profit:
             g_base = (base_profit / base_np - 1) * 100
             lo, hi = _num(f.get("np_lo")), _num(f.get("np_hi"))
             if lo is not None and hi is not None and not (lo - 2 <= g_base <= hi + 2):
                 warns.append(f"valuation 基础情景换算增速（{g_base:.1f}%）越出 growth_plot 本文区间 "
-                             f"[{lo:g}, {hi:g}]（容差 ±2pct）：5 章图与 7 章情景应口径一致（v5.1.2）")
+                             f"[{lo:g}, {hi:g}]（容差 ±2pct）：5 章图与 7 章情景应口径一致")
 
 
 def _check_quote_present(fill: dict, warns: list) -> None:

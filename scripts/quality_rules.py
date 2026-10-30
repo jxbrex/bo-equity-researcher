@@ -33,6 +33,47 @@ BAND_BASE = {
     "C": (4.0, 5.9, 5.0),
     "D": (0.0, 3.9, 2.0),
 }
+_EXPLANATION_LOGIC = {
+    "1A": "先判断生命周期，再按该阶段的需求、替代、格局、价格机制或成长指标定档",
+    "1B": "按成本、价格传导、集中度与议价状态定档",
+    "1C": "只计已验证且非话术的护城河，再结合趋势和压力测试定档",
+    "1D": "九项趋势检查与流动性分别定档并取较低档，再执行红旗扣分",
+    "1E": "从中性 6 分起，按质押、减持、继任、处罚及分红、回购、长期记录清单加减",
+    "1F": "比较年化 ROIC 与 WACC，再结合增量 ROIC 和杠杆限制",
+    "3A": "按未来增速下限与驱动兑现状态定档",
+    "3B": "按利润贡献对项目阶段或可见度基础分加权",
+    "3C": "只统计报告日起 12 个月内、月份明确且能引发重估的事件",
+}
+
+
+def _explain(result, band, basis, base_label=None, logic=None, cap_reason=None):
+    label = base_label or f"{band}档代表分"
+    base_note = ""
+    has_adjustments = any(float(step.get("delta") or 0) != 0 for step in result["rule_steps"])
+    if label == "A档代表分" and result["base"] == 9:
+        if not has_adjustments and abs(result["final"] - 9) < 0.005:
+            base_note = "9 是 A 档代表分，未获额外 +1，因此不是 10。"
+        elif result["final"] >= 10:
+            base_note = "A 档代表分 9，经实际 +1 调整后形成 10。"
+    cap = result.get("cap")
+    cap_note = ""
+    if cap is not None and result["pre_cap"] > cap and abs(result["final"] - cap) < 0.005:
+        cap_note = f"{cap_reason} {cap:.2f}" if cap_reason else f"证据上限 {cap:.2f}"
+    if cap_note:
+        basis += "；" + cap_note
+    if base_note:
+        basis += "；" + base_note
+    result["explanation"] = {
+        "logic": (logic or _EXPLANATION_LOGIC[result["key"]])
+                 + "；再依次执行固定加减、档内 ±1 调整和硬上限。",
+        "basis": basis,
+        "base_label": label,
+        "base_note": base_note,
+        "cap_note": cap_note,
+    }
+    return result
+
+
 DIM_KEYS = ("1A", "1B", "1C", "1D", "1E", "1F", "3A", "3B", "3C")
 CRITICAL_KEYS = {"1C", "1D", "1E", "1F"}
 BAND_ORDER = {"A": 1, "B": 2, "C": 3, "D": 4}
@@ -203,6 +244,8 @@ def _eval_1a(spec, context):
     policy = POLICY_ALIASES.get(str(raw_policy or "").lower())
     if raw_policy is not None and policy is None:
         return _missing("1A", "未知政策口径")
+    policy_text = {"tailwind": "政策顺风", "neutral": "政策中性", "mixed": "政策中性偏紧",
+                   "negative": "政策明确打压"}.get(policy, "政策口径未获取")
     if stage in ("mature", "成熟期"):
         missing = _required(spec, ("demand_decline_2y", "structure_ok", "price_mechanism_ok", "policy"), "1A")
         if missing:
@@ -223,12 +266,28 @@ def _eval_1a(spec, context):
         steps = [{"id": "1A.MATURE.CHECK", "evidence": "需求/替代/格局/价格机制", "delta": 0}]
         if substitution_unknown:
             steps.append({"id": "1A.SUBSTITUTION.UNKNOWN", "evidence": "替代威胁未获取，最高只能落B档", "delta": 0})
-        return _finish("1A", band, BAND_BASE[band][2], steps, spec,
-                       cap=7.9 if substitution_unknown else None)
+        substitution = spec.get("substitution_low")
+        facts = [
+            "需求连续两年衰退" if spec["demand_decline_2y"] else "需求未连续两年衰退",
+            "替代威胁未知" if substitution_unknown else "替代威胁低" if substitution else "替代威胁不低",
+            "格局良好" if spec["structure_ok"] else "格局不佳",
+            "价格机制正常" if spec["price_mechanism_ok"] else "价格机制不正常",
+            policy_text,
+        ]
+        reasons = {
+            "A": "替代低、格局与价格机制正常且政策非偏紧 → A 档",
+            "B": "格局良好且替代威胁低或未知 → B 档",
+            "C": "未满足 A/B 档条件 → C 档",
+            "D": "需求连续两年衰退或政策明确打压 → D 档",
+        }
+        result = _finish("1A", band, BAND_BASE[band][2], steps, spec,
+                         cap=7.9 if substitution_unknown else None)
+        return _explain(result, band, "、".join(facts) + "；" + reasons[band])
     if stage in ("decline", "衰退期"):
         band = "D"
-        return _finish("1A", band, BAND_BASE[band][2],
-                       [{"id": "1A.LIFECYCLE.DECLINE", "evidence": "衰退期", "delta": 0}], spec)
+        result = _finish("1A", band, BAND_BASE[band][2],
+                         [{"id": "1A.LIFECYCLE.DECLINE", "evidence": "衰退期", "delta": 0}], spec)
+        return _explain(result, band, "生命周期为衰退期 → D 档")
     missing = _required(spec, ("growth", "policy"), "1A")
     if missing:
         return missing
@@ -252,7 +311,17 @@ def _eval_1a(spec, context):
     steps = [{"id": "1A.GROWTH.CHECK", "evidence": f"增速{growth}%/TAM{tam_txt}/渗透率{penetration_txt}", "delta": 0}]
     if top_missing:
         steps.append({"id": "1A.TOP_EVIDENCE.UNKNOWN", "evidence": "缺" + "/".join(top_missing) + "，最高只能落B档", "delta": 0})
-    return _finish("1A", band, BAND_BASE[band][2], steps, spec, cap=7.9 if top_missing else None)
+    result = _finish("1A", band, BAND_BASE[band][2], steps, spec, cap=7.9 if top_missing else None)
+    reasons = {
+        "A": "增速>15%、TAM≥1000 亿元、渗透率<30%且政策顺风 → A 档",
+        "B": "增速≥5%，但未同时满足 A 档全部条件 → B 档",
+        "C": "增速<5%或政策中性偏紧 → C 档",
+        "D": "负增长或政策明确打压 → D 档",
+    }
+    tam_basis = "未获取" if tam is None else f"{tam:g} 亿元"
+    basis = (f"行业增速 {growth:g}%、TAM {tam_basis}、渗透率 {penetration_txt}、{policy_text}；"
+             + reasons[band])
+    return _explain(result, band, basis)
 
 
 def _eval_industry_1b(spec, context):
@@ -277,8 +346,18 @@ def _eval_industry_1b(spec, context):
               "evidence": f"{context.get('industry_profile')}/成本{cost}/定价{pricing}", "delta": 0}]
     if concentration_unknown:
         steps.append({"id": "1B.CONCENTRATION.UNKNOWN", "evidence": "客户或供应商集中度未知", "delta": 0})
-    return _finish("1B", band, BAND_BASE[band][2], steps, spec,
-                   cap=7.9 if concentration_unknown else None)
+    result = _finish("1B", band, BAND_BASE[band][2], steps, spec,
+                     cap=7.9 if concentration_unknown else None)
+    labels = {"strong": "强", "neutral": "中性", "weak": "弱"}
+    strong = (cost == "strong") + (pricing == "strong")
+    reason = ("集中度>50%且议价权实质丧失 → D 档" if band == "D" else
+              {2: "两强 → A 档", 1: "一强 → B 档", 0: "不强 → C 档"}[strong])
+    customer_text = "未知" if customer is None else f"{customer:.0%}"
+    supplier_text = "未知" if supplier is None else f"{supplier:.0%}"
+    basis = (f"成本{labels[cost]}、定价{labels[pricing]}；{reason}；"
+             f"客户/供应商集中度 {customer_text}/{supplier_text}")
+    return _explain(result, band, basis,
+                    logic="比较成本与定价强弱，并核查集中度和议价状态")
 
 
 def _eval_1b(spec, context):
@@ -311,8 +390,25 @@ def _eval_1b(spec, context):
         steps.append({"id": "1B.SELF_SUPPLY.UNKNOWN", "evidence": "上游自给率未获取，改用成本曲线分位", "delta": 0})
     if concentration_unknown:
         steps.append({"id": "1B.CONCENTRATION.UNKNOWN", "evidence": "客户或供应商集中度未知", "delta": 0})
-    return _finish("1B", band, BAND_BASE[band][2], steps, spec,
-                   cap=7.9 if concentration_unknown else None)
+    result = _finish("1B", band, BAND_BASE[band][2], steps, spec,
+                     cap=7.9 if concentration_unknown else None)
+    cost_strong = cost_quartile == 1 or (_ratio(spec.get("upstream_self_supply")) or 0) > 0.5
+    price_strong = bool(spec["price_transmission"])
+    facts = f"成本{'强' if cost_strong else '不强'}、价格{'可传导' if price_strong else '难以传导'}"
+    if band == "D":
+        reason = "集中度>50%且议价权实质丧失 → D 档"
+    elif band == "A":
+        reason = "成本与价格传导双强 → A 档"
+    elif band == "B":
+        reason = "成本或价格传导仅一端强 → B 档"
+    else:
+        reason = "成本与价格传导均不强 → C 档"
+    customer_text = "未知" if customer is None else f"{customer:.0%}"
+    supplier_text = "未知" if supplier is None else f"{supplier:.0%}"
+    basis = f"{facts}；{reason}；客户/供应商集中度 {customer_text}/{supplier_text}"
+    if spec.get("upstream_self_supply") is None:
+        basis += "；上游自给率未获取，按成本曲线分位"
+    return _explain(result, band, basis)
 
 
 def _eval_1c(spec, context):
@@ -363,7 +459,18 @@ def _eval_1c(spec, context):
     elif pressure in (None, "unknown"):
         steps.append({"id": "1C.PRESSURE.UNKNOWN", "evidence": "未取得压力测试，最高只能落B档", "delta": 0})
         cap = 7.9 if cap is None else min(cap, 7.9)
-    return _finish("1C", band, BAND_BASE[band][2], steps, spec, cap=cap)
+    result = _finish("1C", band, BAND_BASE[band][2], steps, spec, cap=cap)
+    trend_names = {"widening": "变宽", "stable": "稳定", "narrowing": "变窄", "unknown": "未知", None: "未知"}
+    trends = "/".join(trend_names[moat.get("trend")] for moat in valid) if valid else "无有效护城河"
+    pressure_text = "未获取" if pressure is None else "未知" if pressure == "unknown" else pressure
+    reasons = {
+        "A": "≥2 条且无变窄趋势 → A 档",
+        "B": "1 条有效护城河，或存在混合变窄趋势 → B 档",
+        "C": "仅话术或有效护城河全部变窄 → C 档",
+        "D": "无有效护城河 → D 档",
+    }
+    basis = f"有效护城河 {len(valid)} 条；趋势：{trends}；压力测试：{pressure_text}；{reasons[band]}"
+    return _explain(result, band, basis)
 
 
 def _ocf_liquidity_exemption(liquidity):
@@ -475,8 +582,25 @@ def _eval_generic_f(spec, profile, context=None):
             steps.append({"id": f"1D.RED.{name.upper()}", "evidence": str(hit), "delta": -1})
     if gross_unknown:
         steps.append({"id": "1D.GROSS_MARGIN_PEER.UNKNOWN", "evidence": "同业毛利率对照缺失，最高只能落B档", "delta": 0})
-    return _finish("1D", band, BAND_BASE[band][2], steps, spec,
-                   cap=7.9 if gross_unknown else None)
+    result = _finish("1D", band, BAND_BASE[band][2], steps, spec,
+                     cap=7.9 if gross_unknown else None)
+    trend_reason = {"A": "通过 8—9 项 → A 档", "B": "通过 6—7 项 → B 档",
+                    "C": "通过 4—5 项 → C 档", "D": "通过 0—3 项 → D 档"}[trend_band]
+    if _ocf_liquidity_exemption(liquidity):
+        liquidity_reason = (f"短债覆盖<1，但经营现金流/短债 {liquidity['ocf_short_cover']:.2f}>2，"
+                            f"上调一档为 {liquidity_band} 档")
+    else:
+        liquidity_reason = {
+            "A": "有息负债率<30%且短债覆盖≥1.5 → A 档",
+            "B": "有息负债率≤50%且短债覆盖≥1 → B 档",
+            "C": "其余负债率与短债覆盖组合 → C 档",
+            "D": "有息负债率>70%且短债覆盖<1 → D 档",
+        }[liquidity_band]
+    merged = f"（因果归并前 {raw_hits}/9 项）" if hits != raw_hits else ""
+    basis = (f"九项检查通过 {hits}/9 项{merged}，{trend_reason}，即趋势轨 {trend_band} 档；"
+             f"有息负债率 {liquidity['debt_ratio']:.2%}、短债覆盖 {liquidity['short_cover']:.2f} 倍，"
+             f"{liquidity_reason}，即流动性轨 {liquidity_band} 档；取较低档为 {band} 档")
+    return _explain(result, band, basis)
 
 
 def _eval_industry_checklist(spec, profile):
@@ -505,7 +629,14 @@ def _eval_industry_checklist(spec, profile):
         steps.append({"id": "1D.NOT_APPLICABLE",
                       "evidence": "；".join(f"{name}: {evidence_map[name].strip()}"
                                            for name in not_applicable), "delta": 0})
-    return _finish("1D", band, BAND_BASE[band][2], steps, spec)
+    result = _finish("1D", band, BAND_BASE[band][2], steps, spec)
+    reason = ("全部适用项通过 → A 档" if band == "A" else
+              "仅 1 项未通过 → B 档" if band == "B" else
+              "2 项未通过 → C 档" if band == "C" else "其余结果 → D 档")
+    basis = f"行业检查通过 {good}/{total} 项；{reason}"
+    if not_applicable:
+        basis += f"；另有 {len(not_applicable)} 项有依据地判为不适用"
+    return _explain(result, band, basis, logic="按本行业专项清单的通过与未通过项定档")
 
 
 def _eval_survival_checklist(spec, profile):
@@ -515,8 +646,12 @@ def _eval_survival_checklist(spec, profile):
     if runway is None:
         return _missing("1D", "缺少现金跑道或行业检查清单")
     band = "A" if runway >= 24 else "B" if runway >= 18 else "C" if runway >= 12 else "D"
-    return _finish("1D", band, BAND_BASE[band][2],
-                   [{"id": "1D.CASH_RUNWAY", "evidence": f"{runway}个月", "delta": 0}], spec)
+    result = _finish("1D", band, BAND_BASE[band][2],
+                     [{"id": "1D.CASH_RUNWAY", "evidence": f"{runway}个月", "delta": 0}], spec)
+    reason = {"A": "≥24 个月 → A 档", "B": "18—24 个月 → B 档",
+              "C": "12—18 个月 → C 档", "D": "<12 个月 → D 档"}[band]
+    return _explain(result, band, f"现金跑道 {runway:.2f} 个月；{reason}",
+                    logic="按现金可维持经营的月数定档")
 
 
 def _eval_1d(spec, context):
@@ -582,7 +717,11 @@ def _eval_1e(spec, context):
         positive = 2
     if positive and not any(step["id"] == "1E.POSITIVE_CAP" for step in steps):
         steps.append({"id": "1E.POSITIVE_CAP", "evidence": f"正向合计{positive}", "delta": 0})
-    return _finish("1E", "D", 6.0, steps, spec, cap=9.0)
+    result = _finish("1E", "D", 6.0, steps, spec, cap=9.0)
+    basis = (f"中性 6 分起；本次质押 {pledge:.2%}、近 12 个月减持 {reduction:.2%}、"
+             f"重大处罚：{'有' if spec['penalties'] else '无'}；再按清单实际命中加减，"
+             "正向清单最高 +2，最终最高 9")
+    return _explain(result, "D", basis, base_label="中性起点")
 
 
 def _eval_financial_1f(spec, profile):
@@ -605,7 +744,19 @@ def _eval_financial_1f(spec, profile):
     steps = [{"id": "1F.NORMALIZED_RETURN_COE",
               "evidence": f"{metric}覆盖{coverage:.3f}", "delta": 0}]
     cap = 4.0 if coverage < 1 else 7.9 if spec.get("dupont_driver") == "杠杆" else None
-    return _finish("1F", band, base, steps, spec, cap=cap)
+    result = _finish("1F", band, base, steps, spec, cap=cap)
+    band_name = "A" if band == "A" else "D" if band == "D" else "B"
+    reason = ("覆盖≥1.5 → A 档，基础分 9" if band_name == "A" else
+              "1.0≤覆盖<1.5 → 基础分 6（仅覆盖资金成本）" if band_name == "B" else
+              "覆盖<1.0 → D 档，基础分 2，档位边界最高 3.9")
+    metric_label = {"ROE_NORMALIZED": "正常化 ROE", "ROTCE": "正常化 ROTCE"}[metric]
+    basis = f"{metric_label} {normalized:.2%}、COE {coe:.2%}；覆盖 {coverage:.3f} 倍；{reason}"
+    cap_reason = ("回报覆盖不足 1.0，规则上限" if coverage < 1 else
+                  "杠杆主驱动，规则上限" if cap is not None else None)
+    return _explain(result, band_name, basis,
+                    base_label="回报覆盖基础分" if band_name == "B" else None,
+                    logic="比较正常化 ROE/ROTCE 与股权成本 COE，再结合杠杆限制",
+                    cap_reason=cap_reason)
 
 
 def requires_normalized_roic(context):
@@ -620,8 +771,12 @@ def _eval_1f(spec, context):
     runway = spec.get("cash_runway_months")
     if PROFILE_KIND[profile] == "survival_checklist" and runway is not None and spec.get("roic") is None:
         band = "A" if runway >= 24 else "B" if runway >= 18 else "C" if runway >= 12 else "D"
-        return _finish("1F", band, BAND_BASE[band][2],
-                       [{"id": "1F.CASH_RUNWAY", "evidence": f"{runway}个月", "delta": 0}], spec)
+        result = _finish("1F", band, BAND_BASE[band][2],
+                         [{"id": "1F.CASH_RUNWAY", "evidence": f"{runway}个月", "delta": 0}], spec)
+        reason = {"A": "≥24 个月 → A 档", "B": "18—24 个月 → B 档",
+                  "C": "12—18 个月 → C 档", "D": "<12 个月 → D 档"}[band]
+        return _explain(result, band, f"现金跑道 {runway:.2f} 个月；{reason}",
+                        logic="生存型公司按现金可维持经营的月数定档")
     roic, wacc = _ratio(spec.get("roic")), _ratio(spec.get("wacc"))
     incremental = _ratio(spec.get("incremental_roic"))
     if ((roic is not None and abs(roic) > 1) or (wacc is not None and wacc > 1)
@@ -663,7 +818,20 @@ def _eval_1f(spec, context):
         delta = 1 if incremental > 1.5 * wacc else -1 if incremental < wacc else 0
         steps.append({"id": "1F.INCREMENTAL_ROIC", "evidence": str(incremental), "delta": delta})
     cap = 7.9 if spec.get("dupont_driver") == "杠杆" else 4.0 if coverage < 1 else None
-    return _finish("1F", band, base, steps, spec, cap=cap)
+    result = _finish("1F", band, base, steps, spec, cap=cap)
+    band_name = "A" if band == "A" else "D" if band == "D" else "B"
+    reason = ("覆盖≥1.5 → A 档，基础分 9" if band_name == "A" else
+              "1.0≤覆盖<1.5 → 基础分 6（仅覆盖资金成本）" if band_name == "B" else
+              "覆盖<1.0 → D 档，基础分 2，档位边界最高 3.9")
+    reader_basis = (f"年化 ROIC {annual_roic:.2%}、WACC {wacc:.2%}；"
+                    f"覆盖 {coverage:.3f} 倍；{reason}")
+    if components:
+        reader_basis += "；三年 ROIC：" + "/".join(f"{value:.2%}" for value in components)
+    cap_reason = ("杠杆主驱动，规则上限" if spec.get("dupont_driver") == "杠杆" else
+                  "回报覆盖不足 1.0，规则上限" if coverage < 1 else None)
+    return _explain(result, band_name, reader_basis,
+                    base_label="回报覆盖基础分" if band_name == "B" else None,
+                    cap_reason=cap_reason)
 
 
 def _eval_3a(spec, context):
@@ -685,8 +853,15 @@ def _eval_3a(spec, context):
         band = "C"
     else:
         band = "D"
-    return _finish("3A", band, BAND_BASE[band][2],
-                   [{"id": "3A.GROWTH", "evidence": f"下限{lo}%/驱动{driver}/阈值{threshold}%", "delta": 0}], spec)
+    result = _finish("3A", band, BAND_BASE[band][2],
+                     [{"id": "3A.GROWTH", "evidence": f"下限{lo}%/驱动{driver}/阈值{threshold}%", "delta": 0}], spec)
+    reasons = {
+        "A": f"增速下限>{threshold}%且驱动已验证 → A 档",
+        "B": "增速下限≥10%且驱动已验证或部分兑现 → B 档",
+        "C": "增速下限≥0，但未满足 A/B 档条件 → C 档",
+        "D": "增速下限<0 → D 档",
+    }
+    return _explain(result, band, f"增速下限 {lo:.1f}%、驱动{driver}、A 档阈值 {threshold}%；{reasons[band]}")
 
 
 def _eval_primary_group(items, names, scores, steps, spec, projects_mode):
@@ -711,7 +886,13 @@ def _eval_primary_group(items, names, scores, steps, spec, projects_mode):
             base, weakest = score, item
     steps.append({"id": "3B.PRIMARY_GROUP",
                   "evidence": f"组合最弱项{weakest.get('name')}/{weakest.get(key)}/最高7.9", "delta": 0})
-    return _finish("3B", _band_for_score(base), base, steps, spec, cap=cap)
+    result = _finish("3B", _band_for_score(base), base, steps, spec, cap=cap)
+    basis = (f"组合最弱项「{weakest.get('name')}」：{weakest.get(key)} {base:g} 分；"
+             "利润权重缺失或合计不为 1，按组合最弱核心项定基础分")
+    if cap == 5.0 and base == 2:
+        basis += "；非纯叙事项缺少数值，缺数值上限 5 与缺权重上限 7.9 取更严者，本次未触及上限"
+    return _explain(result, _band_for_score(base), basis, base_label="组合主来源基础分",
+                    logic="缺少完整利润贡献权重时，按组合主来源中最弱核心项定基础分")
 
 
 def _invalid_contributions(items, default=0):
@@ -749,9 +930,16 @@ def _eval_3b_items(spec, items, marker_key, scores, default_weight, projects_mod
             base, cap = 2, 5.0
         steps.append({"id": "3B.PRIMARY_FALLBACK",
                       "evidence": f"{primary.get('name')}/{marker}/缺权重最高7.9", "delta": 0})
-        return _finish("3B", _band_for_score(base), base, steps, spec, cap=cap)
+        result = _finish("3B", _band_for_score(base), base, steps, spec, cap=cap)
+        basis = (f"唯一利润主来源「{primary.get('name')}」：{marker} {base:g} 分；"
+                 "利润权重缺失或合计不为 1，按主来源定基础分")
+        if cap == 5.0 and base == 2:
+            basis += "；非纯叙事项缺少数值，缺数值上限 5 与缺权重上限 7.9 取更严者，本次未触及上限"
+        return _explain(result, _band_for_score(base), basis, base_label="主来源基础分",
+                        logic="缺少完整利润贡献权重时，按唯一明确的利润主来源定基础分")
     base = 0
     cap = None
+    basis_parts = []
     for item in items:
         marker = item.get(marker_key)
         if marker not in scores:
@@ -762,6 +950,7 @@ def _eval_3b_items(spec, items, marker_key, scores, default_weight, projects_mod
             score, cap = 2, 5.0
         weight = float(item.get("contribution", default_weight))
         base += score * weight
+        basis_parts.append(f"{item.get('name', kind)}：{marker} {score:g} 分×{weight:.0%}")
         if projects_mode:
             step_id = f"3B.PROJECT.{item.get('name', len(steps))}"
             evidence = f"{marker}/权重{weight}"
@@ -769,7 +958,10 @@ def _eval_3b_items(spec, items, marker_key, scores, default_weight, projects_mod
             step_id = f"3B.VISIBILITY.{item.get('name', len(steps))}"
             evidence = f"{marker}/权重{weight}/数值{item.get('value')}"
         steps.append({"id": step_id, "evidence": evidence, "delta": 0})
-    return _finish("3B", _band_for_score(base), base, steps, spec, cap=cap)
+    result = _finish("3B", _band_for_score(base), base, steps, spec, cap=cap)
+    basis = "；".join(basis_parts) + f"；按利润贡献加权基础分 {base:.2f}"
+    return _explain(result, _band_for_score(base), basis,
+                    base_label="项目加权基础分" if projects_mode else "可见度加权基础分")
 
 
 def _eval_3b(spec, context):
@@ -783,7 +975,9 @@ def _eval_3b(spec, context):
         scores = {"已投产": 9, "试生产": 9, "在建": 7, "审批中": 5, "资金未落实": 5, "规划": 2, "意向": 2}
         return _eval_3b_items(spec, projects, "stage", scores, 0, True)
     if not visibility:
-        return _finish("3B", "D", 2.0, [], spec)
+        result = _finish("3B", "D", 2.0, [], spec)
+        return _explain(result, "D", "无项目或可见度条目 → D 档",
+                        logic="无项目或可见度条目时直接落 D 档")
     scores = {"合约级": 9, "可量化扩张": 7, "趋势平缓": 5, "纯叙事": 2}
     default_weight = 1 if len(visibility) == 1 else 0
     return _eval_3b_items(spec, visibility, "level", scores, default_weight, False)
@@ -818,7 +1012,14 @@ def _eval_3c(spec, context):
                 directional = True
     band = "A" if len(valid) >= 2 else "B" if len(valid) == 1 else "C" if directional else "D"
     steps = [{"id": "3C.EVENT_COUNT", "evidence": f"明确月份重估事件{len(valid)}个", "delta": 0}]
-    return _finish("3C", band, BAND_BASE[band][2], steps, spec, cap=5.9 if band == "C" else None)
+    result = _finish("3C", band, BAND_BASE[band][2], steps, spec, cap=5.9 if band == "C" else None)
+    reasons = {
+        "A": "12 个月内 ≥2 个 → A 档",
+        "B": "12 个月内 1 个 → B 档",
+        "C": "仅有方向性事件（未确认重估或月份不可验证）→ C 档，最高 5.9",
+        "D": "无窗口内明确月份的重估事件 → D 档",
+    }
+    return _explain(result, band, f"明确月份重估事件 {len(valid)} 个；{reasons[band]}")
 
 
 def evaluate_dimension(key: str, spec: dict, context: dict) -> dict:

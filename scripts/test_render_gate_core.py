@@ -13,6 +13,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import render_report as R
+import quality_rules as qr
 from scoring import (
     _position_steps, _quality_verdict, _valuation_verdict,
 )
@@ -1000,7 +1001,7 @@ def test_score_detail_explains_effective_cap_in_chinese():
     html = R._build_score_detail("1B", result, {})
     summary = _visible_text(re.search(r"<summary>(.*?)</summary>", html, re.S).group(1))
     assert "最终 7.90" in summary
-    assert "定档起点 9.00" in summary
+    assert "基础分 9.00" in summary
     assert "证据上限 7.90" in summary
     assert "客户或供应商集中度未知" in _visible_text(html)
     assert "1B.VALUE_CHAIN" not in _visible_text(html)
@@ -1124,6 +1125,145 @@ def test_score_detail_does_not_blame_evidence_cap_for_band_clamp():
     summary = _visible_text(re.search(r"<summary>(.*?)</summary>", html, re.S).group(1))
     assert "证据上限" not in summary
     assert "档位边界限制" in summary
+
+
+@pytest.mark.parametrize("key,expected", [
+    ("1A", ["基础分 9.00（A档代表分）", "需求未连续两年衰退", "替代威胁低", "价格机制正常",
+            "未获额外 +1，因此不是 10"]),
+    ("1B", ["成本强", "价格可传导", "双强"]),
+    ("1C", ["有效护城河 2 条", "≥2 条", "压力测试：警惕"]),
+    ("1D", ["通过 9/9 项", "趋势轨 A 档", "流动性轨 A 档"]),
+    ("1E", ["基础分 6.00（中性起点）", "中性 6 分起", "规则调整 +1.00"]),
+    ("1F", ["年化 ROIC 16.00%", "WACC 8.00%", "覆盖 2.000 倍"]),
+    ("3A", ["增速下限 21.0%", "驱动已验证", ">20%"]),
+    ("3B", ["项目加权基础分", "核心项目：已投产 9 分×100%", "加权基础分 9.00"]),
+    ("3C", ["明确月份重估事件 2 个", "≥2 个"]),
+])
+def test_score_detail_presents_engine_logic_and_actual_band_basis(key, expected):
+    fill = v2_fill()
+    result = R.compute_scores(fill)["dimension_results"][key]
+    text = R._html_unescape(_visible_text(R._build_score_detail(key, result, fill["score_inputs"][key])))
+    assert "评分逻辑" in text and "定档依据" in text
+    for fragment in expected:
+        assert fragment in text
+
+
+def test_score_detail_explains_seven_of_nine_and_lower_financial_track():
+    fill = v2_fill()
+    fill["score_inputs"]["1D"]["f_items"]["long_debt_down"] = False
+    fill["score_inputs"]["1D"]["f_items"]["gross_margin_improving"] = False
+    result = R.compute_scores(fill)["dimension_results"]["1D"]
+    html = R._build_score_detail("1D", result, fill["score_inputs"]["1D"])
+    summary = _visible_text(re.search(r"<summary>(.*?)</summary>", html, re.S).group(1))
+    text = _visible_text(html)
+    assert result["final"] == 7
+    for fragment in ("通过 7/9 项", "趋势轨 B 档", "流动性轨 A 档", "取较低档为 B 档"):
+        assert fragment in text
+    assert "基础分 7.00（B档代表分）" in summary
+    assert "无加减分，最终分=基础分" in summary
+
+
+def test_score_detail_explains_middle_return_base_six():
+    fill = v2_fill()
+    fill["score_inputs"]["1F"]["roic"] = 0.08
+    result = R.compute_scores(fill)["dimension_results"]["1F"]
+    text = R._html_unescape(_visible_text(R._build_score_detail("1F", result, fill["score_inputs"]["1F"])))
+    assert result["final"] == 6
+    assert "基础分 6.00（回报覆盖基础分）" in text
+    assert "1.0≤覆盖<1.5" in text and "仅覆盖资金成本" in text
+
+
+def test_score_detail_distinguishes_primary_fallback_from_weighted_base():
+    fill = v2_fill()
+    fill["score_inputs"]["3B"] = {"projects": [
+        {"name": "在产主矿", "stage": "已投产", "primary": True},
+        {"name": "远期矿", "stage": "规划"},
+    ]}
+    result = R.compute_scores(fill)["dimension_results"]["3B"]
+    text = _visible_text(R._build_score_detail("3B", result, fill["score_inputs"]["3B"]))
+    assert result["final"] == 7.9
+    assert "基础分 9.00（主来源基础分）" in text
+    assert "利润权重缺失或合计不为 1" in text and "证据上限 7.90" in text
+
+
+def test_score_detail_distinguishes_cancelled_adjustments_from_no_adjustments():
+    result = {
+        "base": 9, "pre_cap": 9, "cap": None, "final": 9,
+        "custom": {"id": "CUSTOM.COMPOSITE", "items": [
+            {"id": "CUSTOM.A", "points": 1, "reason": "优势", "evidence": "证据A"},
+            {"id": "CUSTOM.B", "points": -1, "reason": "风险", "evidence": "证据B"},
+        ]},
+        "explanation": {"logic": "测试逻辑", "basis": "测试定档依据", "base_label": "A档代表分"},
+        "rule_steps": [
+            {"id": "CUSTOM.A", "evidence": "证据A", "delta": 1},
+            {"id": "CUSTOM.B", "evidence": "证据B", "delta": -1},
+        ],
+    }
+    html = R._build_score_detail("1C", result, {})
+    summary = _visible_text(re.search(r"<summary>(.*?)</summary>", html, re.S).group(1))
+    text = _visible_text(html)
+    assert "无加减分" not in summary
+    assert "调整相互抵消" in summary
+    assert "+1.00" in text and "−1.00" in text
+
+
+def test_score_detail_explains_when_a_band_becomes_ten():
+    fill = v2_fill()
+    fill["score_inputs"]["1C"]["custom"] = {
+        "id": "CUSTOM.TEST", "points": 1, "reason": "额外优势", "evidence": "公开证据",
+    }
+    result = R.compute_scores(fill)["dimension_results"]["1C"]
+    text = _visible_text(R._build_score_detail("1C", result, fill["score_inputs"]["1C"]))
+    assert result["final"] == 10
+    assert "base_note" in result["explanation"]
+    assert "A 档代表分 9，经实际 +1 调整后形成 10" in text
+
+
+def test_score_detail_a_band_note_is_engine_metadata():
+    fill = v2_fill()
+    result = R.compute_scores(fill)["dimension_results"]["1C"]
+    note = result["explanation"].get("base_note")
+    assert note == "9 是 A 档代表分，未获额外 +1，因此不是 10。"
+    text = _visible_text(R._build_score_detail("1C", result, fill["score_inputs"]["1C"]))
+    assert note in text
+
+
+def test_score_detail_leverage_cap_names_rule_reason():
+    fill = v2_fill()
+    fill["score_inputs"]["1F"]["dupont_driver"] = "杠杆"
+    result = R.compute_scores(fill)["dimension_results"]["1F"]
+    html = R._build_score_detail("1F", result, fill["score_inputs"]["1F"])
+    summary = _visible_text(re.search(r"<summary>(.*?)</summary>", html, re.S).group(1))
+    text = _visible_text(html)
+    assert result["final"] == 7.9
+    assert "杠杆主驱动，规则上限 7.90" in summary
+    assert "杠杆主驱动，规则上限 7.90" in text
+    assert "证据上限" not in text
+
+
+def test_score_detail_does_not_show_inactive_cap_as_a_reduction():
+    spec = {"moats": [{"verified": True, "rhetoric": False, "type": "cost",
+                       "replication": "多年资本投入", "evidence": "公开经营数据", "trend": "stable"}],
+            "pressure": "unknown"}
+    result = qr.evaluate_dimension("1C", spec, {"report_date": "2026-10-24"})
+    html = R._build_score_detail("1C", result, spec)
+    summary = _visible_text(re.search(r"<summary>(.*?)</summary>", html, re.S).group(1))
+    text = _visible_text(html)
+    assert result["final"] == 7
+    assert "无加减分，最终分=基础分" in summary
+    assert "证据上限" not in text and "最高 7.9" not in text
+
+
+def test_score_detail_industry_branch_does_not_use_generic_financial_logic():
+    context = {"stock_type": "稳定价值/金融", "industry_profile": "financial_insurance",
+               "report_date": "2026-10-24"}
+    spec = {"industry_checks": {"solvency": False, "combined_ratio": "not_applicable",
+                                "reserve": False, "investment_assumption": False},
+            "industry_check_evidence": {"combined_ratio": "纯寿险无财险综合成本率"}}
+    result = qr.evaluate_dimension("1D", spec, context)
+    text = _visible_text(R._build_score_detail("1D", result, spec))
+    assert "本行业专项清单" in text and "行业检查通过 3/3 项" in text
+    assert "九项趋势检查与流动性" not in text
 
 
 def test_peers_meta_mere_metric_mention_does_not_waive_direction_warning():

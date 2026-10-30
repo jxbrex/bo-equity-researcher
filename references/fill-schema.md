@@ -43,7 +43,7 @@ JSON 原样回填，禁止手估、手算、凭记忆补**。各字段的直填�
 | `date` | ✓ | 报告日期，必须严格 YYYY-MM-DD 格式（不匹配即拒渲染） |
 | `subtitle` | ✓ | 副标题（行业标签 · 一句话定位）。**禁止包含报告日期**——模板 Hero 自动追加「｜报告日期：date」，手写会渲染出两次 |
 | `quality_version` | 条件（新报告必填 2） | 报告日 ≥2026-10-24 必须显式填 `2`；既有三轨报告缺省为 1，pre-v4 单轨综合分标 `legacy-single-track`。不同版本只并列质量分，不计算差值；v1 字段仅供历史重渲 |
-| `score_inputs` | v2 必填 | **九维结构化评分输入**，键为 1A-1F/3A-3C；**字段名、类型、枚举、必填条件与行业变体见下方「score_inputs 九维字段契约」**；规则、档位与行业映射见 `scoring.md`「九维规则总表」。脚本计算最终分与得分链，缺失不出中性分、不重归一化。每维可含 `counter_evidence`（≥8 或 ≤3 时必填）与 `custom`（清单外 ±1，须 `id/points/reason/evidence`，复合调整合计仍限 ±1）；1D 用 `red_flags`/`red_flag_materiality`，F 因果归并须 `f_causal_evidence`，行业 `not_applicable` 须 `industry_check_evidence`；声明不具重大性时 `red_flag_materiality_evidence` 必须含 `scale`（含数值规模）与 `source`（可核验来源），缺任一仍扣分；成长型 1D 另可在 `g_checks` 填 `rd_intensity_evidence`/`capex_intensity_evidence`，只展示、不另算 G 分；1F 最新累计期须显式给 3/6/9/12 个月，正常化须 `roic_normalized_components` 三个完整年度值并与 ROIC 中位数一致，缺组成或不一致拒评分；3B 每项贡献须为 0—1 有限数；3C 仅过去、超期或非法月份不得回退 C。**机械落盘缺失但已人工核实的字段，在该维 `manual_evidence` 按不含维度名的叶级路径登记，如 `"f_items.long_debt_down":{"source":"2025年报…","note":"两年长期有息负债逐项对照"}`；`source` 与 `note` 均必填，父级打包说明无效。它只解释“落盘缺失”，不得覆盖落盘已有但不同的值；漏抄与冲突仍告警。展示层只把规则 ID 放 `data-rule-id`，报告正文改为最终分/定档起点/实际加减分/生效上限与中文分组依据，不显示内部编号、Python 布尔值或字典** |
+| `score_inputs` | v2 必填 | **九维结构化评分输入**，键为 1A-1F/3A-3C；**字段名、类型、枚举、必填条件与行业变体见下方「score_inputs 九维字段契约」**；规则、档位与行业映射见 `scoring.md`「九维规则总表」。脚本计算最终分与得分链，缺失不出中性分、不重归一化。每维可含 `counter_evidence`（≥8 或 ≤3 时必填）与 `custom`（清单外 ±1，须 `id/points/reason/evidence`，复合调整合计仍限 ±1）；1D 用 `red_flags`/`red_flag_materiality`，F 因果归并须 `f_causal_evidence`，行业 `not_applicable` 须 `industry_check_evidence`；声明不具重大性时 `red_flag_materiality_evidence` 必须含 `scale`（含数值规模）与 `source`（可核验来源），缺任一仍扣分；成长型 1D 另可在 `g_checks` 填 `rd_intensity_evidence`/`capex_intensity_evidence`，只展示、不另算 G 分；1F 最新累计期须显式给 3/6/9/12 个月，正常化须 `roic_normalized_components` 三个完整年度值并与 ROIC 中位数一致，缺组成或不一致拒评分；3B 每项贡献须为 0—1 有限数；3C 仅过去、超期或非法月份不得回退 C。**机械落盘缺失但已人工核实的字段，在该维 `manual_evidence` 按不含维度名的叶级路径登记，如 `"f_items.long_debt_down":{"source":"2025年报…","note":"两年长期有息负债逐项对照"}`；`source` 与 `note` 均必填，父级打包说明无效。它只解释“落盘缺失”，不得覆盖落盘已有但不同的值；漏抄与冲突仍告警。展示层只把规则 ID 放 `data-rule-id`；摘要显示最终分/基础分及其含义/实际加减分/真正生效的上限，展开区依次呈现评分逻辑、实际输入命中的定档标准、加减分、规则明细、数据缺口与补充观察，不显示内部编号、Python 布尔值或内部枚举。基础分须区分档位代表分、中性起点、回报覆盖基础分与加权/主来源基础分；上限只有实际生效时才作为降分原因展示，解释由评分引擎生成，分析师不得手写另一套** |
 | `scores` | v1 必填；v2 禁填 | 旧三轨 9 维最终分对象。v2 非空即拒渲染，不得用手工分替代 `score_inputs` |
 | `valuation_score` | 无需填写 | **估值分永远由脚本计算**（四件套，见 `valuation_inputs`），fill 里不再需要该字段——填了也被脚本计算值覆盖 |
 | `valuation_inputs` | ✓ | **估值分四件套输入（必填，缺键拒渲染）**：`{"pe_ttm":13.5,"pe_band":[14.5,15.5],"div_yield":1.6,"risk_free":1.7}`（pe_ttm 现价 PE、pe_band 合理带 [低,高]、div_yield 税后股息率 %、risk_free 无风险利率 %）。脚本据此自动算估值分，并在 8 估值章末尾汇总卡生成四件套明细（7 章只汇总质量分，不重复估值/时机明细）。**可选 `metric_label`**（如 "P/NAV"、"P/rNPV"、"P/EV"、"经调整PE"）：行业附录市值口径（见 `scoring.md`「市值口径三情景」节）下替换过程卡 PE(TTM) 标签，pe_ttm/pe_band 数值语义随之变为对应比率，映射公式不变；**可选 `consensus_np`**（v5.0，当年卖方一致预期归母净利均值，亿元，照抄 em_fetch 落盘 `consensus_np.np_avg`，禁手估；v5.1.0 起东财降级源亦落盘：当年 EPS 均值×总股本换算，落盘 `src` 键标记口径）——乐观税门禁输入（规则语义唯一权威见 `scoring.md`「决策层三机制（v5.0）」节，不复述）；无卖方覆盖则不填，过程卡自动标注「乐观税未检」 |
@@ -362,8 +362,9 @@ fill 与 quote 落盘 `quality_inputs.profile` 的 `stock_type/industry_profile/
 
 **v2 结构硬约束**：1A-1F 六块与 3A-3C 三块都必须有 `data-dim="对应键"`，每块在
 `dim-header` 内保留 `<!--SCORE_BADGE-->`、正文末尾保留 `<!--SCORE_DETAIL-->`。脚本按
-`dimension_results` 注入最终徽章与得分链，缺锚点/缺维度即拒渲染；正文重点写事实、优势、
-反方证据与跟踪信息，不再手写另一套最终分。旧 v1 的手写徽章骨架仅用于历史重渲。
+`dimension_results` 注入最终徽章与得分链，缺锚点/缺维度即拒渲染；得分链依次回答评分逻辑、
+实际命中标准、基础分含义与最终调整链，正文重点写事实、优势、反方证据与跟踪信息，不再手写
+另一套最终分或评分依据。旧 v1 的手写徽章骨架仅用于历史重渲。
 
 质量层评分正文片段：`l1_html` 含六维（**报告内 `dim-name` 显示编号用 4.1-4.6**：4.1 赛道与宏观/4.2 产业链位置/4.3 商业模式与护城河/4.4 财务健康/4.5 治理与资本配置/4.6 资本回报质量；4.4 含红旗四项三态表（现金含量/应收/存货/毛利率；审计意见已挪 L4 红灯 a）+**fin_trend 财务趋势图墙**（v4.9 起必填字段、脚本生成，**禁止再手写 5 年年表**——图替代表；锚点 `<!--FIN_TREND-->` 写 4.4 块内）+**em_fetch 财报可信度初评等级与依据**；
 

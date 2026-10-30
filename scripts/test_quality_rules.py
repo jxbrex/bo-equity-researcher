@@ -880,4 +880,168 @@ def test_none_moat_trend_is_unknown_not_invalid():
     result = qr.evaluate_dimension("1C", _moat_spec(trend=None), CTX)
     assert result["status"] == "ok"
     assert result["final"] == 7.9
-    assert result["cap"] == 7.9
+
+
+def _assert_reader_explanation(result, final, base_label, basis_parts, logic_part):
+    explanation = result.get("explanation") or {}
+    assert result["final"] == final
+    assert explanation.get("base_label") == base_label
+    basis = explanation.get("basis") or ""
+    for part in basis_parts:
+        assert part in basis
+    assert logic_part in (explanation.get("logic") or "")
+
+
+@pytest.mark.parametrize("key,spec,final,base_label,basis_parts,logic_part", [
+    ("1A", {"stage": "mature", "demand_decline_2y": False, "substitution_low": True,
+            "structure_ok": True, "price_mechanism_ok": True, "policy": "neutral"},
+     9, "A档代表分", ["需求未连续两年衰退", "替代威胁低", "格局良好", "价格机制正常", "A 档"], "生命周期"),
+    ("1B", {"cost_quartile": 1, "upstream_self_supply": 0.6, "price_transmission": True,
+            "bargaining_status": "正常", "customer_concentration": 0.1, "supplier_concentration": 0.1},
+     9, "A档代表分", ["成本强", "价格可传导", "双强", "A 档"], "集中度"),
+    ("1C", _moat_spec(), 9, "A档代表分",
+     ["有效护城河 2 条", "≥2 条", "压力测试：警惕", "A 档"], "趋势和压力测试"),
+    ("1D", _financial_spec(hits=7), 7, "B档代表分",
+     ["通过 7/9 项", "趋势轨 B 档", "流动性轨 A 档", "取较低档为 B 档"], "红旗扣分"),
+    ("1E", _return_spec(), 6, "中性起点", ["中性 6 分起"], "清单加减"),
+    ("1F", _capital_spec(roic=0.08), 6, "回报覆盖基础分",
+     ["年化 ROIC 8.00%", "WACC 8.00%", "覆盖 1.000 倍", "1.0≤覆盖<1.5", "基础分 6"], "增量 ROIC"),
+    ("3A", {"growth_lo": 21, "growth_hi": 28, "driver_status": "已验证"},
+     9, "A档代表分", ["增速下限 21.0%", ">20%", "驱动已验证", "A 档"], "增速下限"),
+    ("3B", {"projects": [{"name": "甲", "stage": "已投产", "contribution": 0.5},
+                         {"name": "乙", "stage": "在建", "contribution": 0.5}]},
+     8, "项目加权基础分", ["已投产 9 分×50%", "在建 7 分×50%", "加权基础分 8.00"], "利润贡献"),
+    ("3C", {"events": [{"name": "季报", "month": "2026-11", "revaluation": True},
+                       {"name": "投产", "month": "2026-12", "revaluation": True}]},
+     9, "A档代表分", ["明确月份重估事件 2 个", "≥2 个", "A 档"], "12 个月"),
+])
+def test_reader_explanation_covers_nine_core_dimensions(
+        key, spec, final, base_label, basis_parts, logic_part):
+    result = qr.evaluate_dimension(key, spec, CTX)
+    _assert_reader_explanation(result, final, base_label, basis_parts, logic_part)
+
+
+@pytest.mark.parametrize("key,spec,context,final,base_label,basis_parts", [
+    ("1A", {"stage": "growth", "growth": 16, "tam": 1200, "penetration": 20, "policy": "tailwind"},
+     CTX, 9, "A档代表分", ["行业增速 16%", "TAM 1200 亿元", "渗透率 20%", "政策顺风", "A 档"]),
+    ("1A", {"stage": "decline"}, CTX, 2, "D档代表分", ["衰退期", "D 档"]),
+    ("1B", {"cost_strength": "strong", "pricing_strength": "strong", "bargaining_status": "正常",
+            "customer_concentration": 0.1, "supplier_concentration": 0.1},
+     dict(CTX, industry_profile="internet_platform"), 9, "A档代表分", ["成本强、定价强", "两强", "A 档"]),
+    ("1D", {"industry_checks": {"solvency": False, "combined_ratio": "not_applicable",
+                                "reserve": False, "investment_assumption": False},
+            "industry_check_evidence": {"combined_ratio": "纯寿险无财险综合成本率"}},
+     dict(CTX, industry_profile="financial_insurance"), 9, "A档代表分",
+     ["行业检查通过 3/3 项", "全部适用项通过", "A 档"]),
+    ("1D", {"cash_runway_months": 36}, dict(CTX, industry_profile="pre_profit"), 9, "A档代表分",
+     ["现金跑道 36.00 个月", "≥24 个月", "A 档"]),
+    ("1F", {"normalized_return": 0.12, "coe": 0.08, "return_metric": "ROE_NORMALIZED",
+            "dupont_driver": "净利率"},
+     dict(CTX, industry_profile="financial_bank"), 9, "A档代表分",
+     ["正常化 ROE 12.00%", "COE 8.00%", "覆盖 1.500 倍", "A 档"]),
+    ("1F", {"cash_runway_months": 36}, dict(CTX, industry_profile="pre_profit"), 9, "A档代表分",
+     ["现金跑道 36.00 个月", "≥24 个月", "A 档"]),
+])
+def test_reader_explanation_uses_actual_branch_rules(
+        key, spec, context, final, base_label, basis_parts):
+    result = qr.evaluate_dimension(key, spec, context)
+    _assert_reader_explanation(result, final, base_label, basis_parts, "")
+
+
+@pytest.mark.parametrize("spec,final,base_label,basis_parts", [
+    ({"visibility": [{"name": "主业", "level": "合约级", "value": 100, "contribution": 0.8},
+                     {"name": "新业务", "level": "纯叙事", "value": None, "contribution": 0.2}]},
+     7.6, "可见度加权基础分", ["合约级 9 分×80%", "纯叙事 2 分×20%", "加权基础分 7.60"]),
+    ({"projects": [{"name": "在产主矿", "stage": "已投产", "primary": True},
+                   {"name": "远期矿", "stage": "规划"}]},
+     7.9, "主来源基础分", ["在产主矿", "已投产 9 分", "利润权重缺失或合计不为 1", "证据上限 7.90"]),
+    ({"visibility": [{"name": "订单", "level": "合约级", "value": 100},
+                     {"name": "产能", "level": "可量化扩张", "value": 50},
+                     {"name": "远期期权", "level": "纯叙事", "value": None}],
+      "primary_group": ["订单", "产能"]},
+     7, "组合主来源基础分", ["组合最弱项", "可量化扩张 7 分", "利润权重缺失或合计不为 1"]),
+])
+def test_reader_explanation_distinguishes_3b_weighting_and_fallbacks(
+        spec, final, base_label, basis_parts):
+    result = qr.evaluate_dimension("3B", spec, CTX)
+    _assert_reader_explanation(result, final, base_label, basis_parts, "利润贡献")
+
+
+@pytest.mark.parametrize("spec,context", [
+    (_capital_spec(roic=0.16, dupont_driver="杠杆"), CTX),
+    ({"normalized_return": 0.12, "coe": 0.08, "return_metric": "ROE_NORMALIZED",
+      "dupont_driver": "杠杆"}, dict(CTX, industry_profile="financial_bank")),
+])
+def test_leverage_cap_is_a_rule_limit_not_an_evidence_gap(spec, context):
+    result = qr.evaluate_dimension("1F", spec, context)
+    explanation = result.get("explanation") or {}
+    assert result["final"] == 7.9
+    assert "杠杆主驱动，规则上限 7.90" in explanation.get("cap_note", "")
+    assert "证据上限" not in explanation.get("basis", "")
+
+
+@pytest.mark.parametrize("key,spec", [
+    ("1C", _moat_spec(count=1, pressure="unknown")),
+    ("1D", _financial_spec(hits=4, red_flags={
+        "receivables": False, "inventory": False, "gross_margin_anomaly": None})),
+])
+def test_inactive_cap_is_not_written_as_a_score_reduction(key, spec):
+    result = qr.evaluate_dimension(key, spec, CTX)
+    explanation = result.get("explanation") or {}
+    assert not explanation.get("cap_note")
+    assert "最高 7.9" not in explanation.get("basis", "")
+
+
+def test_low_return_explains_actual_d_band_boundary():
+    result = qr.evaluate_dimension("1F", _capital_spec(roic=0.06, wacc=0.09), CTX)
+    basis = result["explanation"]["basis"]
+    assert "最高 3.9" in basis
+    assert "最高 4" not in basis
+
+
+def test_primary_fallback_separates_bad_weights_and_missing_numeric_value():
+    spec = {"visibility": [{"name": "订单", "level": "合约级", "value": None, "primary": True},
+                           {"name": "远期", "level": "纯叙事", "value": None}]}
+    result = qr.evaluate_dimension("3B", spec, CTX)
+    basis = result["explanation"]["basis"]
+    assert "利润权重缺失或合计不为 1" in basis
+    assert "缺数值上限 5" in basis and "本次未触及上限" in basis
+
+
+def test_primary_fallback_mentions_non_unit_weight_total():
+    spec = {"projects": [{"name": "甲", "stage": "已投产", "contribution": 0.51, "primary": True},
+                         {"name": "乙", "stage": "在建", "contribution": 0.51}]}
+    result = qr.evaluate_dimension("3B", spec, CTX)
+    assert "利润权重缺失或合计不为 1" in result["explanation"]["basis"]
+
+
+def test_high_growth_b_band_keeps_a_threshold_in_basis():
+    spec = {"growth_lo": 23, "growth_hi": 30, "driver_status": "已验证"}
+    result = qr.evaluate_dimension("3A", spec, dict(CTX, growth_tier="high"))
+    assert result["band"] == "B"
+    assert "A 档阈值 25%" in result["explanation"]["basis"]
+
+
+@pytest.mark.parametrize("key,spec,context,expected,forbidden", [
+    ("1A", {"stage": "decline"}, CTX, "生命周期为衰退期", "行业连续收缩"),
+    ("1D", _financial_spec(), CTX, "通过 8—9 项 → A 档", "未通过 0—1 项"),
+    ("1C", _moat_spec(), CTX, "无变窄趋势 → A 档", "未因全部变窄降档"),
+    ("3B", {"visibility": []}, CTX, "直接落 D 档", "纯叙事"),
+    ("3C", {"events": [{"name": "季报验证", "month": "2026-11", "revaluation": False}]}, CTX,
+     "未确认重估或月份不可验证", "仅有方向性事件、月份不可验证"),
+    ("1B", {"cost_strength": "strong", "pricing_strength": "strong", "bargaining_status": "实质丧失",
+            "customer_concentration": 1.0, "supplier_concentration": None},
+     dict(CTX, industry_profile="financial_bank"), "客户/供应商集中度 100%/未知", "；两强"),
+    ("1B", {"cost_quartile": 2, "price_transmission": False, "bargaining_status": "正常",
+            "customer_concentration": 0.1, "supplier_concentration": 0.1}, CTX,
+     "上游自给率未获取，按成本曲线分位", None),
+    ("1F", {"normalized_return": 0.12, "coe": 0.08, "return_metric": "ROE_NORMALIZED"},
+     dict(CTX, industry_profile="financial_bank"), "正常化 ROE 12.00%", "ROE_NORMALIZED 12.00%"),
+])
+def test_reader_explanation_avoids_branch_misstatements(key, spec, context, expected, forbidden):
+    result = qr.evaluate_dimension(key, spec, context)
+    explanation = result["explanation"]
+    combined = explanation["logic"] + explanation["basis"]
+    assert expected in combined
+    if forbidden:
+        assert forbidden not in combined

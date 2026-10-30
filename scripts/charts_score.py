@@ -116,7 +116,7 @@ def _score_group(key, step):
         return "补充观察"
     if "UNKNOWN" in rule_id or any(word in evidence for word in ("最高只能", "未获取", "未知", "缺失")):
         return "数据缺口与限制"
-    return "定档依据"
+    return "规则明细"
 
 
 def _build_score_detail(key, result, spec):
@@ -124,19 +124,24 @@ def _build_score_detail(key, result, spec):
     custom = result.get("custom") or {}
     custom_ids = {custom.get("id")} | {item.get("id") for item in custom.get("items", [])}
     custom_ids.discard(None)
+    explanation = result.get("explanation") or {}
+    base_label = explanation.get("base_label") or ""
     final = result.get("final")
+    explanation_body = ""
     if final is None:
         summary = "数据不足"
     else:
         base = float(result.get("base") or 0)
         rule_steps = [s for s in steps if s.get("id") not in custom_ids]
         total_delta = sum(float(s.get("delta") or 0) for s in steps)
+        has_adjustments = any(float(s.get("delta") or 0) != 0 for s in steps)
         before_limit = base + total_delta
         pre_cap = float(result.get("pre_cap", before_limit))
         band_limited = abs(pre_cap - before_limit) >= 0.005
         cap = result.get("cap")
         cap_active = (cap is not None and pre_cap > cap and abs(final - cap) < 0.005)
-        parts = [f"最终 {final:.2f}", f"定档起点 {base:.2f}"]
+        base_part = f"基础分 {base:.2f}" + (f"（{base_label}）" if base_label else "")
+        parts = [f"最终 {final:.2f}", base_part]
         for step in rule_steps:
             if step.get("delta"):
                 label = _score_label(step)
@@ -153,15 +158,31 @@ def _build_score_detail(key, result, spec):
         custom_delta = sum(float(s.get("delta") or 0) for s in steps if s.get("id") in custom_ids)
         if custom_delta:
             parts.append(f"清单外调整 {_delta_text(custom_delta)}")
+        if has_adjustments and abs(total_delta) < 0.005:
+            parts.append("调整相互抵消")
+        elif not has_adjustments:
+            if abs(final - base) < 0.005 and not band_limited and not cap_active:
+                parts.append("无加减分，最终分=基础分")
+            else:
+                parts.append("无加减分")
         if band_limited:
             parts.append("档位边界限制")
         if cap_active:
-            reason_step = next((s for s in reversed(steps)
-                                if "UNKNOWN" in str(s.get("id")) or "最高" in str(s.get("evidence"))), None)
-            reason = f"（{_score_text(key, reason_step, spec)}）" if reason_step else ""
-            parts.append(f"证据上限 {cap:.2f}{reason}")
+            cap_note = explanation.get("cap_note")
+            if cap_note:
+                parts.append(cap_note)
+            else:
+                reason_step = next((s for s in reversed(steps)
+                                    if "UNKNOWN" in str(s.get("id")) or "最高" in str(s.get("evidence"))), None)
+                reason = f"（{_score_text(key, reason_step, spec)}）" if reason_step else ""
+                parts.append(f"证据上限 {cap:.2f}{reason}")
         summary = "｜".join(parts)
-    groups = {"加减分": [], "定档依据": [], "数据缺口与限制": [], "补充观察": []}
+        logic = explanation.get("logic") or ""
+        basis = explanation.get("basis") or ""
+        explanation_body = "".join(
+            f'<section class="score-group"><h4>{title}</h4><p>{_esc(text)}</p></section>'
+            for title, text in (("评分逻辑", logic), ("定档依据", basis)) if text)
+    groups = {"加减分": [], "规则明细": [], "数据缺口与限制": [], "补充观察": []}
     for step in steps:
         rule_id = str(step.get("id") or "")
         if rule_id in F_ITEM_IDS.values():
@@ -179,7 +200,7 @@ def _build_score_detail(key, result, spec):
                    for title, items in groups.items() if items)
     return (f'<details class="score-detail"><summary><span class="score-final">{_esc(summary)}</span>'
             f'<span class="score-detail-toggle">查看评分依据</span></summary>'
-            f'<div class="score-groups">{body}</div></details>')
+            f'<div class="score-groups">{explanation_body}{body}</div></details>')
 
 
 def build_score_bars(sc: dict) -> str:

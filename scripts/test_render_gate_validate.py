@@ -369,6 +369,18 @@ def test_new_report_rejects_trade_cadence():
     good["position_html"] = "禁止分批；研究复核与估值证伪条件。" * 8
     good["thesis_html"] = "不采用分批节奏，" + good["thesis_html"]
     render_v2_fill(good)
+    good["position_html"] = "技术面不触发加减仓建议。研究复核与估值证伪条件。" * 8
+    render_v2_fill(good)
+    for phrase in ("策略是不断加仓", "策略是不仅加仓"):
+        bad = v2_fill(date="2026-10-26", cycle_html="<p>估值周期分析。</p>")
+        bad["dash_html"] = bad["dash_html"].replace("加仓至标配", "复核估值假设")
+        bad["position_html"] = phrase + "。研究复核与估值证伪条件。" * 8
+        try:
+            render_v2_fill(bad)
+        except ValueError as exc:
+            assert "研究动作" in str(exc), str(exc)
+        else:
+            raise AssertionError(f"真实交易建议必须拒绝：{phrase}")
     legacy = minimal_fill(position_html="加仓并分批建仓。" + "研究复核与估值证伪条件。" * 8,
                           dash_html="加仓至标配")
     warnings = validate_stderr(legacy)
@@ -654,6 +666,56 @@ def test_earnings_stability_validate():
     warns = validate_stderr(minimal_fill(
         fin_trend=ft1, earnings_stability={"sigma": 9.9, "verdict": "波动低"}))
     assert "复算不可用" in warns
+
+
+def test_earnings_stability_prefers_full_precision_quote():
+    fill = minimal_fill(earnings_stability={"sigma": 13.9, "verdict": "波动适中"})
+    for panel in fill["fin_trend"]["panels"]:
+        for bar in panel.get("bars", []):
+            if "扣非" in bar.get("name", ""):
+                bar["values"] = [4.6, 6.1, 10.3, 15.7, 23.2]
+    with tempfile.TemporaryDirectory() as d:
+        ref = write_fill({"price": fill["price"], "pe_ttm": fill["pe_ttm"],
+                          "earnings_stability": {"sigma": 13.9, "n_g": 4, "dropped": 0}},
+                         d, name="_em_quote.json")
+        fill["quote"] = {"source_file": ref, "date": fill["date"]}
+        out = validate_stderr(fill)
+        assert "earnings_stability.sigma" not in out and "偏差 >0.15pct" not in out
+        fill["earnings_stability"]["sigma"] = 14.2
+        assert "偏差 >0.15pct" in validate_stderr(fill)
+
+
+def test_growth_consistency_checks_later_years_from_gap_ours():
+    from validate_audit import _check_growth_consistency
+
+    def make_fill(lo, hi):
+        fill = minimal_fill(growth_plot={
+            "hist": [{"y": "2023", "np": 69.1}, {"y": "2024", "np": 53.6},
+                     {"y": "2025", "np": 47.7}],
+            "fcst": [{"y": "2026E", "np_lo": -70, "np_hi": 70},
+                     {"y": "2027E", "np_lo": lo, "np_hi": hi}]},
+            gap_plot={"dims": [
+                {"name": "2026E归母净利（亿元）", "ours": 34, "consensus": 33.65},
+                {"name": "2027E归母净利（亿元）", "ours": 39, "consensus": 39.84}]})
+        for scenario in fill["valuation"]["scenarios"]:
+            if scenario["key"] == "base":
+                scenario["profit"] = 34
+        return fill
+
+    for lo, hi, expected in ((-12, 35, False), (28, 97, True)):
+        warns = []
+        _check_growth_consistency(make_fill(lo, hi), warns)
+        assert ("2027E" in "\n".join(warns) and "本文利润路径" in "\n".join(warns)) == expected
+    fill = make_fill(28, 97)
+    fill["gap_plot"]["dims"].pop(0)
+    warns = []
+    _check_growth_consistency(fill, warns)
+    assert "本文利润路径" not in "\n".join(warns)
+    fill = make_fill(-12, 35)
+    fill["gap_plot"]["dims"].insert(1, {"name": "2026E目标价（元）", "ours": 11})
+    warns = []
+    _check_growth_consistency(fill, warns)
+    assert "本文利润路径" not in "\n".join(warns)
 
 
 def test_dcf_validate():
@@ -1069,17 +1131,44 @@ def test_missing_quality_inputs_package_warns():
     assert "quality_inputs" in out and "--quality-v2" in out
 
 
-def test_v2_preflight_rejects_single_quoted_data_dim():
+def test_v2_preflight_accepts_single_quoted_data_dim():
     fill = v2_fill()
-    fill["l1_html"] = fill["l1_html"].replace('data-dim="1A"', "data-dim='1A'")
+    for key in ("1A", "1B", "1C", "1D", "1E", "1F", "3A", "3B", "3C"):
+        field = "l1_html" if key.startswith("1") else "l3_html"
+        fill[field] = fill[field].replace(f'data-dim="{key}"', f"data-dim='{key}'")
+    html = render_v2_fill(fill)
+    assert "SCORE_BADGE" not in html and "SCORE_DETAIL" not in html
+    assert html.count('class="badge') >= 9
+
+
+def test_v2_preflight_rejects_malformed_data_dim():
+    for malformed in ("data-dim=1A", 'data-dim="1A>'):
+        fill = v2_fill()
+        fill["l1_html"] = fill["l1_html"].replace('data-dim="1A"><', malformed + '<')
+        with tempfile.TemporaryDirectory() as d:
+            path = write_fill(prepare_v2_quote(fill, d), d)
+            try:
+                R._preflight(path)
+            except ValueError as exc:
+                assert "data-dim" in str(exc) and "1A" in str(exc)
+            else:
+                raise AssertionError("无引号或未闭合 data-dim 必须拒绝")
+
+
+def test_v2_preflight_aggregates_counter_evidence_and_anchor_errors():
+    fill = v2_fill()
+    fill["score_inputs"]["1A"].pop("counter_evidence")
+    fill["score_inputs"]["1C"].pop("counter_evidence")
+    fill["l1_html"] = fill["l1_html"].replace('data-dim="1B"', 'data-dim-x="1B"')
     with tempfile.TemporaryDirectory() as d:
         path = write_fill(prepare_v2_quote(fill, d), d)
         try:
             R._preflight(path)
         except ValueError as exc:
-            assert "data-dim" in str(exc) and "1A" in str(exc)
+            message = str(exc)
+            assert all(key in message for key in ("1A", "1C", "1B", "data-dim"))
         else:
-            raise AssertionError("预检应拒绝单引号 data-dim，而不是等到正式渲染才失败")
+            raise AssertionError("组合错误必须一次全部报告")
 
 
 def test_risk_rule_id_requires_actual_negative_fact():

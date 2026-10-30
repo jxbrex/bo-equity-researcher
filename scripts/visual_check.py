@@ -12,7 +12,7 @@
   ③ 单行槽位折行（Range.getClientRects > 1）：槽位清单见 SLOT_SELECTORS
   ④ clipped（scrollHeight > clientHeight 且 overflow 非 visible，豁免同上）
 
-退出码：0=干净或浏览器缺席（跳过不卡交付）/ 1=发现问题。
+退出码：0=干净或浏览器缺席（跳过不卡交付）/ 1=发现问题 / 2=测量未完成。
 debt: 孤字检测（单字独占一行，Rain 清单项）v1 未做——需逐行 Range 分析，误判率高，
       现阶段靠 stage-driver 显示宽 ≤48 等槽位契约在源头防。
 只依赖 Chrome/Edge 与 Python 标准库。
@@ -197,6 +197,10 @@ def chrome_run(chrome: str, page: Path, work: Path, ready, *flags: str) -> str:
                 proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 proc.kill()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    pass
 
 
 def measure(chrome: str, html: str, work: Path, width: int) -> dict:
@@ -247,14 +251,16 @@ def main() -> int:
     html = args.source.read_text(encoding="utf-8")
     widths = [int(w) for w in args.widths.split(",") if w.strip()]
     total = 0
+    failed_widths = []
     reports = []
-    with tempfile.TemporaryDirectory(prefix="visual-check-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="visual-check-", ignore_cleanup_errors=True) as tmp:
         work = Path(tmp)
         for w in widths:
             r = measure(chrome, html, work, w)
             reports.append(r)
             problems = []
             if r.get("error"):
+                failed_widths.append(w)
                 print(f"⚠️ @{w}px 测量失败：{r['error']}（本视口跳过）", file=sys.stderr)
                 continue
             if r["hscroll"]:
@@ -285,6 +291,10 @@ def main() -> int:
                 else:
                     print(f"⚠️ @{w}px 截图失败（{dest.name} 未生成）", file=sys.stderr)
 
+    if failed_widths:
+        print(f"\n视觉审计未完成：{'/'.join(str(w) for w in failed_widths)}px 视口测量失败。",
+              file=sys.stderr)
+        return 2
     if total:
         print(f"\n共 {total} 个视觉问题——逐条消解后再交付（槽位折行=缩短文案；"
               "溢出=检查长串 nowrap/长数字；裁切=不要用 overflow 藏字）")

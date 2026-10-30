@@ -790,6 +790,27 @@ def test_19_growth_sigma_parity():
     print("19. growth_sigma 双副本 parity 通过")
 
 
+def test_19b_growth_sigma_capture(monkeypatch):
+    annual = [{"REPORT_DATE_NAME": f"{year}年报", "KCFJCXSYJLR": value}
+              for year, value in zip(range(2025, 2020, -1), [23.2, 15.7, 10.3, 6.1, 4.6])]
+    monkeypatch.setattr(em, "fetch_annual_rows", lambda *args: annual)
+    monkeypatch.setattr(em, "fetch_latest_quarter", lambda *args: {})
+    monkeypatch.setattr(em, "fetch_period_track", lambda *args: None)
+    monkeypatch.setattr(em, "fetch_dupont_factors", lambda *args: None)
+    monkeypatch.setattr(em, "fetch_debt", lambda *args: None)
+    original = dict(em._CAPTURE)
+    em._CAPTURE.clear()
+    try:
+        out, _ = em._sec_e3("603979", "603979.SH")
+        captured = dict(em._CAPTURE)
+    finally:
+        em._CAPTURE.clear()
+        em._CAPTURE.update(original)
+    sigma, n_g, dropped = em._growth_sigma([4.6, 6.1, 10.3, 15.7, 23.2])
+    assert captured.get("earnings_stability") == {
+        "sigma": sigma, "n_g": n_g, "dropped": dropped}
+    assert f"σ={sigma}pct" in "\n".join(out)
+
 
 def test_20_latest_quarter_yoy_year_guard():
     """20. 最新季度同比基数年份守卫（审计 #2，无网络 mock ts_call）：同比找基数只比 end_date

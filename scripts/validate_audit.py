@@ -655,6 +655,14 @@ def _check_growth_consistency(fill: dict, warns: list) -> None:
     cnp_yr = _num(cnp.get("year"))
     _base_sc = _scenario_by_key((fill.get("valuation") or {}).get("scenarios"), "base")
     base_profit = _num(_base_sc.get("profit")) if _base_sc else None
+    gap_ours = {}
+    for dim in (fill.get("gap_plot") or {}).get("dims") or []:
+        if not isinstance(dim, dict) or not _gap_dim_ok(dim) or "净利" not in str(dim.get("name") or ""):
+            continue
+        year = re.search(r"20\d{2}", str(dim.get("name") or ""))
+        ours = _num(dim.get("ours"))
+        if year and ours is not None:
+            gap_ours[int(year.group(0))] = ours
     for f in fcst:
         y_text = str(f.get("y") or "").strip()
         single = re.fullmatch(r"(20\d{2})E", y_text)
@@ -682,6 +690,15 @@ def _check_growth_consistency(fill: dict, warns: list) -> None:
             if lo is not None and hi is not None and not (lo - 2 <= g_base <= hi + 2):
                 warns.append(f"valuation 基础情景换算增速（{g_base:.1f}%）越出 growth_plot 本文区间 "
                              f"[{lo:g}, {hi:g}]（容差 ±2pct）：5 章图与 7 章情景应口径一致")
+        elif single:
+            year = int(single.group(1))
+            lo, hi = _num(f.get("np_lo")), _num(f.get("np_hi"))
+            if (year in gap_ours and year - 1 in gap_ours and gap_ours[year - 1] > 0
+                    and lo is not None and hi is not None):
+                g_path = (gap_ours[year] / gap_ours[year - 1] - 1) * 100
+                if not (lo - 2 <= g_path <= hi + 2):
+                    warns.append(f"growth_plot {y_text} 本文增速区间 [{lo:g}, {hi:g}] 未覆盖 "
+                                 f"gap_plot 本文利润路径换算增速（{g_path:.1f}%）（容差 ±2pct）")
 
 
 def _check_quote_present(fill: dict, warns: list) -> None:

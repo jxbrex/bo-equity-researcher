@@ -23,6 +23,7 @@ from charts_base import (
 from charts_cycle import _pe_band_ok
 from validate_common import (
     _HTML_FIELDS,
+    _quote_ref,
     _resolve_type_tier,
     _anchor_unanchored_type)
 
@@ -766,14 +767,7 @@ def _check_cycle_position(fill: dict, warns: list) -> None:
 
 
 def _check_earnings_stability(fill: dict, warns: list) -> None:
-    """v5.2.0：盈利波动性软锚（earnings_stability，软告警——本轮只展示不进定档）。
-    sigma 照抄 E3「扣非增速波动」行（禁手算）：按 fin_trend 扣非柱（与 E3 同源）复算比对，
-    偏差 >0.15pct 告警（照抄纪律的落盘比对同款）；verdict 缺失 → 告警；
-    peer_median 可空（角标只显 σ，不告警）。
-    找不到扣非柱或复算不可用（增速点 <3/亏损基数跳过）→ 补「无法复算」软告警——
-    与渲染层「无扣非面板兜底挂 section-tag，不静默丢」对称，照抄纪律不做免检通道。
-    debt: 比对口径天花板——E3 行用 API 全精度值，fin_trend 柱为展示舍入值，扣非仅个位数
-    亿的小市值公司舍入可使 σ 偏移 >0.15pct，正确照抄也会误报；误报增多再放宽容差。"""
+    """盈利波动性软锚：优先对 quote 落盘的全精度 σ；旧 quote 才按展示柱复算。"""
     es = fill.get("earnings_stability")
     if not isinstance(es, dict) or not es:
         return
@@ -784,6 +778,13 @@ def _check_earnings_stability(fill: dict, warns: list) -> None:
         return
     if not str(es.get("verdict") or "").strip():
         warns.append("earnings_stability.verdict 缺失：4.6 判词引用处须有一句定性结论")
+    quote_es = (_quote_ref(fill) or {}).get("earnings_stability") or {}
+    ref = _num(quote_es.get("sigma"))
+    if ref is not None:
+        if abs(ref - sig) > 0.15:
+            warns.append(f"earnings_stability.sigma（{sig:g}）与 quote 落盘 σ"
+                         f"（{ref:g}）偏差 >0.15pct：照抄 E3 行，禁手算")
+        return
     ft = fill.get("fin_trend") or {}
     dedt_bar = next((b for p in ft.get("panels") or [] if isinstance(p, dict)
                      for b in p.get("bars") or []

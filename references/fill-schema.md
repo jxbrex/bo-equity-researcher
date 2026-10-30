@@ -360,7 +360,7 @@ fill 与 quote 落盘 `quality_inputs.profile` 的 `stock_type/industry_profile/
 
 ### l1_html / l3_html 写作细则（v4.9.2 自上方字段表整行拆出，内容不变）
 
-**v2 结构硬约束**：1A-1F 六块与 3A-3C 三块都必须有 `data-dim="对应键"`，每块在
+**v2 结构硬约束**：1A-1F 六块与 3A-3C 三块都必须有 `data-dim="对应键"`（单双引号均可；禁止为修锚点做全字段无差别 JSON 引号替换），每块在
 `dim-header` 内保留 `<!--SCORE_BADGE-->`、正文末尾保留 `<!--SCORE_DETAIL-->`。脚本按
 `dimension_results` 注入最终徽章与得分链，缺锚点/缺维度即拒渲染；得分链依次回答评分逻辑、
 实际命中标准、基础分含义与最终调整链，正文重点写事实、优势、反方证据与跟踪信息，不再手写

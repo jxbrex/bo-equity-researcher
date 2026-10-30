@@ -519,6 +519,9 @@ def test_peers_pe_cross_warn():
            {"name": "同业甲", "roe": 12, "pe": 8}]
     assert "高于全部同业" in validate_stderr(
         minimal_fill(peers_meta=_PEERS_META_OK, peers_plot={"points": low}))
+    explained = minimal_fill(peers_meta=_PEERS_META_OK, peers_plot={"points": low},
+                             valuation_html="<p>溢价来源：护城河、成长差与资产质量。</p>")
+    assert "高于全部同业" not in validate_stderr(explained)
     high = [{"name": "测试股份", "roe": 14, "pe": 11, "target": True},
             {"name": "同业甲", "roe": 12, "pe": 30}]
     assert "高于全部同业" not in validate_stderr(

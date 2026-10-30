@@ -64,7 +64,7 @@ from validate import validate_content
 
 # 渲染器版本：嵌入输出 HTML 尾部注释，事后可 grep 验证报告确由本脚本渲染
 # （防"render 报错后手写全文 HTML 绕行"，巨石 2026-08-23 实证）
-RENDERER_VERSION = "v0.12.0"
+RENDERER_VERSION = "v0.12.1"
 
 # Windows 文件名非法字符：\ / : * ? " < > | 及 ASCII 控制字符（\x00-\x1f）
 _WIN_ILLEGAL = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
@@ -385,15 +385,18 @@ def build_risk_register(fill: dict, sc: dict = None) -> str:
     return html
 
 
+def _find_dimension_marker(frag: str, key: str):
+    return re.search(rf"\bdata-dim=([\"']){re.escape(key)}\1", frag)
+
+
 def _inject_dimension_scores(frag: str, dimension_results: dict, score_inputs: dict) -> str:
     for key, result in dimension_results.items():
-        marker = f'data-dim="{key}"'
-        if marker not in frag:
+        marker = _find_dimension_marker(frag, key)
+        if marker is None:
             continue
-        start = frag.index(marker)
-        end = frag.find("data-dim=", start + len(marker))
-        if end < 0:
-            end = len(frag)
+        start = marker.start()
+        next_marker = re.search(r"\bdata-dim\s*=", frag[marker.end():])
+        end = marker.end() + next_marker.start() if next_marker else len(frag)
         block = frag[start:end]
         if "<!--SCORE_BADGE-->" not in block or "<!--SCORE_DETAIL-->" not in block:
             raise ValueError(f"v2 维度 {key} 缺少 SCORE_BADGE 或 SCORE_DETAIL 占位符")
@@ -863,10 +866,16 @@ def _preflight(fill_path: str):
     risk_register_html = ""
     if _quality_version(fill) == 2:
         sc = compute_scores(fill)
-        audit_warnings = validate_content(fill, calc, sc)
-        risk_register_html = build_risk_register(fill, sc)
         dimension_html = fill.get("l1_html", "") + fill.get("l3_html", "")
-        missing = [key for key in sc["dimension_results"] if f'data-dim="{key}"' not in dimension_html]
+        missing = [key for key in sc["dimension_results"]
+                   if _find_dimension_marker(dimension_html, key) is None]
+        try:
+            audit_warnings = validate_content(fill, calc, sc)
+        except ValueError as exc:
+            if missing:
+                raise ValueError(f"{exc}\nv2 缺少维度锚点 data-dim: {missing}") from exc
+            raise
+        risk_register_html = build_risk_register(fill, sc)
         if missing:
             raise ValueError(f"v2 缺少维度锚点 data-dim: {missing}")
         l1_html = _inject_dimension_scores(

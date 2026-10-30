@@ -57,3 +57,84 @@ def test_measure_page_forces_render(monkeypatch, tmp_path):
                              tmp_path, 1280)
     assert "content-visibility: visible !important" in captured["html"]
     assert r["clipped"] == []
+
+
+def test_main_measurement_failure_is_not_success(monkeypatch, tmp_path, capsys):
+    page = tmp_path / "r.html"
+    page.write_text("<html><body><p>x</p></body></html>", encoding="utf-8")
+    monkeypatch.setattr(visual_check, "find_chrome", lambda explicit=None: "fake-chrome")
+    monkeypatch.setattr(visual_check, "measure", lambda *args: {
+        "vw": 1280, "docH": 0, "hscroll": False, "spills": [], "wrapped": [],
+        "clipped": [], "error": "测量超时/失败"})
+    monkeypatch.setattr(sys, "argv", ["visual_check.py", str(page)])
+    assert visual_check.main() == 2
+    captured = capsys.readouterr()
+    assert "未完成" in captured.err and "视觉审计通过" not in captured.out
+
+
+def test_main_partial_measurement_failure_is_not_success(monkeypatch, tmp_path, capsys):
+    page = tmp_path / "r.html"
+    page.write_text("<html><body><p>x</p></body></html>", encoding="utf-8")
+    monkeypatch.setattr(visual_check, "find_chrome", lambda explicit=None: "fake-chrome")
+
+    def fake_measure(chrome, html, work, width):
+        if width == 1280:
+            return {"vw": width, "docH": 0, "hscroll": False, "spills": [],
+                    "wrapped": [], "clipped": [], "error": "测量超时/失败"}
+        return {"vw": width, "docH": 100, "hscroll": False, "spills": [],
+                "wrapped": [], "clipped": []}
+
+    monkeypatch.setattr(visual_check, "measure", fake_measure)
+    monkeypatch.setattr(sys, "argv", ["visual_check.py", str(page)])
+    assert visual_check.main() == 2
+    captured = capsys.readouterr()
+    assert "未完成" in captured.err and "视觉审计通过" not in captured.out
+
+
+def test_chrome_run_waits_after_kill(monkeypatch, tmp_path):
+    import subprocess
+
+    class FakeProcess:
+        def __init__(self, *args, **kwargs):
+            self.calls = []
+            self.waits = 0
+
+        def terminate(self):
+            self.calls.append("terminate")
+
+        def kill(self):
+            self.calls.append("kill")
+
+        def wait(self, timeout):
+            self.waits += 1
+            self.calls.append("wait")
+            if self.waits == 1:
+                raise subprocess.TimeoutExpired("fake-chrome", timeout)
+            return 0
+
+    process = FakeProcess()
+    monkeypatch.setattr(visual_check.subprocess, "Popen", lambda *args, **kwargs: process)
+    monkeypatch.setattr(visual_check.time, "time", iter([0, 61]).__next__)
+    visual_check.chrome_run("fake-chrome", tmp_path / "page.html", tmp_path, lambda out: False)
+    assert process.calls == ["terminate", "wait", "kill", "wait"]
+
+
+def test_main_ignores_temp_cleanup_errors(monkeypatch, tmp_path):
+    import tempfile
+
+    page = tmp_path / "r.html"
+    page.write_text("<html><body><p>x</p></body></html>", encoding="utf-8")
+    monkeypatch.setattr(visual_check, "find_chrome", lambda explicit=None: "fake-chrome")
+    monkeypatch.setattr(visual_check, "measure", lambda *args: {
+        "vw": 1280, "docH": 100, "hscroll": False, "spills": [], "wrapped": [], "clipped": []})
+    monkeypatch.setattr(sys, "argv", ["visual_check.py", str(page)])
+    real_tempdir = tempfile.TemporaryDirectory
+    captured = {}
+
+    def fake_tempdir(*args, **kwargs):
+        captured.update(kwargs)
+        return real_tempdir(*args, **kwargs)
+
+    monkeypatch.setattr(visual_check.tempfile, "TemporaryDirectory", fake_tempdir)
+    assert visual_check.main() == 0
+    assert captured.get("ignore_cleanup_errors") is True

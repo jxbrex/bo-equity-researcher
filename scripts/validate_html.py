@@ -307,7 +307,8 @@ def _check_peers_selection(fill: dict, warns: list) -> None:
         base_pe = _num(pe[0]) if len(pe) >= 1 else None
     peer_pes = [_num(p.get("pe")) for p in pts
                 if isinstance(p, dict) and not p.get("target") and _num(p.get("pe")) is not None]
-    if base_pe is not None and peer_pes and base_pe > max(peer_pes):
+    premium_explained = re.search(r"溢价来源[：:]\s*\S", _plain_text(fill.get("valuation_html") or ""))
+    if base_pe is not None and peer_pes and base_pe > max(peer_pes) and not premium_explained:
         warns.append(f"valuation 基础情景 PE 下限（{base_pe:g}x）高于全部同业散点 PE"
                      f"（最高 {max(peer_pes):g}x）：基础带高于全部同业，须溢价论证"
                      f"（在 valuation_html 写明溢价来源：护城河/成长差/资产质量）")
@@ -409,8 +410,10 @@ def _check_research_actions(fill: dict, warns: list) -> None:
         matched = False
         for term in ("加仓", "减仓", "满仓", "清仓", "分批"):
             for match in re.finditer(term, text):
-                prefix = text[max(0, match.start() - 4):match.start()]
-                if not prefix.endswith(("不", "禁止", "不得", "勿", "避免", "不宜", "不采用", "不建议")):
+                prefix = text[max(0, match.start() - 8):match.start()]
+                negated = (prefix.endswith(("不", "禁止", "不得", "勿", "避免", "不宜", "不采用", "不建议"))
+                           or re.search(r"不触发[^，。；、]{0,4}$", prefix))
+                if not negated:
                     matched = True
                     break
             if matched:
@@ -424,13 +427,16 @@ def _check_research_actions(fill: dict, warns: list) -> None:
 def _check_v2_counter_evidence(fill: dict, sc: dict = None) -> None:
     if not sc or sc.get("quality_version") != 2:
         return
+    missing = []
     for key, result in (sc.get("dimension_results") or {}).items():
         score = result.get("final")
         if score is None or not (score >= 8 or score <= 3):
             continue
         evidence = (sc.get("score_inputs", {}).get(key) or {}).get("counter_evidence")
         if not evidence or len(str(evidence).strip()) < 4:
-            raise ValueError(f"{key} 得分 {score:g} 属于极端分，必须提供可观察反方证据")
+            missing.append(f"{key} 得分 {score:g} 属于极端分，必须提供可观察反方证据")
+    if missing:
+        raise ValueError("\n".join(missing))
 
 
 def _check_dim_blocks(fill: dict, warns: list, sc: dict = None) -> None:

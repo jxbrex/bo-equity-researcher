@@ -387,6 +387,7 @@ def _sec_e3(pure: str, secucode: str) -> tuple:
         dedt_vals = [r.get("KCFJCXSYJLR") for r in reversed(annual[:5])]
         sig, n_g, dropped = _growth_sigma(dedt_vals)
         if sig is not None:
+            _CAPTURE["earnings_stability"] = {"sigma": sig, "n_g": n_g, "dropped": dropped}
             drop_note = f"，{dropped} 对亏损/零基数已跳过" if dropped else ""
             out.append(f"扣非增速波动（earnings_stability.sigma 照抄本行，禁手算；口径=扣非同比增速"
                        f"标准差 σ，MSCI 增速波动口径——增速的波动非利润水平波动）: "

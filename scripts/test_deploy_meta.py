@@ -147,3 +147,131 @@ def test_move_legacy_deployment_refuses_overwrite():
             assert f.read() == "旧部署标记", "拒绝覆盖后旧目录内容发生变化"
         with open(backup_marker, encoding="utf-8") as f:
             assert f.read() == "既有备份标记", "既有备份被覆盖或改写"
+
+
+def test_em_fetch_direct_runner_matches_pytest():
+    import sys
+
+    script = os.path.join(os.path.dirname(DEPLOY), "test_em_fetch.py")
+    env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+    direct = subprocess.run([sys.executable, script], cwd=os.path.dirname(script),
+                            capture_output=True, text=True, encoding="utf-8", errors="replace",
+                            env=env, timeout=120)
+    collected = subprocess.run([sys.executable, "-m", "pytest", script, "-q", "-p", "no:cacheprovider"],
+                               capture_output=True, text=True, encoding="utf-8", errors="replace",
+                               env=env, timeout=120)
+    assert direct.returncode == 0, direct.stdout + direct.stderr
+    assert collected.returncode == 0, collected.stdout + collected.stderr
+
+    def passed_count(result):
+        output = result.stdout + result.stderr
+        match = re.search(r"(\d+) passed", output) or re.search(r"全部 (\d+) 项测试通过", output)
+        assert match, f"未找到通过数量: {output[-1000:]}"
+        return int(match.group(1))
+
+    assert passed_count(direct) == passed_count(collected)
+
+
+def _ps_function(src, name):
+    start = src.index(f"function {name} ")
+    depth = 0
+    for index, char in enumerate(src[start:], start):
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return src[start:index + 1]
+    raise AssertionError(f"PowerShell 函数未闭合: {name}")
+
+
+def _run_deploy_function(repo, dest, rc):
+    ps = shutil.which("powershell") or shutil.which("pwsh")
+    if not ps:
+        pytest.skip("powershell 不可用")
+    with open(DEPLOY, encoding="utf-8-sig") as f:
+        src = f.read()
+        function_src = _ps_function(src, "Invoke-MirroredDeployment")
+        show_extra_src = _ps_function(src, "Show-ExtraLines")
+    log = os.path.join(repo, "attrib.log")
+    script = (
+        "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8\n"
+        "$ErrorActionPreference = 'Stop'\n$xd = @(); $xf = @()\n"
+        + show_extra_src + "\n"
+        f"function attrib {{ Add-Content -Path {json.dumps(log)} -Value ($args -join ' ') }}\n"
+        "function robocopy {\n"
+        "  if ($args -contains '/L') {\n"
+        "    Write-Output '*EXTRA extra.txt'\n"
+        "    $global:LASTEXITCODE = 0\n"
+        "    return\n"
+        "  }\n"
+        "  $dest = $args[1]\n"
+        "  New-Item -ItemType Directory -Force $dest | Out-Null\n"
+        "  Set-Content -Path (Join-Path $dest 'partial.txt') -Value 'partial' -Encoding UTF8\n"
+        f"  $global:LASTEXITCODE = {rc}\n"
+        "}\n"
+        + function_src
+        + f"\nInvoke-MirroredDeployment -Repo {json.dumps(repo)} -Dest {json.dumps(dest)}\n")
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "invoke.ps1")
+        with open(path, "w", encoding="utf-8-sig", newline="") as f:
+            f.write(script)
+        result = subprocess.run([ps, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path],
+                                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
+    attrib_log = open(log, encoding="utf-8").read() if os.path.exists(log) else ""
+    return result, attrib_log
+
+
+def test_deploy_failure_restores_backup_and_readonly(tmp_path):
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    original = dest / "original.txt"
+    original.write_text("original", encoding="utf-8")
+    result, log = _run_deploy_function(str(tmp_path), str(dest), 8)
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert original.read_text(encoding="utf-8") == "original"
+    assert not (dest / "partial.txt").exists()
+    assert not (tmp_path / "dest.deploy-backup").exists()
+    assert "+R" in log
+
+
+def test_deploy_success_removes_backup_and_readonly(tmp_path):
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    (dest / "original.txt").write_text("original", encoding="utf-8")
+    result, log = _run_deploy_function(str(tmp_path), str(dest), 1)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (dest / "partial.txt").exists()
+    assert not (tmp_path / "dest.deploy-backup").exists()
+    assert "+R" in log
+
+
+def test_deploy_existing_backup_refuses_without_touching_dest(tmp_path):
+    dest = tmp_path / "dest"
+    backup = tmp_path / "dest.deploy-backup"
+    dest.mkdir()
+    backup.mkdir()
+    original = dest / "original.txt"
+    original.write_text("original", encoding="utf-8")
+    result, _ = _run_deploy_function(str(tmp_path), str(dest), 1)
+    assert result.returncode != 0
+    assert original.read_text(encoding="utf-8") == "original"
+    assert not (dest / "partial.txt").exists()
+    assert backup.exists()
+
+
+def test_deploy_go_warns_about_extra_files(tmp_path):
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    (dest / "original.txt").write_text("original", encoding="utf-8")
+    result, _ = _run_deploy_function(str(tmp_path), str(dest), 1)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "*EXTRA" in result.stdout, "正式部署必须保留目标侧额外文件提示"
+
+
+def test_deploy_existing_file_target_is_preserved(tmp_path):
+    dest = tmp_path / "dest"
+    dest.write_text("original", encoding="utf-8")
+    result, _ = _run_deploy_function(str(tmp_path), str(dest), 8)
+    assert result.returncode != 0
+    assert dest.read_text(encoding="utf-8") == "original"

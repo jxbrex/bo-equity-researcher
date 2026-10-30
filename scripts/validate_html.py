@@ -78,7 +78,10 @@ def _check_content_floor(fill: dict) -> None:
     # 含表格的章节字段：source 来源标注数必须 ≥ 表格数
     for name in _HTML_TABLE_FIELDS:
         frag = fill.get(name) or ""
-        n_tbl, n_src = frag.count("<table"), frag.count('class="source"')
+        n_tbl = frag.count("<table")
+        n_src = sum("source" in (m.group(1) or m.group(2) or m.group(3) or "").lower().split()
+                    for m in re.finditer(
+                        r'(?<![-\w:])class\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s>]+))', frag, flags=re.I))
         if n_tbl and n_src < n_tbl:
             raise ValueError(f"{name} 含 {n_tbl} 张数据表但只有 {n_src} 个 `.source` 来源标注："
                              f"每张表下方必须有来源标注——在缺口表格下方补 "

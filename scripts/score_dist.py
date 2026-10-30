@@ -458,7 +458,7 @@ def scan_reports(root: str, fetch_missing: bool = False, evidence_dir: str = Non
     _attach_fill(rows, fills)
     _arbitrate(rows, preferred)
     for row in rows:
-        if row.get("fill_conflict") and row["status"] == "review_only":
+        if row.get("fill_conflict"):
             row.update(status="conflict", canonical=False, reason="同代码同日期 fill 归属冲突")
         _score_row(row, evidence_dir, fetch_missing)
         decision = reviews.get((row.get("code"), row.get("report_date")))

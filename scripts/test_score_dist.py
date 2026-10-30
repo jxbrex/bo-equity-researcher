@@ -164,6 +164,21 @@ def test_same_day_single_fill_does_not_bind_across_html_directories(tmp_path):
     assert not any(r["canonical"] for r in rows)
 
 
+def test_fill_conflict_survives_arbitration(tmp_path):
+    _html(tmp_path / "a" / "测试股份-600000-6.0-5.0-2026-01-01.html",
+          "测试股份", "600000", 6.0, "2026-01-01")
+    _write_fill(tmp_path / "a", _fill(lineage_marker="A-ONLY"))
+    _html(tmp_path / "b" / "测试股份-600000-7.0-5.0-2026-01-01.html",
+          "测试股份", "600000", 7.0, "2026-01-01")
+    first = _write_fill(tmp_path / "b", _fill(lineage_marker="B-ONE"))
+    second = first.with_name("fill_测试股份_600000_2026-01-01_另一版本.json")
+    second.write_text(json.dumps(_fill(lineage_marker="B-TWO"), ensure_ascii=False), encoding="utf-8")
+    rows = sd.scan_reports(str(tmp_path))
+    by_dir = {os.path.basename(os.path.dirname(r["path"])): r for r in rows}
+    assert by_dir["a"]["canonical"]
+    assert by_dir["b"]["status"] == "conflict" and not by_dir["b"]["canonical"]
+
+
 def test_missing_evidence_does_not_score(tmp_path):
     fill = _fill()
     _html(tmp_path / "测试股份-600000-6.0-5.0-2026-01-01.html", "测试股份", "600000", 6.0, "2026-01-01")

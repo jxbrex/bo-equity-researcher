@@ -55,6 +55,57 @@ function Move-LegacyDeployment {
     Move-Item -LiteralPath $LegacyDir -Destination $BackupDir -ErrorAction Stop
     Write-Host "旧部署目录已迁入备份：$BackupDir"
 }
+
+function Invoke-MirroredDeployment {
+    param(
+        [string]$Repo,
+        [string]$Dest
+    )
+    $backup = "$Dest.deploy-backup"
+    if (Test-Path -LiteralPath $backup) {
+        throw "部署备份已存在，拒绝覆盖且未改动原目录：$backup"
+    }
+    if ((Test-Path -LiteralPath $Dest) -and -not (Test-Path -LiteralPath $Dest -PathType Container)) {
+        throw "部署目标已存在但不是目录，拒绝处理且未改动该路径：$Dest"
+    }
+    $hasDest = Test-Path -LiteralPath $Dest -PathType Container
+    $backupCreated = $false
+    $deployed = $false
+    try {
+        if ($hasDest) {
+            $out = robocopy $Repo $Dest /MIR /L /XD $xd /XF $xf /NJH
+            $rc = $LASTEXITCODE
+            Show-ExtraLines $out
+            if ($rc -ge 8) { throw "robocopy 预检失败 (code $rc)，未改动原部署" }
+            attrib -R "$Dest\*" /S /D | Out-Null
+            Move-Item -LiteralPath $Dest -Destination $backup -ErrorAction Stop
+            $backupCreated = $true
+        }
+        $out = robocopy $Repo $Dest /MIR /XD $xd /XF $xf
+        $rc = $LASTEXITCODE
+        Show-ExtraLines $out
+        if ($rc -ge 8) { throw "robocopy 部署失败 (code $rc)，将恢复原部署" }
+        $deployed = $true
+    }
+    finally {
+        if (-not $deployed) {
+            if (($backupCreated -or -not $hasDest) -and (Test-Path -LiteralPath $Dest)) {
+                attrib -R "$Dest\*" /S /D | Out-Null
+                Remove-Item -LiteralPath $Dest -Recurse -Force -ErrorAction Stop
+            }
+            if ($backupCreated) {
+                Move-Item -LiteralPath $backup -Destination $Dest -ErrorAction Stop
+            }
+        }
+        if (Test-Path -LiteralPath $Dest) {
+            attrib +R "$Dest\*" /S /D | Out-Null
+        }
+        if ($deployed -and $backupCreated) {
+            attrib -R "$backup\*" /S /D | Out-Null
+            Remove-Item -LiteralPath $backup -Recurse -Force -ErrorAction Stop
+        }
+    }
+}
 Test-DocLines
 
 if (-not $Go) {
@@ -73,13 +124,7 @@ if (-not $Go) {
     exit 0
 }
 
-attrib -R "$dest\*" /S /D | Out-Null
-# /NFL /NDL 会连 *EXTRA 清单一并抑制（实测），输出存变量不外显，故去掉以便删除可见性取行
-$out = robocopy $repo $dest /MIR /XD $xd /XF $xf
-$rc = $LASTEXITCODE
-Show-ExtraLines $out
-if ($rc -ge 8) { Write-Host "robocopy 部署失败 (code $rc)，只读未恢复"; exit 1 }
-attrib +R "$dest\*" /S /D | Out-Null
+Invoke-MirroredDeployment -Repo $repo -Dest $dest
 try {
     Move-LegacyDeployment -LegacyDir $legacy -BackupDir $legacyBackup
 }

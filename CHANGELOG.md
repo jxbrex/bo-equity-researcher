@@ -3,6 +3,38 @@
 本文件收纳 SKILL.md 正文剔除的事故实证典故，格式为「规则 → 典故来源」，按主题分组。
 规则本体以 SKILL.md / references/*.md 为准，此处只保留来历备查。
 
+## 2026-10-30 热核审计第 7 项部署与归档可恢复改造（v0.11.8）
+
+- 部署改为原目录改名备份后镜像新目录；robocopy 失败删除半成品并恢复备份，成功才清理备份，
+  所有路径恢复只读，备份已存在或目标不是目录时拒绝；正式 -Go 保留目标侧额外文件提示。
+- 归档改为复制到临时文件后提交归档与索引，提交成功才删除源文件；复制或索引失败时源文件保留，
+  可直接重跑恢复，失败临时文件 best-effort 清理。
+- 部署 rc=1/rc=8、备份冲突、非目录目标、归档复制/索引失败与部分临时文件清理均通过；
+  全量 pytest → **592 passed**。
+  `deploy.ps1` UTF-8 BOM 保留；`RENDERER_VERSION` v0.11.7 → v0.11.8。
+  本版经用户确认后按仓库流程提交、push/tag/Release/deploy。
+
+## 2026-10-30 热核审计第 12–14 项结构整改（v0.11.8）
+
+- v2 预检改用 `PreflightResult` 显式传递评分与章节产物，`compute_scores` 每次渲染由 3 次降为 1 次；
+  风险登记和维度注入不再重复生成，图表构建仍只在正式渲染执行，--check 告警顺序不变。
+- 3B projects/visibility 先规范化再共用主来源、组合主来源与加权引擎，既有分数、步骤 ID、cap 与降级语义不变。
+- 快照注册表统一 10 个场景的比对与变异自证，新增 visual A/B 真实证据快照，覆盖 gap_plot、gap_history、
+  timing_facts 与 dupont；既有 8 份快照更新后零 diff。
+- 全量 `python -m pytest scripts/ -q -p no:cacheprovider` → **584 passed**，官方直跑 17 项通过。
+  `RENDERER_VERSION` 同步 v0.11.8。
+
+## 2026-10-30 热核审计第 8–11 项及冲突标签修复（v0.11.8）
+
+- 旧报告“2026年底”等日期文本不再被当成超长期限，估值期限计算复用共享解析器；
+  `test_em_fetch.py` 直跑改为委托 pytest，与标准入口执行同一完整用例集。
+- `--out` 仅在 price 为有效非零值时生成 quote，缺失/None/0 均保留既有警告；quote 与时机证据落盘拆为独立分支，
+  不因 E1 缺 price 误删已取得的时机证据。
+- 最终来源注门禁覆盖 span/p/div/small 与单双引号、无引号 class，fill 表格来源计数同步支持；
+  fill 归属冲突在 HTML 仲裁后不再被覆盖成 duplicate。
+- 新增 7 项反例均先 RED 后 GREEN；全量 `python -m pytest scripts/ -q -p no:cacheprovider` →
+  **577 passed**。`RENDERER_VERSION` 同步 v0.11.8。
+
 ## 2026-10-30 热核审计第 1–6 项修复（v0.11.7）
 
 - 非正 `pe_ttm` 不再进入“越低越便宜”映射；东财月线、杜邦、港股年表与无风险利率四处 429 恢复硬停，

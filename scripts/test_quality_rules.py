@@ -299,6 +299,15 @@ def test_roic_middle_and_leverage_cap():
     assert leveraged["final"] == 7.9
 
 
+def test_3b_items_shared_weighted_engine():
+    items = [{"name": "甲", "stage": "已投产", "contribution": 0.5},
+             {"name": "乙", "stage": "在建", "contribution": 0.5}]
+    result = qr._eval_3b_items({}, items, "stage", {"已投产": 9, "在建": 7}, 0, True)
+    assert result["status"] == "ok"
+    assert result["final"] == 8
+    assert len(result["rule_steps"]) == 2
+
+
 def test_project_score_weights_profit_not_count():
     spec = {"projects": [{"name": "已投产", "stage": "已投产", "contribution": 0.8},
                          {"name": "规划中", "stage": "规划", "contribution": 0.2}],

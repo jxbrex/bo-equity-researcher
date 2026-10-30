@@ -775,6 +775,20 @@ def test_nonpositive_pe_ttm_cannot_score_as_cheap(pe_ttm):
     assert R.compute_valuation_score(calc, fill["valuation_inputs"]) is None
 
 
+def test_year_end_text_is_not_duration():
+    from scoring import _parse_horizon_months
+
+    fill = minimal_fill(date="2026-10-25")
+    fill["valuation"]["horizon"] = "2026年底"
+    for scenario in fill["valuation"]["scenarios"]:
+        scenario.pop("horizon", None)
+    calc = R.compute_valuation(fill)
+    assert calc["months"] == 12
+    assert calc["central"] == calc["central_raw"]
+    assert _parse_horizon_months("未来18个月") == 18
+    assert _parse_horizon_months("2026年底") is None
+
+
 def test_archive_overwrite_warns():
     """#9: 同日重渲时归档 os.replace 静默覆盖上版 fill/quote——补覆盖告警，
     与 _write_html 的输出覆盖告警对称。"""
@@ -787,6 +801,70 @@ def test_archive_overwrite_warns():
         p = write_fill(fill, d, name="_fill_t.json")   # 首次渲染后源 fill 已被移入归档，重写再渲
         err2 = capture_stderr(lambda: R.render(p, out))
         assert "归档文件已存在" in err2, f"同日二次渲染归档覆盖应告警，实际 stderr: {err2}"
+
+
+def _archive_case(d):
+    fill = minimal_fill()
+    fill_path = write_fill(fill, d, name="_fill_t.json")
+    quote_path = write_fill({"price": 10}, d, name="_em_q.json")
+    timing_path = write_fill({"code": fill["code"], "date": fill["date"]}, d,
+                             name=f"_timing_{fill['code']}_{fill['date']}.json")
+    fill["quote"] = {"source_file": quote_path}
+    fill["timing_facts"] = {"source_file": timing_path}
+    out_path = os.path.join(d, "out.html")
+    with open(out_path, "w", encoding="utf-8") as handle:
+        handle.write("<html></html>")
+    return fill, fill_path, quote_path, timing_path, out_path
+
+
+def _call_archive(fill, fill_path, out_path):
+    R._archive_artifacts(fill, fill_path, out_path, fill["date"], 7.0, 5.5, 5.0,
+                         "9-11", "", False, R.compute_scores(fill))
+
+
+def test_archive_copy_failure_preserves_sources_and_index(monkeypatch, tmp_path):
+    import shutil
+
+    fill, fill_path, quote_path, timing_path, out_path = _archive_case(str(tmp_path))
+    monkeypatch.setattr(shutil, "copy2", lambda *_args: (_ for _ in ()).throw(OSError("mock copy")))
+    _call_archive(fill, fill_path, out_path)
+    assert os.path.exists(fill_path) and os.path.exists(quote_path) and os.path.exists(timing_path)
+    assert not os.path.exists(os.path.join(str(tmp_path), "_archive", "_index.jsonl"))
+
+
+def test_archive_index_failure_preserves_sources_for_retry(monkeypatch, tmp_path):
+    fill, fill_path, quote_path, timing_path, out_path = _archive_case(str(tmp_path))
+    real_replace = R.os.replace
+
+    def fail_on_index(src, dst):
+        if dst.endswith("_index.jsonl"):
+            raise OSError("mock index")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(R.os, "replace", fail_on_index)
+    _call_archive(fill, fill_path, out_path)
+    assert os.path.exists(fill_path) and os.path.exists(quote_path) and os.path.exists(timing_path)
+    monkeypatch.undo()
+    _call_archive(fill, fill_path, out_path)
+    assert os.path.exists(os.path.join(str(tmp_path), "_archive", "_index.jsonl"))
+    assert not os.path.exists(fill_path) and not os.path.exists(quote_path) and not os.path.exists(timing_path)
+
+
+def test_archive_partial_tmp_is_cleaned_after_copy_failure(monkeypatch, tmp_path):
+    import shutil
+
+    fill, fill_path, quote_path, timing_path, out_path = _archive_case(str(tmp_path))
+
+    def fail_after_partial_write(src, dst):
+        with open(dst, "w", encoding="utf-8") as handle:
+            handle.write("partial")
+        raise OSError("mock write")
+
+    monkeypatch.setattr(shutil, "copy2", fail_after_partial_write)
+    _call_archive(fill, fill_path, out_path)
+    assert os.path.exists(fill_path) and os.path.exists(quote_path) and os.path.exists(timing_path)
+    leftovers = [name for name in os.listdir(os.path.join(str(tmp_path), "_archive")) if name.endswith(".tmp")]
+    assert not leftovers, f"复制失败后临时文件未清理: {leftovers}"
 
 
 def test_cn_placeholder_gate():
@@ -1067,6 +1145,35 @@ def test_risk_register_hides_internal_rule_id_from_readers():
     assert "4.4 财务健康" in _visible_text(html)
     assert "1D.RED" not in _visible_text(html)
     assert 'data-rule-id="1D.RED.RECEIVABLES"' in html
+
+
+def test_v2_render_computes_scores_once():
+    fill = v2_fill()
+    calls = []
+    real_compute = R.compute_scores
+
+    def counted(fill_):
+        calls.append(1)
+        return real_compute(fill_)
+
+    R.compute_scores = counted
+    try:
+        html = render_v2_fill(fill)
+    finally:
+        R.compute_scores = real_compute
+    assert len(calls) == 1
+    assert "风险事实" in html and "评分依据" in html
+
+
+def test_chart_injection_stays_out_of_preflight():
+    fill = minimal_fill(target_range="999-1000")
+    with tempfile.TemporaryDirectory() as d:
+        path = write_fill(fill, d)
+        check_err = capture_stderr(lambda: R.check_fill(path))
+        assert "<!--FIN_TREND-->" not in check_err
+        assert "<!--GROWTH-->" not in check_err
+        render_err = capture_stderr(lambda: R.render(path, out_path=os.path.join(d, "out.html")))
+        assert render_err.index("target_range") < render_err.index("<!--FIN_TREND-->")
 
 
 def test_v2_red_flags_stay_in_1d_and_two_hits_require_warning():

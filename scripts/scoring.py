@@ -200,6 +200,8 @@ def _scenario_numbers(s: dict):
 def _parse_horizon_months(value, strict=False):
     """把年/月期限解析为月数；strict=True 时只接受单一数值，拒绝区间与修饰文本。"""
     text = str(value or "").strip()
+    if re.search(r"(?<!\d)\d{4}\s*年(?:底|末|初)", text):
+        return None
     match = (re.fullmatch(r"(\d+(?:\.\d+)?)\s*(年|个月|月)", text) if strict
              else re.search(r"(\d+\.?\d*)", text))
     if not match:
@@ -264,11 +266,8 @@ def compute_valuation(fill: dict):
     opt = by_key.get("opt", rows[-1])
     # 年化中枢的时间维度用 base 情景的 horizon（rows 里已按情景级优先、valuation 级兜底解析）
     horizon = base["horizon"]
-    m = re.search(r"(\d+\.?\d*)", horizon)
-    if m:
-        hv = float(m.group(1))
-        months = hv * 12 if "年" in horizon else hv  # 含"年"→×12；含"月"或纯数字 → 按月
-    else:
+    months = _parse_horizon_months(horizon)
+    if months is None:
         print(f"⚠️ horizon「{horizon}」无法解析出时长，按 12 个月处理", file=sys.stderr)
         months = 12.0
     central_raw = base["mid"] / price - 1

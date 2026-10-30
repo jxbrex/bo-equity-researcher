@@ -817,7 +817,7 @@ def main():
     if opts.get("search"):
         searches = [s.strip() for s in opts["search"].split(",") if s.strip()]
     summary = summarize(args[0], years, searches, not opts.get("no-e5"))
-    captured_e1 = bool(_CAPTURE)
+    captured_e1 = bool(_CAPTURE.get("price"))
     if opts.get("quality-v2"):
         _secid, secucode, _is_hk = secid_of(args[0])
         profile = {key: opts.get(key.replace("_", "-"))
@@ -861,39 +861,40 @@ def main():
             os.replace(_tmp_out, opts["out"])
             print(f"[E1 已落盘] {opts['out']}（fill 的 quote.source_file 引用此文件）",
                   file=sys.stderr)
-            timing = _CAPTURE.get("timing")
-            if timing:
-                evidence = {
-                    "code": str(_CAPTURE.get("code") or args[0]).split(".")[0],
-                    "date": _CAPTURE["fetched_at"],
-                    "technical": timing.get("technical"),
-                    "consensus_levels": timing.get("consensus_levels"),
-                    "chips": {"average_cost": None, "profit_ratio": None},
-                    "capital": ({"main_net_inflow": None, "southbound": None, "margin": None}
-                                if secid_of(args[0])[2] else fetch_capital_material(args[0])),
-                    "sources": {"technical": "em_fetch.py 同源日线",
-                                "consensus_levels": "em_fetch.py 同源月线"},
-                }
-                evidence_path = os.path.join(
-                    os.path.dirname(opts["out"]) or ".",
-                    f"_timing_{evidence['code']}_{evidence['date']}.json")
-                try:
-                    with open(evidence_path, encoding="utf-8") as handle:
-                        previous = json.load(handle)
-                except (OSError, json.JSONDecodeError):
-                    previous = {}
-                if previous.get("code") == evidence["code"] and previous.get("date") == evidence["date"]:
-                    for group in ("chips", "capital"):
-                        if isinstance(previous.get(group), dict):
-                            for key, record in previous[group].items():
-                                if evidence[group].get(key) is None:
-                                    evidence[group][key] = record
-                evidence_tmp = f"{evidence_path}.{os.getpid()}.tmp"
-                with open(evidence_tmp, "w", encoding="utf-8") as handle:
-                    json.dump(evidence, handle, ensure_ascii=False, indent=2)
-                os.replace(evidence_tmp, evidence_path)
-                print(f"[时机证据已落盘] {evidence_path}（fill 的 timing_facts.source_file 引用此文件；"
-                      "筹码与未自动覆盖的资金项可单项查证后补齐，缺项保持 null）", file=sys.stderr)
+        _CAPTURE["fetched_at"] = date.today().isoformat()
+        timing = _CAPTURE.get("timing")
+        if timing:
+            evidence = {
+                "code": str(_CAPTURE.get("code") or args[0]).split(".")[0],
+                "date": _CAPTURE["fetched_at"],
+                "technical": timing.get("technical"),
+                "consensus_levels": timing.get("consensus_levels"),
+                "chips": {"average_cost": None, "profit_ratio": None},
+                "capital": ({"main_net_inflow": None, "southbound": None, "margin": None}
+                            if secid_of(args[0])[2] else fetch_capital_material(args[0])),
+                "sources": {"technical": "em_fetch.py 同源日线",
+                            "consensus_levels": "em_fetch.py 同源月线"},
+            }
+            evidence_path = os.path.join(
+                os.path.dirname(opts["out"]) or ".",
+                f"_timing_{evidence['code']}_{evidence['date']}.json")
+            try:
+                with open(evidence_path, encoding="utf-8") as handle:
+                    previous = json.load(handle)
+            except (OSError, json.JSONDecodeError):
+                previous = {}
+            if previous.get("code") == evidence["code"] and previous.get("date") == evidence["date"]:
+                for group in ("chips", "capital"):
+                    if isinstance(previous.get(group), dict):
+                        for key, record in previous[group].items():
+                            if evidence[group].get(key) is None:
+                                evidence[group][key] = record
+            evidence_tmp = f"{evidence_path}.{os.getpid()}.tmp"
+            with open(evidence_tmp, "w", encoding="utf-8") as handle:
+                json.dump(evidence, handle, ensure_ascii=False, indent=2)
+            os.replace(evidence_tmp, evidence_path)
+            print(f"[时机证据已落盘] {evidence_path}（fill 的 timing_facts.source_file 引用此文件；"
+                  "筹码与未自动覆盖的资金项可单项查证后补齐，缺项保持 null）", file=sys.stderr)
     for peer in (opts.get("peers") or "").split(","):
         peer = peer.strip()
         if peer:

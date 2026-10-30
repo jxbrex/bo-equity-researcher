@@ -1230,13 +1230,6 @@ def test_32_e5_em_fallback_visible():
     print("32. E5 东财降级可见性 通过")
 
 
-if __name__ == "__main__":
-    tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
-    for t in tests:
-        t()
-        print(f"OK {t.__name__}")
-    print(f"全部 {len(tests)} 项测试通过")
-
 def test_18c_dupont_factors():
     """18c. 杜邦四因子（v5.8.0，mock _em_f10）：最新期 vs 去年同期（同 mmdd 年−1）；
     四值缺一 → {}；去年同期缺 → 仅本期无 prev 键。"""
@@ -2075,3 +2068,42 @@ def test_56_risk_free_rate_limit_not_cached(monkeypatch):
     assert cache == {}, "429 失败不得进入按日缓存"
     assert em_finance.fetch_risk_free() == ("2026-10-30", 1.75)
     assert len(calls) == 2, "失败后下一次调用必须重新请求"
+
+
+def test_out_requires_e1_price(monkeypatch, tmp_path):
+    import contextlib
+    import io
+
+    out = tmp_path / "quote.json"
+    monkeypatch.setattr(em, "summarize", lambda *_args: "summary")
+    monkeypatch.setattr(em._C, "_tushare_token", lambda: "mock")
+    monkeypatch.setattr(em, "_CAPTURE", {"period_track": {"period": "2026Q3"}})
+    monkeypatch.setattr(sys, "argv", ["em_fetch.py", "600000", f"--out={out}"])
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        em.main()
+    assert not out.exists(), "E1 缺 price 时不得生成假 quote"
+    assert "E1 捕获为空" in err.getvalue()
+
+
+def test_out_rejects_invalid_e1_price(monkeypatch, tmp_path):
+    import contextlib
+    import io
+
+    monkeypatch.setattr(em, "summarize", lambda *_args: "summary")
+    monkeypatch.setattr(em._C, "_tushare_token", lambda: "mock")
+    for price in (None, 0):
+        out = tmp_path / f"quote-{price}.json"
+        monkeypatch.setattr(em, "_CAPTURE", {"price": price, "code": "600000"})
+        monkeypatch.setattr(sys, "argv", ["em_fetch.py", "600000", f"--out={out}"])
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            em.main()
+        assert not out.exists(), f"无效 price={price!r} 不得生成 quote"
+        assert "E1 捕获为空" in err.getvalue()
+
+
+if __name__ == "__main__":
+    import pytest
+
+    raise SystemExit(pytest.main([__file__, "-q", "-p", "no:cacheprovider"]))

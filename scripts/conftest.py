@@ -449,6 +449,70 @@ def render_v2_fill(fill, name="_fill_t.json"):
         return open(out, encoding="utf-8").read()
 
 
+def visual_fill(**over):
+    fill = full_fill()
+    fill.update({
+        "gap_tier": "A",
+        "gap_plot": {"dims": [
+            {"name": "2026E 归母净利（亿元）", "ours": 100, "consensus": 100,
+             "street": [{"org": "中金公司", "v": 98, "date": "2026-08-20"},
+                        {"org": "国泰海通", "v": 102, "date": "2026-08-20"}]},
+            {"name": "目标价·12个月（元）", "ours": 11, "consensus": 10,
+             "street": [{"org": "中金公司", "v": 10.5, "date": "2026-08-20"},
+                        {"org": "国泰海通", "v": 10.8, "date": "2026-08-20"}]}]},
+        "gap_history": {"rows": [
+            {"org": "中金公司", "yr": "2026", "d_from": "2026-05-01", "d_to": "2026-08-20",
+             "np_from": 90, "np_to": 100, "tp_from": 9, "tp_to": 11},
+            {"org": "国泰海通", "yr": "2026", "d_from": "2026-04-01", "d_to": "2026-08-15",
+             "np_from": 92, "np_to": 96, "tp_from": 10, "tp_to": 10}]},
+        "timing_facts": {
+            "technical": {"rsi14": 55.0, "atr14_pct": 2.4, "as_of": "20260826", "sample_days": 281,
+                          "macd": {"dif": 0.2, "dea": 0.1, "hist": 0.2},
+                          "volume_ratio_20": 1.2, "ma60_slope_20d_pct": 2.5,
+                          "ma120_slope_20d_pct": 1.0, "position_52w_pct": 70.0},
+            "consensus_levels": {"start_date": "2023-08-27", "end_date": "2026-08-27",
+                                 "close_high": 15, "close_low": 8, "intraday_high": 16, "intraday_low": 7,
+                                 "months": 36, "ohlc_months": 36, "window_years": 3},
+            "chips": {}, "capital": {}},
+        "dupont": {"period": "2025年报", "roe": 16.1, "nm": 30.4, "turn": 0.313, "em": 1.70,
+                   "prev": {"roe": 8.3, "nm": 19.2, "turn": 0.258, "em": 1.65},
+                   "verdict": "净利率是主驱动（贡献约六成），与 4.4 毛利率归因一致"},
+    })
+    fill["gap_html"] = "<!--GAP-->" + fill["gap_html"]
+    fill["l1_html"] += "<!--DUPONT-->"
+    fill.update(over)
+    return fill
+
+
+def render_visual_fill(fill, name="_fill_visual.json"):
+    fill = copy.deepcopy(fill)
+    with tempfile.TemporaryDirectory() as d:
+        fill = prepare_v2_quote(fill, d)
+        quote_path = fill["quote"]["source_file"]
+        with open(quote_path, encoding="utf-8") as handle:
+            quote = json.load(handle)
+        facts = fill["timing_facts"]
+        quote.update({
+            "dupont": fill["dupont"],
+            "gap_history": fill["gap_history"],
+            "timing": {"technical": facts["technical"], "consensus_levels": facts["consensus_levels"]},
+        })
+        write_fill(quote, d, name=os.path.basename(quote_path))
+        street_dims = {dim["name"]: dim["street"] for dim in fill["gap_plot"]["dims"] if dim.get("street")}
+        if street_dims:
+            fill["gap_plot"]["source_file"] = write_fill(
+                {"source": "2026-08-21 机构调研纪要", "dims": street_dims}, d,
+                name=f"_street_{fill['code']}_{fill['date']}.json")
+        facts["source_file"] = write_fill({
+            "code": fill["code"], "date": fill["date"],
+            "technical": facts["technical"], "consensus_levels": facts["consensus_levels"],
+            "chips": facts.get("chips", {}), "capital": facts.get("capital", {})}, d,
+            name=f"_timing_{fill['code']}_{fill['date']}.json")
+        path = write_fill(fill, d, name)
+        out = R.render(path, out_path=os.path.join(d, "out.html"))
+        return open(out, encoding="utf-8").read()
+
+
 def capture_stderr(fn):
     """执行 fn()，返回其写入 stderr 的文本。"""
     buf = io.StringIO()

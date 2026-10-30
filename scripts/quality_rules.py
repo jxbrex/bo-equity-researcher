@@ -722,92 +722,71 @@ def _invalid_contributions(items, default=0):
     return False
 
 
+def _eval_3b_items(spec, items, marker_key, scores, default_weight, projects_mode):
+    steps = []
+    kind = "项目" if projects_mode else "可见度"
+    if _invalid_contributions(items, default_weight):
+        return _missing("3B", f"{kind}利润贡献权重必须为0-1有限数")
+    total = sum(float(item.get("contribution", default_weight)) for item in items)
+    if abs(total - 1) > 0.01:
+        if spec.get("primary_group") is not None:
+            if any(item.get("primary") is True for item in items):
+                raise ValueError("主来源与组合主来源不得同时指定")
+            return _eval_primary_group(items, spec["primary_group"], scores, steps, spec, projects_mode)
+        primaries = [item for item in items if item.get("primary") is True]
+        if not primaries:
+            raise ValueError(f"{kind}利润贡献权重之和必须为1")
+        if len(primaries) != 1:
+            raise ValueError("缺权重时必须标记唯一利润主来源")
+        primary = primaries[0]
+        marker = primary.get(marker_key)
+        if marker not in scores:
+            marker_kind = "项目阶段" if projects_mode else "可见度层级"
+            return _missing("3B", f"未知{marker_kind}: {marker}")
+        base = scores[marker]
+        cap = 7.9
+        if not projects_mode and marker != "纯叙事" and primary.get("value") is None:
+            base, cap = 2, 5.0
+        steps.append({"id": "3B.PRIMARY_FALLBACK",
+                      "evidence": f"{primary.get('name')}/{marker}/缺权重最高7.9", "delta": 0})
+        return _finish("3B", _band_for_score(base), base, steps, spec, cap=cap)
+    base = 0
+    cap = None
+    for item in items:
+        marker = item.get(marker_key)
+        if marker not in scores:
+            marker_kind = "项目阶段" if projects_mode else "可见度层级"
+            return _missing("3B", f"未知{marker_kind}: {marker}")
+        score = scores[marker]
+        if not projects_mode and marker != "纯叙事" and item.get("value") is None:
+            score, cap = 2, 5.0
+        weight = float(item.get("contribution", default_weight))
+        base += score * weight
+        if projects_mode:
+            step_id = f"3B.PROJECT.{item.get('name', len(steps))}"
+            evidence = f"{marker}/权重{weight}"
+        else:
+            step_id = f"3B.VISIBILITY.{item.get('name', len(steps))}"
+            evidence = f"{marker}/权重{weight}/数值{item.get('value')}"
+        steps.append({"id": step_id, "evidence": evidence, "delta": 0})
+    return _finish("3B", _band_for_score(base), base, steps, spec, cap=cap)
+
+
 def _eval_3b(spec, context):
     projects = spec.get("projects")
     visibility = spec.get("visibility")
     if projects is None and visibility is None:
         return _missing("3B", "缺少项目或可见度清单")
-    steps = []
     if projects is not None:
         if not projects:
             return _missing("3B", "项目清单为空")
-        if _invalid_contributions(projects):
-            return _missing("3B", "项目利润贡献权重必须为0-1有限数")
-        stage_scores = {"已投产": 9, "试生产": 9, "在建": 7, "审批中": 5, "资金未落实": 5, "规划": 2, "意向": 2}
-        total = sum(float(p.get("contribution", 0)) for p in projects)
-        if abs(total - 1) > 0.01:
-            if spec.get("primary_group") is not None:
-                if any(p.get("primary") is True for p in projects):
-                    raise ValueError("主来源与组合主来源不得同时指定")
-                return _eval_primary_group(projects, spec["primary_group"], stage_scores, steps, spec, True)
-            primaries = [p for p in projects if p.get("primary") is True]
-            if not primaries:
-                raise ValueError("项目利润贡献权重之和必须为1")
-            if len(primaries) != 1:
-                raise ValueError("缺权重时必须标记唯一利润主来源")
-            primary = primaries[0]
-            stage = primary.get("stage")
-            if stage not in stage_scores:
-                return _missing("3B", f"未知项目阶段: {stage}")
-            base = stage_scores[stage]
-            steps.append({"id": "3B.PRIMARY_FALLBACK",
-                          "evidence": f"{primary.get('name')}/{stage}/缺权重最高7.9", "delta": 0})
-            return _finish("3B", _band_for_score(base), base, steps, spec, cap=7.9)
-        base = 0
-        for project in projects:
-            stage = project.get("stage")
-            if stage not in stage_scores:
-                return _missing("3B", f"未知项目阶段: {stage}")
-            score = stage_scores[stage]
-            weight = float(project["contribution"])
-            base += score * weight
-            steps.append({"id": f"3B.PROJECT.{project.get('name', len(steps))}",
-                          "evidence": f"{stage}/权重{weight}", "delta": 0})
-        return _finish("3B", _band_for_score(base), base, steps, spec)
+        scores = {"已投产": 9, "试生产": 9, "在建": 7, "审批中": 5, "资金未落实": 5, "规划": 2, "意向": 2}
+        return _eval_3b_items(spec, projects, "stage", scores, 0, True)
     if not visibility:
         return _finish("3B", "D", 2.0, [], spec)
-    level_scores = {"合约级": 9, "可量化扩张": 7, "趋势平缓": 5, "纯叙事": 2}
+    scores = {"合约级": 9, "可量化扩张": 7, "趋势平缓": 5, "纯叙事": 2}
     default_weight = 1 if len(visibility) == 1 else 0
-    if _invalid_contributions(visibility, default_weight):
-        return _missing("3B", "可见度利润贡献权重必须为0-1有限数")
-    total = sum(float(item.get("contribution", default_weight)) for item in visibility)
-    if abs(total - 1) > 0.01:
-        if spec.get("primary_group") is not None:
-            if any(item.get("primary") is True for item in visibility):
-                raise ValueError("主来源与组合主来源不得同时指定")
-            return _eval_primary_group(visibility, spec["primary_group"], level_scores, steps, spec, False)
-        primaries = [item for item in visibility if item.get("primary") is True]
-        if not primaries:
-            raise ValueError("可见度利润贡献权重之和必须为1")
-        if len(primaries) != 1:
-            raise ValueError("缺权重时必须标记唯一利润主来源")
-        primary = primaries[0]
-        level = primary.get("level")
-        if level not in level_scores:
-            return _missing("3B", f"未知可见度层级: {level}")
-        base = level_scores[level]
-        cap = 7.9
-        if level != "纯叙事" and primary.get("value") is None:
-            base = 2
-            cap = 5.0
-        steps.append({"id": "3B.PRIMARY_FALLBACK",
-                      "evidence": f"{primary.get('name')}/{level}/缺权重最高7.9", "delta": 0})
-        return _finish("3B", _band_for_score(base), base, steps, spec, cap=cap)
-    base = 0
-    cap = None
-    for item in visibility:
-        level = item.get("level")
-        if level not in level_scores:
-            return _missing("3B", f"未知可见度层级: {level}")
-        score = level_scores[level]
-        if level != "纯叙事" and item.get("value") is None:
-            score = 2
-            cap = 5.0
-        weight = float(item.get("contribution", default_weight))
-        base += score * weight
-        steps.append({"id": f"3B.VISIBILITY.{item.get('name', len(steps))}",
-                      "evidence": f"{level}/权重{weight}/数值{item.get('value')}", "delta": 0})
-    return _finish("3B", _band_for_score(base), base, steps, spec, cap=cap)
+    return _eval_3b_items(spec, visibility, "level", scores, default_weight, False)
 
 
 def _eval_3c(spec, context):

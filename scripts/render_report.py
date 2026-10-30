@@ -18,6 +18,7 @@ fill JSON 契约见 references/fill-schema.md。
 import json
 import os
 import re
+import shutil
 import sys
 from collections import namedtuple
 from html import unescape as _html_unescape
@@ -63,7 +64,7 @@ from validate import validate_content
 
 # 渲染器版本：嵌入输出 HTML 尾部注释，事后可 grep 验证报告确由本脚本渲染
 # （防"render 报错后手写全文 HTML 绕行"，巨石 2026-08-23 实证）
-RENDERER_VERSION = "v0.11.7"
+RENDERER_VERSION = "v0.11.8"
 
 # Windows 文件名非法字符：\ / : * ? " < > | 及 ASCII 控制字符（\x00-\x1f）
 _WIN_ILLEGAL = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
@@ -312,8 +313,9 @@ def _risk_rule_is_active(sc, home, rule_id):
     return True
 
 
-def build_risk_register(fill: dict) -> str:
-    sc = compute_scores(fill)
+def build_risk_register(fill: dict, sc: dict = None) -> str:
+    if sc is None:
+        sc = compute_scores(fill)
     if sc.get("quality_version") != 2:
         return ""
     items = fill.get("risk_items") or []
@@ -414,12 +416,17 @@ def _build_audit_html(warnings) -> str:
             f'本报告有 {len(warnings)} 项校验提示，结论须结合以下限制阅读。<ul>{items}</ul></div>')
 
 
+PreflightResult = namedtuple("PreflightResult", [
+    "fill", "calc", "sc", "valuation", "valuation_calc",
+    "l1_html", "l3_html", "risk_register_html",
+])
+
 # v5.8.2：_build_repl_map 的 15 个散装形参收拢为 RenderContext（render 组装一次传入）——
 # 形参每加一项要同步改两处签名，上下文对象随 render 流水线天然同生共灭
 RenderContext = namedtuple("RenderContext", [
     "fill", "cur", "calc", "sc", "valuation", "valuation_calc", "prev", "review_html",
     "date", "subtitle", "target_range", "peers_html", "spectrum_html",
-    "scenario_block_html", "peers_plot_html",
+    "scenario_block_html", "peers_plot_html", "l1_html", "l3_html", "risk_register_html",
 ])
 
 
@@ -460,16 +467,10 @@ def _build_repl_map(ctx: "RenderContext") -> dict:
         # 徽章与 14 章升档行同生共灭
         edge_crit, _q_eff, _v_eff = _edge_info(quality, valuation,
                                                valuation_calc.get("floor_uplift"))
-    l1_html = _inject_l1_charts(fill.get("l1_html", ""), fill)
-    l3_html = _inject_l3_charts(fill.get("l3_html", ""), fill)
+    l1_html, l3_html = ctx.l1_html, ctx.l3_html
     l4_html = fill.get("l4_html", "")
     if sc.get("quality_version") == 2:
-        l4_html = l4_html.replace("<!--RISK_REGISTER-->", build_risk_register(fill))
-        l1_html = _inject_dimension_scores(l1_html, sc["dimension_results"], sc["score_inputs"])
-        l3_html = _inject_dimension_scores(l3_html, sc["dimension_results"], sc["score_inputs"])
-        missing = [key for key in sc["dimension_results"] if f'data-dim="{key}"' not in l1_html + l3_html]
-        if missing:
-            raise ValueError(f"v2 缺少维度锚点 data-dim: {missing}")
+        l4_html = l4_html.replace("<!--RISK_REGISTER-->", ctx.risk_register_html)
     quote_date = str((fill.get("quote") or {}).get("date") or "")
     if re.fullmatch(r"\d{8}", quote_date):
         quote_date = f"{quote_date[:4]}-{quote_date[4:6]}-{quote_date[6:]}"
@@ -661,38 +662,35 @@ def _check_leftover(html: str) -> None:
 
 
 def _iter_source_spans(html: str):
-    r"""产出最终 HTML 中所有 class token 含 source 的 span：（class 属性值, 剥标签+unescape 纯文本）。
-    深度感知配对 </span>——.source 内允许嵌套 <strong>/内联 span，非贪婪正则会在内层
-    </span> 处提前截断，给内部黑话留逃逸口；class 属性大小写不敏感、单/双引号/无引号
-    （HTML5 合法写法）均可，(?<![-\w:]) 防 data-class 这类属性误配；文本先 HTML unescape
-    再交门禁扫黑话（防 em&#95;fetch 实体绕过）；class 含 source 的 span 未闭合 → ValueError
-    （fail-closed，余量不静默扫过）。扫描在剔除 <!--...--> 注释的副本上进行——注释对读者
-    不可见，注释内黑话不误伤（只影响门禁扫描，输出 HTML 不动）。"""
+    r"""产出最终 HTML 中所有 class token 含 source 的元素：（class 属性值, 剥标签+unescape 纯文本）。
+    支持 span/p/div/small；按实际标签名深度配对，嵌套内容不截断。class 属性大小写不敏感、
+    单/双引号/无引号均可，(?<![-\w:]) 防 data-class 误配；文本先 HTML unescape 再扫黑话。
+    未闭合的来源注元素直接拒渲染。注释不参与扫描，但输出 HTML 不变。"""
     scan = re.sub(r"<!--.*?-->", "", html, flags=re.S)
-    for m in re.finditer(r'<span\b[^>]*?(?<![-\w:])class\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s>]+))[^>]*>',
+    for m in re.finditer(r'<(span|p|div|small)\b[^>]*?(?<![-\w:])class\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s>]+))[^>]*>',
                          scan, flags=re.I):
-        classes = (m.group(1) or m.group(2) or m.group(3) or "").split()
+        tag = m.group(1)
+        classes = (m.group(2) or m.group(3) or m.group(4) or "").split()
         if "source" not in [c.lower() for c in classes]:
             continue
         depth = 1
-        for t in re.finditer(r'<span\b[^>]*>|</span\s*>', scan[m.end():], flags=re.I):
+        for t in re.finditer(rf'<{tag}\b[^>]*>|</{tag}\s*>', scan[m.end():], flags=re.I):
             depth += 1 if not t.group(0).startswith("</") else -1
             if depth == 0:
                 inner = scan[m.end():m.end() + t.start()]
                 yield " ".join(classes), _html_unescape(re.sub(r"<[^>]+>", "", inner))
                 break
         else:
-            # fail-closed：class 含 source 的 span 未闭合，余量静默扫过等于放行黑话——直接拒渲染
             raise ValueError(
-                f"来源注 span 未闭合（找不到配对的 </span>）：「{scan[m.start():m.start() + 80]}」——"
-                "class 含 source 的 <span> 必须闭合后才能完成来源注检查，请修正 HTML 后重新渲染")
+                f"来源注 {tag} 未闭合（找不到配对的 </{tag}>）：「{scan[m.start():m.start() + 80]}」——"
+                "class 含 source 的元素必须闭合后才能完成来源注检查，请修正 HTML 后重新渲染")
 
 
 def _check_source_spans(html: str) -> None:
     """最终 HTML 来源注硬门禁（v5.7.3）：validate_content 在图表注入前执行，看不到脚本图注
     与手写片段汇合后的最终形态——防线放在 _fill_template 之后、_write_html 之前，同时罩住
     脚本注入图注与手写 HTML 片段。
-    ① 所有 class token 含 source 的 span 禁内部实现名（_SOURCE_BANNED_RE：脚本按/字段生成/
+    ① 所有 class token 含 source 的元素禁内部实现名（_SOURCE_BANNED_RE：脚本按/字段生成/
     照抄行/em_fetch/extract_review/E1-E6/fill 字段名等）；② 脚本生成的 .chart-source 另须
     含非空「数据来源：」（冒号后、分隔/闭括号前至少一个词字符，空壳等于没写）。
     命中即拒渲染，报错点名命中词、命中片段与修法。"""
@@ -741,38 +739,30 @@ def _write_html(html: str, out_path: str) -> None:
 def _archive_artifacts(fill: dict, fill_path: str, out_path: str, date: str,
                        quality: float, valuation: float, timing, target_range: str,
                        red_flag: str, backtest: bool, sc: dict = None) -> None:
-    """渲染成功后的归档（v4.10 B-min 归档库）：fill 与 E1 防伪落盘移入报告目录 `_archive/`，
-    并在 `_archive/_index.jsonl` 登记或更新索引（同一 code/date/html 重渲不重复）。
-    只动 `_fill_`/`_em_` 前缀的会话临时文件（测试 fixture 与存量文件不误移）；
-    防伪链在 validate 阶段已消费 quote 落盘，渲染成功后移动不断链；
-    归档任何失败降级为告警，绝不让已成功的渲染报错。"""
+    """渲染成功后归档：先复制到临时文件，归档与索引提交成功后才删除源文件。"""
+    pending, tmp_paths = [], []
     try:
         arch_dir = os.path.join(os.path.dirname(os.path.abspath(out_path)), "_archive")
         os.makedirs(arch_dir, exist_ok=True)
         company_s = _safe_filename(fill.get("company", "未命名"))
         code_s = _safe_filename(fill.get("code", "无代码"))
         date_s = _safe_filename(date)
-        moved = []
-        if os.path.basename(fill_path).startswith("_fill_") and os.path.exists(fill_path):
-            dst = os.path.join(arch_dir, f"fill_{company_s}_{code_s}_{date_s}.json")
-            if os.path.exists(dst):
-                print(f"⚠️ 归档文件已存在，将被覆盖: {dst}", file=sys.stderr)
-            os.replace(fill_path, dst)
-            moved.append(os.path.basename(dst))
+
+        def _add(src, dst):
+            if os.path.basename(src).startswith(("_fill_", "_em_", "_timing_")) and os.path.exists(src):
+                if os.path.exists(dst):
+                    print(f"⚠️ 归档文件已存在，将被覆盖: {dst}", file=sys.stderr)
+                pending.append((src, dst))
+
+        _add(fill_path, os.path.join(arch_dir, f"fill_{company_s}_{code_s}_{date_s}.json"))
         qsf = (fill.get("quote") or {}).get("source_file") or ""
-        if os.path.basename(qsf).startswith("_em_") and os.path.exists(qsf):
-            dst = os.path.join(arch_dir, f"em_{code_s}_quote_{date_s}.json")
-            if os.path.exists(dst):
-                print(f"⚠️ 归档文件已存在，将被覆盖: {dst}", file=sys.stderr)
-            os.replace(qsf, dst)
-            moved.append(os.path.basename(dst))
+        _add(qsf, os.path.join(arch_dir, f"em_{code_s}_quote_{date_s}.json"))
         tsf = (fill.get("timing_facts") or {}).get("source_file") or ""
-        if os.path.basename(tsf).startswith("_timing_") and os.path.exists(tsf):
-            dst = os.path.join(arch_dir, f"timing_{code_s}_{date_s}.json")
-            if os.path.exists(dst):
-                print(f"⚠️ 归档文件已存在，将被覆盖: {dst}", file=sys.stderr)
-            os.replace(tsf, dst)
-            moved.append(os.path.basename(dst))
+        _add(tsf, os.path.join(arch_dir, f"timing_{code_s}_{date_s}.json"))
+        for _src, dst in pending:
+            tmp = f"{dst}.{os.getpid()}.tmp"
+            tmp_paths.append(tmp)
+            shutil.copy2(_src, tmp)
         row = {
             "date": date, "company": fill.get("company"), "code": fill.get("code"),
             "html": os.path.basename(out_path), "quality": quality, "valuation": valuation,
@@ -803,14 +793,30 @@ def _archive_artifacts(fill: dict, fill_path: str, out_path: str, date: str,
                 lines.append(line)
         if not replaced:
             lines.append(row_json)
-        # 同一输出报告重渲只更新原行；不同 html 各自保留。PID-tmp + os.replace 防半行 JSONL。
         tmp_idx = f"{idx_path}.{os.getpid()}.tmp"
+        tmp_paths.append(tmp_idx)
         with open(tmp_idx, "w", encoding="utf-8") as f:
             f.write("\n".join(lines) + "\n")
-        os.replace(tmp_idx, idx_path)
+        destinations = [dst for _src, dst in pending] + [idx_path]
+        for tmp, dst in zip(tmp_paths, destinations):
+            os.replace(tmp, dst)
+        moved = [os.path.basename(dst) for _src, dst in pending]
         print(f"归档 → {arch_dir}" + (f"（{'、'.join(moved)} + _index.jsonl）" if moved else "（_index.jsonl）"))
     except OSError as e:
-        print(f"⚠️ 归档失败（报告本身已完成，不受影响）: {e}", file=sys.stderr)
+        print(f"⚠️ 归档未完成（报告本身已完成；源文件保留，可重跑恢复）: {e}", file=sys.stderr)
+    else:
+        for src, _dst in pending:
+            try:
+                os.remove(src)
+            except OSError as e:
+                print(f"⚠️ 归档已完成，但源文件清理失败: {src}: {e}", file=sys.stderr)
+    finally:
+        for tmp in tmp_paths:
+            if os.path.exists(tmp):
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
 
 
 def _post_render_checks(repl: dict, fill: dict, out_path: str, quality: float, pre_risk: float,
@@ -849,36 +855,38 @@ def _post_render_checks(repl: dict, fill: dict, out_path: str, quality: float, p
 
 
 def _preflight(fill_path: str):
-    """--check 与 render 共用的预检单流水线（v4.10.2 合并双流水线，消除手工同步漂移：
-    check 曾漏 company/code 必填校验、校验顺序与 render 不同、估值错误消息第三份拷贝）。
-    解析 → 必填标量 → L4 顺序告警 → 估值计算 → v2 评分、内容校验与风险登记 /
-    v1 先内容校验后评分 → 估值分可计算检查。
-    通过返回 (fill, calc, sc, valuation, valuation_calc)；任何一步不过抛 ValueError。"""
+    """解析、评分与校验只执行一次，并把正式渲染消费的片段一并返回。"""
     fill = _load_fill(fill_path)
     _check_required_scalars(fill)
     _check_l4_order(fill.get("l4_html", ""))
-    # 估值计算（valuation 字段存在时，目标价/中枢/赔率/离散度全部脚本算）
     calc = compute_valuation(fill)
+    risk_register_html = ""
     if _quality_version(fill) == 2:
         sc = compute_scores(fill)
         audit_warnings = validate_content(fill, calc, sc)
-        build_risk_register(fill)
+        risk_register_html = build_risk_register(fill, sc)
         dimension_html = fill.get("l1_html", "") + fill.get("l3_html", "")
         missing = [key for key in sc["dimension_results"] if f'data-dim="{key}"' not in dimension_html]
         if missing:
             raise ValueError(f"v2 缺少维度锚点 data-dim: {missing}")
-        _inject_dimension_scores(fill.get("l1_html", ""), sc["dimension_results"], sc["score_inputs"])
-        _inject_dimension_scores(fill.get("l3_html", ""), sc["dimension_results"], sc["score_inputs"])
+        l1_html = _inject_dimension_scores(
+            fill.get("l1_html", ""), sc["dimension_results"], sc["score_inputs"])
+        l3_html = _inject_dimension_scores(
+            fill.get("l3_html", ""), sc["dimension_results"], sc["score_inputs"])
     else:
         audit_warnings = validate_content(fill, calc)
         sc = compute_scores(fill)
+        l1_html = fill.get("l1_html", "")
+        l3_html = fill.get("l3_html", "")
     sc["audit_warnings"] = audit_warnings
     valuation, valuation_calc = _apply_valuation_score(fill, calc, sc["valuation"])
-    return fill, calc, sc, valuation, valuation_calc
+    return PreflightResult(fill, calc, sc, valuation, valuation_calc,
+                           l1_html, l3_html, risk_register_html)
 
 
 def render(fill_path: str, out_path: str = None) -> str:
-    fill, calc, sc, valuation, valuation_calc = _preflight(fill_path)
+    (fill, calc, sc, valuation, valuation_calc,
+     l1_html, l3_html, risk_register_html) = _preflight(fill_path)
     cur = str(fill.get("currency") or "元")  # 币种单位（默认「元」，港股 fill 填 currency="港元"）
 
     # 图形组件（脚本生成 SVG；数据缺省时为空串 → 模板条件块整块删除）
@@ -897,11 +905,14 @@ def render(fill_path: str, out_path: str = None) -> str:
     prev, review_html = _check_backtest_flags(fill)
 
     date, subtitle, target_range = _build_context(fill, calc)
+    l1_html = _inject_l1_charts(l1_html, fill)
+    l3_html = _inject_l3_charts(l3_html, fill)
     ctx = RenderContext(fill=fill, cur=cur, calc=calc, sc=sc, valuation=valuation,
                         valuation_calc=valuation_calc, prev=prev, review_html=review_html,
                         date=date, subtitle=subtitle, target_range=target_range,
                         peers_html=peers_html, spectrum_html=spectrum_html,
-                        scenario_block_html=scenario_block_html, peers_plot_html=peers_plot_html)
+                        scenario_block_html=scenario_block_html, peers_plot_html=peers_plot_html,
+                        l1_html=l1_html, l3_html=l3_html, risk_register_html=risk_register_html)
     repl = _build_repl_map(ctx)
 
     html = _fill_template(repl)
@@ -924,7 +935,8 @@ def check_fill(fill_path: str) -> None:
     替代手写 python -c json.load 自检（Windows 控制台引号/编码/路径反斜杠坑，
     中兴 2026-08-24 实证）。退出码：0=通过可渲染，2=存在拒渲染项。"""
     try:
-        fill, _calc, _sc, _valuation, _vc = _preflight(fill_path)
+        preflight = _preflight(fill_path)
+        fill = preflight.fill
     except (ValueError, TypeError) as e:
         # v4.11.1（热核审计）：捕获面与 render 对称（TypeError 一并收编，估值边界缺陷兜底）
         print(f"✗ 预检未通过（渲染将被拒绝）：\n  {e}", file=sys.stderr)

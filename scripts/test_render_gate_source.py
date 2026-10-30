@@ -553,6 +553,37 @@ def test_final_html_source_gate_rejects_jargon():
         raise AssertionError("chart-source 缺非空「数据来源：」，渲染未被拒绝")
 
 
+def test_source_tag_variants_share_final_gate():
+    import render_report as R
+
+    for tag in ("p", "div", "small"):
+        for attr in ('class="source"', "class='source'", "class=source"):
+            bad = f"<{tag} {attr}>数据来源：em_fetch E2</{tag}>"
+            try:
+                R._check_source_spans(bad)
+            except ValueError as e:
+                assert "内部实现名" in str(e)
+            else:
+                raise AssertionError(f"{tag}.{attr} 绕过了最终来源注门禁")
+    R._check_source_spans('<div class="source"><p>数据来源：公司公告</p></div>')
+    try:
+        R._check_source_spans('<div class="source"><p>em_fetch E2</p></div>')
+    except ValueError as e:
+        assert "内部实现名" in str(e)
+    else:
+        raise AssertionError("嵌套来源注中的内部实现名未被读取")
+
+
+def test_source_element_single_quoted_p_counts():
+    from validate_html import _check_content_floor
+
+    fill = minimal_fill()
+    fill["peers_html"] = (fill["peers_html"]
+                          .replace('<span class="source">', "<p class='source'>")
+                          .replace("</span>", "</p>"))
+    _check_content_floor(fill)
+
+
 def test_chart_source_helper_selfcheck():
     """v5.7.3 复核修复①③：_chart_source 空/空白来源必须 ValueError（空壳「数据来源：」逃逸）；
     title/source/note 三向禁词自检，命中即拒。"""

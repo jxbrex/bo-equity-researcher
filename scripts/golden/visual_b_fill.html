@@ -295,9 +295,10 @@ td.rev, th.rev { padding: 8px 12px; }
 .score-detail-toggle { margin-left: auto; color: var(--accent); font-size: 11px; white-space: nowrap; }
 .score-groups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 8px 0 4px; }
 .score-group { background: var(--sand); border: 1px solid var(--line-soft); border-radius: 6px; padding: 8px 12px; }
-.score-group h4 { color: var(--accent); font-size: 12px; font-weight: 600; margin-bottom: 4px; }
+.score-group h4 { color: var(--accent); font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+.score-group p { font-size: 14px; line-height: 1.65; }
 .score-group ul { list-style: none; }
-.score-group li { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding: 4px 0; font-size: 12px; line-height: 1.65; }
+.score-group li { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding: 4px 0; font-size: 14px; line-height: 1.65; }
 .score-group li + li { border-top: 1px solid var(--line-soft); }
 .score-group li span { min-width: 0; overflow-wrap: break-word; }
 .score-group li strong { flex-shrink: 0; font-variant-numeric: tabular-nums; }
@@ -350,12 +351,6 @@ td.rev, th.rev { padding: 8px 12px; }
    （Firefox 暂未支持，自动忽略属优雅降级） */
 .hero h1, .section-title, .concl-card .concl-head { text-wrap: balance; }
 .section-body p, .hero .thesis, .concl-card { text-wrap: pretty; }
-/* v5.8.4：首屏以下章节延迟渲染，省长报告首屏布局/绘制开销（Baseline 2025-09；@supports
-   外裹旧浏览器整体忽略）。#s1 贴首屏，排除以免拖慢关键渲染；contain-intrinsic-size
-   占位防滚动条跳动，auto 让浏览器渲染过一次后记住实测高 */
-@supports (content-visibility: auto) {
-  .section:not(#s1) { content-visibility: auto; contain-intrinsic-size: auto 600px; }
-}
 /* v4.9.1 补充修订二：1 核心结论 2×2 结论卡网格（四卡固定序：关键优势/关键弱点/当前市场认知/
    核心投资逻辑；卡尾 concl-ref「详见 X 章」锚索引，浓缩要点+章节索引替代四段长文） */
 .concl-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin: 2px 0 12px; }
@@ -425,8 +420,7 @@ td.rev, th.rev { padding: 8px 12px; }
   .section, .hero, .metric-card { border: 1px solid var(--line); }
   th { background: var(--sand-deep); }
   .toc-side { display: none; }
-  /* v5.8.4 双保险：打印全量渲染（浏览器本应自动展开 content-visibility 延迟章节，
-     显式声明防实现差异导致打印漏章）；不支持的浏览器忽略此声明，无副作用 */
+  /* 打印显式全量渲染，防实现差异导致漏章；不支持的浏览器忽略此声明，无副作用 */
   .section { content-visibility: visible; }
 }
 </style>

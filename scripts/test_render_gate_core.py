@@ -207,7 +207,19 @@ def test_writing_discipline_warns():
           '<strong>评分：</strong>8.0——护城河在长期服务协议锁定，铜价下行期续约率是唯一先行指标。</p></div>')
     fill4beat = minimal_fill(l1_html="".join(_dim("该维度分析：公司基本面稳健，数据支撑充分，论据详实可靠，"
                                                   "行业地位稳固，具备长期参考价值。") for _ in range(5)) + l1)
-    assert "四拍挤段" in validate_stderr(fill4beat), "四拍挤段应告警"
+    assert "四拍挤段" in validate_stderr(fill4beat), "评分与其他拍挤段应告警"
+    compact = ('<div class="dim-block"><p><strong>判词：</strong>公司增长快于行业。'
+               '<strong>对比：</strong>2026 年收入增速 20% 高于同业 10%，仍须验证现金流。</p></div>')
+    compact_fill = minimal_fill(l1_html="".join(_dim(
+        "该维度分析：公司基本面稳健，数据支撑充分，论据详实可靠，行业地位稳固，具备长期参考价值。"
+    ) for _ in range(5)) + compact)
+    assert "四拍挤段" not in validate_stderr(compact_fill), "判词与对比允许并入既有段落"
+    mixed_score = ('<div class="dim-block"><p><strong>对比：</strong>公司增速 20% 高于同业 10%。'
+                   '<strong>评分依据：</strong>基础 7 分，连续分红再加 0.5 分。</p></div>')
+    mixed_fill = minimal_fill(l1_html="".join(_dim(
+        "该维度分析：公司基本面稳健，数据支撑充分，论据详实可靠，行业地位稳固，具备长期参考价值。"
+    ) for _ in range(5)) + mixed_score)
+    assert "四拍挤段" in validate_stderr(mixed_fill), "评分依据与对比同段也应告警"
     l1_ok = "".join(_dim("该维度分析：公司基本面稳健，数据支撑充分，论据详实可靠，"
                          "行业地位稳固，具备长期参考价值。") for _ in range(6))
     assert "四拍挤段" not in validate_stderr(minimal_fill(l1_html=l1_ok)), "分段的四拍不应告警"
@@ -1384,10 +1396,27 @@ def test_fixed_web_guidance_contract():
         "text-wrap: balance",
         "text-wrap: pretty",
         "prefers-reduced-motion: no-preference",
-        "@supports (content-visibility: auto)",
         "content-visibility: visible",
     ):
         assert marker in template, f"固定 Web 契约锚点缺失：{marker}"
+    assert "@supports (content-visibility: auto)" not in template
+    assert "contain-intrinsic-size" not in template
+    for selector, size in (("h4", "13px"), ("p", "14px"), ("li", "14px")):
+        assert re.search(rf"\.score-group {selector}\s*\{{[^}}]*font-size:\s*{size}", template), \
+            f"评分依据 {selector} 字号应统一为 {size}"
     html = render_fill(minimal_fill())
     assert ('<div class="table-scroll" tabindex="0" role="region" '
             'aria-label="数据表格（可横向滚动）">') in html
+
+
+def test_score_detail_hides_governance_positive_subtotal():
+    result = {"base": 6.0, "cap": 9.0, "final": 7.0, "rule_steps": [
+        {"id": "1E.DIVIDEND", "evidence": "8", "delta": 0.5},
+        {"id": "1E.BUYBACK", "evidence": "True", "delta": 0.5},
+        {"id": "1E.POSITIVE_CAP", "evidence": "正向合计1.0", "delta": 0},
+    ]}
+    html = R._build_score_detail("1E", result, {})
+    text = _visible_text(html)
+    assert "最终 7.00" in text and text.count("+0.50") == 2
+    assert "正向合计" not in text
+    assert 'data-rule-id="1E.POSITIVE_CAP"' not in html

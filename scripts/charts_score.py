@@ -185,7 +185,7 @@ def _build_score_detail(key, result, spec):
     groups = {"加减分": [], "规则明细": [], "数据缺口与限制": [], "补充观察": []}
     for step in steps:
         rule_id = str(step.get("id") or "")
-        if rule_id in F_ITEM_IDS.values():
+        if rule_id in F_ITEM_IDS.values() or rule_id == "1E.POSITIVE_CAP":
             continue
         text = _score_text(key, step, spec)
         label = _score_label(step)

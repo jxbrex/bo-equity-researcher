@@ -64,7 +64,7 @@ from validate import validate_content
 
 # 渲染器版本：嵌入输出 HTML 尾部注释，事后可 grep 验证报告确由本脚本渲染
 # （防"render 报错后手写全文 HTML 绕行"，巨石 2026-08-23 实证）
-RENDERER_VERSION = "v0.12.1"
+RENDERER_VERSION = "v0.12.2"
 
 # Windows 文件名非法字符：\ / : * ? " < > | 及 ASCII 控制字符（\x00-\x1f）
 _WIN_ILLEGAL = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
@@ -888,6 +888,10 @@ def _preflight(fill_path: str):
         l1_html = fill.get("l1_html", "")
         l3_html = fill.get("l3_html", "")
     sc["audit_warnings"] = audit_warnings
+    for name in ("thesis_html", "conclusion_html", "p0_html", "l1_html", "l3_html", "l4_html",
+                 "valuation_html", "gap_html", "peers_html", "dash_html", "position_html",
+                 "review_html", "cycle_html"):
+        _check_source_spans(str(fill.get(name) or ""))
     valuation, valuation_calc = _apply_valuation_score(fill, calc, sc["valuation"])
     return PreflightResult(fill, calc, sc, valuation, valuation_calc,
                            l1_html, l3_html, risk_register_html)

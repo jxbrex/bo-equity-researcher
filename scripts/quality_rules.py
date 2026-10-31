@@ -16,6 +16,8 @@ def _num(value):
 
 
 def _num_last(value):
+    if isinstance(value, (int, float)):
+        return float(value)
     matches = _NUMBER_RE.findall(str(value or "").replace("−", "-"))
     return float(matches[-1].replace(",", "")) if matches else None
 

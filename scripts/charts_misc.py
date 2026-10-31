@@ -26,10 +26,12 @@ def build_growth_plot(fill: dict) -> str:
     for f in gp.get("fcst") or []:
         y = str(f.get("y") or "").strip()
         lo, hi, cons = _num(f.get("np_lo")), _num(f.get("np_hi")), _num(f.get("np_consensus"))
-        if not y or lo is None or hi is None or hi < lo:
+        has_range = lo is not None and hi is not None and hi >= lo
+        if not y or (not has_range and cons is None):
             continue
-        fcst.append({"y": y, "lo": lo, "hi": hi, "cons": cons, "rev": _num(f.get("rev"))})
-    if len(hist) < 3 or not fcst:
+        fcst.append({"y": y, "lo": lo, "hi": hi, "cons": cons, "rev": _num(f.get("rev")),
+                     "has_range": has_range})
+    if len(hist) < 3 or not any(f["has_range"] for f in fcst):
         return ""
 
     W, H, L, R, T, B = 1000, 288, 56, 20, 30, 48   # v4.9 二轮：高度 340→288（用户反馈再压低）
@@ -87,13 +89,14 @@ def build_growth_plot(fill: dict) -> str:
         else:
             bw = min(slot * 0.34, 38)
             x = cx - bw / 2
-            parts.append(f'<rect x="{x:.1f}" y="{Y(g["hi"]):.1f}" width="{bw:.1f}" '
-                         f'height="{max(Y(g["lo"]) - Y(g["hi"]), 2):.1f}" rx="4" fill="{_C_BLUE}" '
-                         f'fill-opacity="0.3" stroke="{_C_BLUE}" stroke-width="1.2"/>')
-            parts.append(f'<text x="{cx:.1f}" y="{Y(g["hi"]) - 5:.1f}" text-anchor="middle" font-size="10" '
-                         f'fill="{_C_BLUE}">{_s(g["hi"])}</text>')
-            parts.append(f'<text x="{cx:.1f}" y="{Y(g["lo"]) + 12:.1f}" text-anchor="middle" font-size="10" '
-                         f'fill="{_C_BLUE}">{_s(g["lo"])}</text>')
+            if g["has_range"]:
+                parts.append(f'<rect x="{x:.1f}" y="{Y(g["hi"]):.1f}" width="{bw:.1f}" '
+                             f'height="{max(Y(g["lo"]) - Y(g["hi"]), 2):.1f}" rx="4" fill="{_C_BLUE}" '
+                             f'fill-opacity="0.3" stroke="{_C_BLUE}" stroke-width="1.2"/>')
+                parts.append(f'<text x="{cx:.1f}" y="{Y(g["hi"]) - 5:.1f}" text-anchor="middle" font-size="10" '
+                             f'fill="{_C_BLUE}">{_s(g["hi"])}</text>')
+                parts.append(f'<text x="{cx:.1f}" y="{Y(g["lo"]) + 12:.1f}" text-anchor="middle" font-size="10" '
+                             f'fill="{_C_BLUE}">{_s(g["lo"])}</text>')
             if g["cons"] is not None:
                 gy = Y(g["cons"])
                 parts.append(f'<polygon points="{cx:.1f},{gy - 7:.1f} {cx + 7:.1f},{gy:.1f} {cx:.1f},{gy + 7:.1f} '
@@ -101,10 +104,11 @@ def build_growth_plot(fill: dict) -> str:
                 parts.append(f'<text x="{cx + 10:.1f}" y="{gy - 9:.1f}" font-size="10" '
                              f'stroke="{_C_PAPER_CELL}" stroke-width="3" paint-order="stroke" '
                              f'fill="{_C_BLACK}">一致 {_s(g["cons"])}</text>')
-                d = (g["lo"] + g["hi"]) / 2 - g["cons"]
-                diffs.append(f'{_esc(g["y"])} {d:+.1f}pct')
-                parts.append(f'<text x="{cx:.1f}" y="{H - B + 31}" text-anchor="middle" font-size="10" '
-                             f'fill="{_C_STONE}">差 {d:+.1f}pct</text>')
+                if g["has_range"]:
+                    d = (g["lo"] + g["hi"]) / 2 - g["cons"]
+                    diffs.append(f'{_esc(g["y"])} {d:+.1f}pct')
+                    parts.append(f'<text x="{cx:.1f}" y="{H - B + 31}" text-anchor="middle" font-size="10" '
+                                 f'fill="{_C_STONE}">差 {d:+.1f}pct</text>')
             parts.append(f'<text x="{cx:.1f}" y="{H - B + 16}" text-anchor="middle" font-size="11" '
                          f'font-weight="600" fill="{_C_INK}">{_esc(g["y"])}</text>')
     parts.append(_svg_close())
@@ -112,7 +116,9 @@ def build_growth_plot(fill: dict) -> str:
     note = ('柱=历史增速（沙=收入、钢蓝=归母净利，取历史年报同比；扭亏等负基数年份只标文字），'
             '区间竖条=本文净利增速预测区间')
     if has_cons:
-        note += '，◆=卖方一致预期（券商研报汇总）；预期差（本文中枢−一致预期）：' + "；".join(diffs)
+        note += '，◆=卖方一致预期（券商研报汇总）'
+        if diffs:
+            note += '；预期差（本文中枢−一致预期）：' + "；".join(diffs)
     else:
         note += '；无当前卖方净利一致预期，不画共识点、不计算预期差'
     note += '；全图为中性色，红涨绿跌仅用于股价方向'
@@ -167,7 +173,8 @@ def build_timing_facts(fill: dict) -> str:
         if not item or item.get("value") is None:
             return ""
         if key == "profit_ratio":
-            return verdict(key, item["value"])
+            value = item["value"] * 100 if item.get("unit") == "比例" else item["value"]
+            return verdict(key, value)
         if key != "average_cost":
             return ""
         current, cost = finite(fill.get("price")), finite(item["value"])
@@ -195,7 +202,11 @@ def build_timing_facts(fill: dict) -> str:
     def record(label, item, verdict_text=""):
         if not item or item.get("value") is None:
             return ""
-        value = number(item.get("value"), item.get("unit", ""))
+        raw_value = item.get("value")
+        if label == "盈利比率" and item.get("unit") == "比例" and 0 <= finite(raw_value) <= 1:
+            value = number(raw_value * 100, "%")
+        else:
+            value = number(raw_value, item.get("unit", ""))
         meta = f"{item.get('date', '日期未注明')} · {item.get('source', '来源未注明')}"
         detail = f'<small>{_esc(verdict_text)}</small>' if verdict_text else ""
         note = f'<p>{_esc(item["note"])}</p>' if item.get("note") else ""

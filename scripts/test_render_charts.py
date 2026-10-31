@@ -1248,3 +1248,36 @@ def test_dupont_chain():
     assert build_dupont_html({"dupont": {"roe": 16.1}}) == "", "四因子缺一返空"
     only_cur = build_dupont_html({"dupont": {"roe": 16.1, "nm": 30.4, "turn": 0.313, "em": 1.70}})
     assert "dup-chain" in only_cur and "去年同期" not in only_cur
+
+
+def test_growth_plot_accepts_consensus_only_year():
+    fill = minimal_fill(growth_plot={
+        "hist": [{"y": "2023", "np": 10.0}, {"y": "2024", "np": 11.0},
+                 {"y": "2025", "np": 12.0}],
+        "fcst": [{"y": "2026E", "np_consensus": 20.0},
+                 {"y": "2027E", "np_lo": 12.0, "np_hi": 20.0}]})
+    html = build_growth_plot(fill)
+    assert "2026E" in html and "2027E" in html
+    assert "polygon" in html
+    assert "无当前卖方净利一致预期" not in html
+    assert "预期差（本文中枢−一致预期）" not in html
+
+
+def test_timing_profit_ratio_normalizes_fraction_and_verdict():
+    import charts_misc as charts
+
+    facts = {"technical": {}, "chips": {"profit_ratio": {
+        "value": 0.16, "unit": "比例", "date": "2026-10-30",
+        "source": "东方财富", "query": "盈利比率"}}}
+    html = charts.build_timing_facts(minimal_fill(timing_facts=facts))
+    assert ">16%<" in html and "0.16比例" not in html
+    facts["chips"]["profit_ratio"]["value"] = 1
+    html = charts.build_timing_facts(minimal_fill(timing_facts=facts))
+    assert ">100%<" in html and "获利盘较厚" in html
+
+
+def test_growth_plot_is_optional_when_latest_period_is_loss():
+    from validate_charts import _check_chart_fields
+
+    fill = minimal_fill(growth_plot=None, period_track={"np": -0.82})
+    _check_chart_fields(fill)

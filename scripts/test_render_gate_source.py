@@ -734,3 +734,18 @@ def test_scenario_key_case_insensitive_reconciliation():
         f2["quote"] = {"source_file": ref, "date": "2026-10-21"}
         out = validate_stderr(f2)
     assert "基础情景换算增速" in out, f"大写 Base key 不应对账静默: {out}"
+
+
+def test_preflight_rejects_handwritten_source_jargon_before_render():
+    import render_report as R
+
+    bad = minimal_fill(p0_html='<p>关键驱动分析。</p>'
+                               '<span class="source">数据来源：extract_review 输出</span>')
+    with tempfile.TemporaryDirectory() as d:
+        path = write_fill(bad, d)
+        try:
+            R._preflight(path)
+        except ValueError as exc:
+            assert "内部实现名" in str(exc) and "extract_review" in str(exc)
+        else:
+            raise AssertionError("预检通过后才在正式渲染拦截来源注，产生额外返工")

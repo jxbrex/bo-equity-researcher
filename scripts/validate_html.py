@@ -37,7 +37,7 @@ _DIM_BLOCK_RE = r'<div class="dim-block(?=[\s"])\s*[^>]*>'
 _DIM_HEADER_RE = re.compile(r'<div\b[^>]*class="[^"]*\bdim-header\b[^"]*"[^>]*>.*?</div>\s*', re.S)
 
 
-_SCORE_BEAT_RE = re.compile(r'<p\b[^>]*>\s*<strong\b[^>]*>\s*评分\s*[：:]\s*</strong>.*?</p>\s*', re.S)
+_SCORE_BEAT_RE = re.compile(r'<p\b[^>]*>\s*<strong\b[^>]*>\s*评分(?:依据)?\s*[：:]\s*</strong>.*?</p>\s*', re.S)
 
 
 def _split_dim_blocks(frag: str) -> list:
@@ -447,6 +447,29 @@ def _check_dim_blocks(fill: dict, warns: list, sc: dict = None) -> None:
     # v4.11.1（审核 D3）：维度识别废位置 zip——乱序块会被错配（极端分门槛被静默绕过）；
     # 改与 _check_governance_strip 同口径，从 dim-name 提取 `\d\.\d` 编号映射 DIMS；
     # 提取不到编号 → 按位置兜底并告警（写法漂移可见，不静默）
+    if _quality_version(fill) == 2:
+        missing_beats = []
+        for field in ("l1_html", "l3_html"):
+            for blk in _split_dim_blocks(fill.get(field) or ""):
+                name_match = re.search(r'dim-name[^>]*>\s*(\d\.\d[^<]*)', blk)
+                name = name_match.group(1).strip() if name_match else "未命名维度"
+                text = _dim_body_text(blk)
+                missing = []
+                if not re.search(r"判词\s*[：:]", text):
+                    missing.append("判词")
+                if not re.search(r"\d", text):
+                    missing.append("量化论据")
+                if not re.search(r"对比\s*[：:]", text):
+                    missing.append("对比")
+                if missing:
+                    missing_beats.append(f"{name} 缺 {'/'.join(missing)}")
+        if missing_beats:
+            message = ("九维正文三要素缺失：" + "；".join(missing_beats)
+                       + "——每块须有判词、量化论据和明确对比，评分依据详情不计入正文")
+            if str(fill.get("date") or "") >= "2026-10-31":
+                raise ValueError(message)
+            warns.append(message)
+
     thin_reject, thin_warn = [], []
     for field, layer in (("l1_html", "L1"), ("l3_html", "L3")):
         blocks = _split_dim_blocks(fill.get(field) or "")
@@ -517,14 +540,14 @@ def _check_internal_codes(fill: dict, warns: list) -> None:
 def _check_writing_discipline(fill: dict, warns: list) -> None:
     """v4.7.1 写作纪律告警（东方电气反馈）：四拍挤段 / 3 年趋势三年并排。
     （pe_history 无第 11 章承载告警已迁 _check_ch11_binding 表驱动，v5.8.2）"""
-    # 四拍各自成段（fill-schema dim-block 四拍结构）：判词/论据/对比/评分挤进同一个 <p> → 提示拆段
-    beats = ("判词：", "论据：", "对比：", "评分：")
+    # 三要素可并入既有段落；评分末拍仍须独立，避免手写评分与正文论证混成一段。
+    beats = ("判词：", "论据：", "对比：", "评分：", "评分依据：")
     for name in ("l1_html", "l3_html"):
         for pm in re.finditer(r"<p[^>]*>(.*?)</p>", fill.get(name) or "", flags=re.S):
             hits = sum(1 for b in beats if b in pm.group(1))
-            if hits >= 2:
+            if ("评分：" in pm.group(1) or "评分依据：" in pm.group(1)) and hits >= 2:
                 warns.append(f"{name} 存在四拍挤段（单段含 {hits} 个拍名）："
-                             f"判词/论据/对比/评分应各自成段（fill-schema dim-block 四拍结构）")
+                             f"评分末拍应独立成段；判词/论据/对比可并入既有段落")
                 break  # 每字段报一次即可
     # 3 年趋势表只写 起→终（方向词）：三年数字并排反而看不出趋势
     peers = fill.get("peers_html") or ""
@@ -671,8 +694,8 @@ def _check_peers_bestworst(fill: dict, warns: list) -> None:
     # 审计 P1-9：方向性无意义列（如市值）在 peers_meta 注明后抑制对应列告警
     #（fill-schema 承诺「注明即可」的实现侧——此前文档写了、实现没做，每份规范报告会稳定误报市值列）
     meta = _plain_text(fill.get("peers_meta") or "")
-    waivers = ("无方向", "不标方向", "不标最优", "不标最差", "不判断优劣", "不评优劣",
-               "事实列", "仅列示", "仅参考")
+    waivers = ("无方向", "不标方向", "不标最优", "不标最差", "不作最优", "不作最差",
+               "不判断优劣", "不评优劣", "事实列", "仅列示", "仅参考")
     sentences = re.split(r"[。；;]", meta)
 
     def waived(column):

@@ -179,7 +179,8 @@ def minimal_fill(**over):
 def _v2_dim(key, name):
     return (f'<div class="dim-block" data-dim="{key}"><div class="dim-header">'
             f'<span class="dim-name">{name}</span><!--SCORE_BADGE--></div>'
-            f'<p>{_LONG_TEXT} 反方证据：2026年行业价格波动幅度超过20%。</p><!--SCORE_DETAIL--></div>')
+            f'<p><strong>判词：</strong>{_LONG_TEXT} <strong>论据：</strong>2026年行业价格波动幅度超过20%。'
+            f'<strong>对比：</strong>公司波动高于同业 10% 的基准，反方证据仍需保留。</p><!--SCORE_DETAIL--></div>')
 
 
 def v2_fill(**over):

@@ -1178,3 +1178,127 @@ def test_risk_rule_id_requires_actual_negative_fact():
     fill["score_inputs"]["1D"]["f_items"]["profit_positive"] = False
     html = R.build_risk_register(fill)
     assert "盈利为负" in html
+
+
+def test_quality_inputs_normalized_roic_does_not_compare_latest_period_fields():
+    with tempfile.TemporaryDirectory() as d:
+        fill = v2_fill()
+        spec = fill["score_inputs"]["1F"]
+        spec.update(roic=0.07065, roic_basis="normalized",
+                    roic_normalized_components=[0.07065, 0.0821, 0.06869])
+        spec.pop("roic_period_months")
+        payload = _quality_payload(fill)
+        payload["1F"].update(roic=-0.022456, roic_basis="latest", roic_period_months=9)
+        fill = _prepare_quality_quote(fill, d, payload)
+        out = validate_stderr(fill)
+        assert "quality_inputs.1F.roic " not in out
+        assert "quality_inputs.1F.roic_basis" not in out
+        assert "quality_inputs.1F.roic_period_months" not in out
+
+
+def test_peers_waiver_accepts_existing_chinese_wording():
+    fill = minimal_fill(
+        peers_meta="市值列不作最优最差标注。",
+        peers_html=('<div class="table-scroll"><table><tr><th>公司</th><th>市值(亿)</th>'
+                    '<th>PE(TTM)</th></tr><tr><td>测试股份</td><td>100</td>'
+                    '<td class="cell-best">11</td></tr><tr><td>同业甲</td><td>48.4</td>'
+                    '<td class="cell-worst">25</td></tr></table></div>'
+                    '<span class="source">数据来源：公开行情</span>'))
+    assert "数值列缺最优/最差标注" not in validate_stderr(fill)
+
+
+def test_v2_dimension_requires_judgment_evidence_and_comparison():
+    fill = v2_fill(date="2026-10-31")
+    start = fill["l1_html"].index('<div class="dim-block" data-dim="1A">')
+    end = fill["l1_html"].index('<div class="dim-block" data-dim="1B">')
+    fill["l1_html"] = (fill["l1_html"][:start]
+                       + '<div class="dim-block" data-dim="1A"><div class="dim-header">'
+                         '<span class="dim-name">4.1 赛道与宏观</span><!--SCORE_BADGE--></div>'
+                         '<p>行业收入增长 20%，仅罗列行业叙事，没有判词与对比，但这段文字足够长以避免触发其他字数门禁。</p><!--SCORE_DETAIL--></div>'
+                       + fill["l1_html"][end:])
+    with tempfile.TemporaryDirectory() as d:
+        fill = prepare_v2_quote(fill, d)
+        expect_valueerror(fill, "九维正文三要素", kw="三要素")
+
+
+def test_growth_consensus_year_cannot_be_omitted_for_new_report():
+    fill = minimal_fill(
+        date="2026-10-31",
+        quote={"source_file": _period_ref_file("v0122_consensus_year", {"consensus_np": 120})},
+        growth_plot={"hist": [{"y": "2023", "np": 10.0}, {"y": "2024", "np": 11.0},
+                              {"y": "2025", "np": 12.0}],
+                     "fcst": [{"y": "2027E", "np_lo": 12, "np_hi": 20}]})
+    from validate_audit import _check_growth_consistency
+    try:
+        _check_growth_consistency(fill, [])
+    except ValueError as exc:
+        assert "一致预期" in str(exc) and "2026E" in str(exc)
+    else:
+        raise AssertionError("落盘有 2026 共识而预测图整年缺失，应拒渲染")
+
+
+def test_quality_inputs_normalized_roic_still_checks_matching_normalized_payload():
+    with tempfile.TemporaryDirectory() as d:
+        fill = v2_fill()
+        spec = fill["score_inputs"]["1F"]
+        spec.update(roic=0.07065, roic_basis="normalized",
+                    roic_normalized_components=[0.07065, 0.0821, 0.06869],
+                    roic_period_months=12)
+        payload = _quality_payload(fill)
+        payload["1F"].update(roic_basis="normalized", roic_latest=0.1,
+                             roic_normalized_components=[0.07065, 0.0821, 0.06869])
+        fill = _prepare_quality_quote(fill, d, payload)
+        assert "quality_inputs.1F.roic" not in validate_stderr(fill)
+        payload["1F"]["roic"] = 0.09
+        fill = _prepare_quality_quote(fill, d, payload)
+        assert "quality_inputs.1F.roic 与落盘不一致" in validate_stderr(fill)
+
+
+def test_growth_consensus_empty_row_does_not_satisfy_required_year():
+    fill = minimal_fill(
+        date="2026-10-31",
+        quote={"source_file": _period_ref_file("v0122_empty_consensus", {"consensus_np": 120})},
+        growth_plot={"hist": [{"y": "2023", "np": 10.0}, {"y": "2024", "np": 11.0},
+                              {"y": "2025", "np": 12.0}],
+                     "fcst": [{"y": "2026E"}, {"y": "2027E", "np_lo": 12, "np_hi": 20}]})
+    from validate_audit import _check_growth_consistency
+    try:
+        _check_growth_consistency(fill, [])
+    except ValueError as exc:
+        assert "一致预期" in str(exc) and "2026E" in str(exc)
+    else:
+        raise AssertionError("空壳 2026E 行不得绕过共识缺年门禁")
+
+
+def test_growth_base_scenario_is_checked_against_consensus_next_year():
+    fill = minimal_fill(
+        date="2026-10-31",
+        quote={"source_file": _period_ref_file("v0122_base_next_year", {"consensus_np": 120})},
+        growth_plot={"hist": [{"y": "2023", "np": 10.0}, {"y": "2024", "np": 11.0},
+                              {"y": "2025", "np": 12.0}],
+                     "fcst": [{"y": "2026E", "np_consensus": 20},
+                              {"y": "2027E", "np_lo": 5, "np_hi": 10}]})
+    fill["valuation"]["scenarios"][1]["profit"] = 200
+    from validate_audit import _check_growth_consistency
+    warns = []
+    _check_growth_consistency(fill, warns)
+    assert "基础情景换算增速" in "\n".join(warns)
+
+
+def test_segments_gross_profit_share_total_is_checked():
+    from validate_charts import _check_optional_charts
+    fill = minimal_fill(segments={"items": [
+        {"name": "A", "rev_pct": 50, "gross_profit": 60, "gp_pct": 60},
+        {"name": "B", "rev_pct": 50, "gross_profit": 40, "gp_pct": 50}]})
+    warns = []
+    _check_optional_charts(fill, warns)
+    assert "毛利占比合计" in "\n".join(warns)
+
+
+def test_v2_three_beats_is_warning_for_legacy_fill():
+    fill = v2_fill()
+    fill["l1_html"] = fill["l1_html"].replace("<strong>对比：</strong>", "<strong>历史：</strong>", 1)
+    with tempfile.TemporaryDirectory() as d:
+        fill = prepare_v2_quote(fill, d)
+        out = validate_stderr(fill)
+        assert "三要素" in out

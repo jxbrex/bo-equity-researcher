@@ -663,6 +663,17 @@ def _check_growth_consistency(fill: dict, warns: list) -> None:
         ours = _num(dim.get("ours"))
         if year and ours is not None:
             gap_ours[int(year.group(0))] = ours
+    forecast_years = {int(match.group(1)) for f in fcst
+                      if (match := re.fullmatch(r"(20\d{2})E", str(f.get("y") or "").strip()))
+                      and (_num(f.get("np_consensus")) is not None
+                           or (_num(f.get("np_lo")) is not None and _num(f.get("np_hi")) is not None
+                               and _num(f.get("np_hi")) >= _num(f.get("np_lo"))))}
+    if fcst and np_avg is not None and cnp_yr and int(cnp_yr) not in forecast_years:
+        msg = (f"growth_plot 缺落盘一致预期年份 {int(cnp_yr)}E：有本文预测区间时，"
+               "该年须以 np_consensus 单独列示，不得跳年后误称无卖方覆盖")
+        if str(fill.get("date") or "") >= "2026-10-31":
+            raise ValueError(msg)
+        warns.append(msg)
     for f in fcst:
         y_text = str(f.get("y") or "").strip()
         single = re.fullmatch(r"(20\d{2})E", y_text)
@@ -693,6 +704,13 @@ def _check_growth_consistency(fill: dict, warns: list) -> None:
         elif single:
             year = int(single.group(1))
             lo, hi = _num(f.get("np_lo")), _num(f.get("np_hi"))
+            if (year == last_year + 2 and year - 1 not in gap_ours
+                    and cnp_yr and int(cnp_yr) == last_year + 1 and np_avg and base_profit
+                    and lo is not None and hi is not None):
+                g_base = (base_profit / np_avg - 1) * 100
+                if not (lo - 2 <= g_base <= hi + 2):
+                    warns.append(f"valuation 基础情景换算增速（{g_base:.1f}%）越出 growth_plot 本文区间 "
+                                 f"[{lo:g}, {hi:g}]（容差 ±2pct）：5 章图与 7 章情景应口径一致")
             if (year in gap_ours and year - 1 in gap_ours and gap_ours[year - 1] > 0
                     and lo is not None and hi is not None):
                 g_path = (gap_ours[year] / gap_ours[year - 1] - 1) * 100
@@ -1003,8 +1021,15 @@ def _check_quality_inputs(fill: dict, warns: list) -> None:
         elif fill_value is not None and fill_value != ref_value:
             warns.append(f"quality_inputs.{path} 与落盘不一致：fill={fill_value!r} vs 落盘={ref_value!r}")
 
+    normalized_roic = (score_inputs.get("1F") or {}).get("roic_basis") == "normalized"
+    ref_normalized = (package.get("1F") or {}).get("roic_basis") == "normalized"
     for dim, keys in fields.items():
+        if normalized_roic and ref_normalized and dim == "1F":
+            keys += ("roic_normalized_components",)
         for key in keys:
+            if normalized_roic and not ref_normalized and dim == "1F" \
+                    and key in ("roic", "roic_basis", "roic_period_months"):
+                continue
             fv = (score_inputs.get(dim) or {}).get(key)
             rv = (package.get(dim) or {}).get(key)
             if isinstance(fv, dict) or isinstance(rv, dict):

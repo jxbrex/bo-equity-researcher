@@ -1045,3 +1045,10 @@ def test_reader_explanation_avoids_branch_misstatements(key, spec, context, expe
     assert expected in combined
     if forbidden:
         assert forbidden not in combined
+
+
+def test_growth_hi_accepts_numeric_zero():
+    result = qr.evaluate_dimension(
+        "3A", {"growth_lo": -5, "growth_hi": 0, "driver_status": "未验证"}, CTX)
+    assert result["status"] == "ok"
+    assert result["final"] is not None

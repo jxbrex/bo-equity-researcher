@@ -10,6 +10,7 @@ driver_cards/sensitivity 量纲与覆盖、槽位宽度、4.3 阈值承载、第
 契约：raise = 硬拒渲染；warns.append = 软告警。
 """
 import re
+from html import unescape
 from scoring import (
     _num,
     _plain_text,
@@ -20,7 +21,7 @@ from charts_base import (
     _gap_dim_ok,
     _YOY_TEXT,
     parse_stage_period)
-from charts_cycle import _pe_band_ok
+from charts_cycle import _pe_band_ok, _price_history_points
 from validate_common import (
     _HTML_FIELDS,
     _quote_ref,
@@ -192,8 +193,8 @@ def _prev_chart_facts(fill: dict) -> dict:
     """本版图字段事实（v5.5.1 F3 结构对照右侧，判定与渲染同源）：
     gap_plot=有效维度（_gap_dim_ok，取前 6）≥2 才落图；fin_trend_panels=有效面板数
     （bars/lines 名非空且 values 与 years 等长全数字，同 build_fin_trend）；growth_fcst_years=
-    有效预测年数（同 build_growth_plot）；pe_history=可生成性（v5.5.1 P1-1：调
-    charts_cycle._pe_band_ok 单源，键不齐/域非法即不落图——此前只看字段非空，缺键减配漏检）。"""
+    有效预测年数（同 build_growth_plot）；pe_history/price_history=可生成性（分别调
+    charts_cycle._pe_band_ok/_price_history_points，键不齐、域非法或有效月线 <12 点即不落图）。"""
     gp = fill.get("gap_plot") or {}
     gap_dims = [d for d in (gp.get("dims") or []) if _gap_dim_ok(d)][:6]
     ft = fill.get("fin_trend") or {}
@@ -211,7 +212,8 @@ def _prev_chart_facts(fill: dict) -> dict:
                  and _num(f.get("np_lo")) is not None and _num(f.get("np_hi")) is not None
                  and _num(f.get("np_hi")) >= _num(f.get("np_lo")))
     return {"gap_plot": len(gap_dims) >= 2, "fin_trend_panels": panels,
-            "growth_fcst_years": fcst_n, "pe_history": _pe_band_ok(fill)}
+            "growth_fcst_years": fcst_n, "pe_history": _pe_band_ok(fill),
+            "price_history": len(_price_history_points(fill)) >= 12}
 
 
 def _review_chart_note(fill, aliases):
@@ -235,10 +237,7 @@ def _cycle_anchor_fallback_documented(fill):
 
 
 def _check_prev_charts(fill: dict, warns: list) -> None:
-    """v5.5.1 F3 复盘模式「旧有新无」结构对照（软告警，升拒登记 handoff）：prev.charts 照抄
-    上版 fill 的图字段事实，本版逐项对照——上版有而本版不生成/变少即告警，减配要求写进
-    review_html。小米 01810 2026-10-07 实证：gap_plot 消失、fin_trend 少 panel、
-    growth_plot.fcst 少年份、pe_history 消失全程零告警，只能靠肉眼发现。"""
+    """复盘模式「旧有新无」结构对照：合理缺席须在同一句写明图名与原因，否则告警。"""
     pv = fill.get("prev")
     if not isinstance(pv, dict):
         return
@@ -246,8 +245,8 @@ def _check_prev_charts(fill: dict, warns: list) -> None:
     if not isinstance(pc, dict):
         warns.append("prev.charts 未填：复盘模式须照抄上版 fill 的图字段事实"
                      '（{"gap_plot": true, "fin_trend_panels": 4, "growth_fcst_years": 2, '
-                     '"pe_history": true}），否则本版相对上版的图形减配（gap_plot 消失 / '
-                     "fin_trend 少 panel / growth_plot.fcst 少年份 / pe_history 消失）无人对照"
+                     '"pe_history": true, "price_history": true}），否则本版相对上版的图形减配'
+                     "（gap_plot / fin_trend / growth_plot.fcst / pe_history / price_history）无人对照"
                      "——请回填上版事实后重渲（fill-schema「prev」节）")
         return
     now = _prev_chart_facts(fill)
@@ -265,12 +264,34 @@ def _check_prev_charts(fill: dict, warns: list) -> None:
             and not _review_chart_note(fill, ("利润增长图",))):
         warns.append(f"复盘减配：上版 growth_plot.fcst 预测年 {was_f:g} 个而本版 "
                      f"{now['growth_fcst_years']} 个{why}（第 5.1 章利润增长图缩短）")
-    std, tier, _legacy = _resolve_type_tier(fill)
-    pe_forbidden = (std == "成长型" and tier == "high") or std == "未盈利/管线"
-    if (pc.get("pe_history") and not now["pe_history"] and not pe_forbidden
-            and not _review_chart_note(fill, ("PE 历史带", "PE历史带"))):
+    if (pc.get("pe_history") and not now["pe_history"]
+            and not _review_chart_note(fill, ("PE 历史带", "PE历史带", "PE(TTM) 历史带", "PE(TTM)历史带"))):
         warns.append(f"复盘减配：上版 pe_history（第 11 章 PE 历史带图）已生成而本版不生成"
                      f"（字段缺失或 hist_lo/hist_hi/pe_ttm/pe_band 键不齐）{why}")
+    price_aliases = ("股价季K", "股价/PE", "股价与PE", "股价与 PE", "price_history")
+    if (pc.get("price_history") and not now["price_history"]
+            and not _review_chart_note(fill, price_aliases)):
+        warns.append(f"复盘减配：上版 price_history（第 11 章股价季K/PE 历史图）已生成而本版不生成"
+                     f"（字段缺失或有效月线不足 12 点）{why}")
+
+
+def _two_sided_trigger_verdict(target):
+    text = unescape(str(target or ""))
+    parts = re.split(r"[｜|]", text, maxsplit=1)
+    if len(parts) != 2 or "实际" not in parts[1]:
+        return None
+    comparisons = re.findall(r"([≥≤<>])\s*(\d+(?:\.\d+)?)", parts[0])
+    upper = [float(v) for op, v in comparisons if op in ("≥", ">")]
+    lower = [float(v) for op, v in comparisons if op in ("≤", "<")]
+    if not upper or not lower:
+        return None
+    actual_text = parts[1].split("实际", 1)[1]
+    values = [float(v) for v in re.findall(r"\d+(?:\.\d+)?", actual_text)]
+    if len(values) != 2:
+        return False
+    hit = any(any(v >= threshold for threshold in upper)
+              or any(v <= threshold for threshold in lower) for v in values)
+    return "hit" if hit else "pending"
 
 
 def _check_optional_charts(fill: dict, warns: list) -> None:
@@ -318,10 +339,10 @@ def _check_optional_charts(fill: dict, warns: list) -> None:
         std_ph, tier_ph, _leg_ph = _resolve_type_tier(fill)
         if (std_ph == "成长型" and tier_ph == "high") or std_ph == "未盈利/管线":
             shows = f"{std_ph}·高速层" if std_ph == "成长型" else std_ph
-            warns.append(f"pe_history 已填但本分型（{shows}）禁填：历史区间锚不住合理带"
+            warns.append(f"pe_history 已填但本分型（{shows}）禁填：全历史极值/分位带不作合理带"
                          "（fill-schema 填写条件：周期股/成长型·中速层/成熟·停滞/稳定价值/困境反转"
                          "按数据可得性填；成长型·高速层/未盈利·管线禁填——第 11 章时段表仍可写，"
-                         "但本字段删除，估值带改用远期 PE 折现或 rNPV/P/S）")
+                         "可比历史时段仍可辅助校准，但不得用全历史分位替代可比性论证）")
     holders = fill.get("holders") or []
     # v5.1.2：有效点口径与渲染同源——渲染先滤 num 可解析且带日期的行（charts_misc）
     h_valid = [p for p in holders if isinstance(p, dict) and _num(p.get("num")) is not None
@@ -349,15 +370,23 @@ def _check_optional_charts(fill: dict, warns: list) -> None:
             warns.append(f"triggers 含非法 status（{len(bad)} 条）：只接受 hit/miss/pending，非法值按 pending 渲染")
         if len(trg) > 8:
             warns.append(f"triggers 共 {len(trg)} 条 > 8：状态条宜 3-6 条，过多稀释跟踪焦点")
-        # v5.1.2：hit/miss 行 target「阈值｜实际值」核对（状态语义色正确性不再全靠自觉）
+        # hit/miss/pending 行 target「阈值｜实际值」与双向阈值状态核对
         for t in trg:
             if not isinstance(t, dict):
                 continue
             st_ = str(t.get("status") or "pending").strip().lower()
+            tgt = unescape(str(t.get("target") or ""))
+            cond = str(t.get("cond") or "")[:8]
+            two_sided = _two_sided_trigger_verdict(tgt)
+            if two_sided is False:
+                continue
+            if two_sided is not None:
+                if st_ != two_sided:
+                    warns.append(f"triggers[{cond}] status={st_} 与双向阈值 target「{tgt}」矛盾："
+                                 f"任一实际值触及上下限应为 hit，全部未触及应为 pending")
+                continue
             if st_ not in ("hit", "miss"):
                 continue
-            tgt = str(t.get("target") or "")
-            cond = str(t.get("cond") or "")[:8]
             if "实际" not in tgt:
                 warns.append(f"triggers[{cond}] status={st_} 但 target 未写实际值"
                              "（回测核对行格式「阈值｜实际值」，v5.1.2）")

@@ -725,13 +725,30 @@ def _check_growth_consistency(fill: dict, warns: list) -> None:
     _base_sc = _scenario_by_key((fill.get("valuation") or {}).get("scenarios"), "base")
     base_profit = _num(_base_sc.get("profit")) if _base_sc else None
     gap_ours = {}
+    conflicted_years = set()
     for dim in (fill.get("gap_plot") or {}).get("dims") or []:
-        if not isinstance(dim, dict) or not _gap_dim_ok(dim) or "净利" not in str(dim.get("name") or ""):
+        name = str((dim or {}).get("name") or "")
+        if (not isinstance(dim, dict) or not _gap_dim_ok(dim) or "净利" not in name
+                or "扣非" in name or "净利率" in name):
             continue
-        year = re.search(r"20\d{2}", str(dim.get("name") or ""))
+        year = re.search(r"20\d{2}", name)
         ours = _num(dim.get("ours"))
-        if year and ours is not None:
-            gap_ours[int(year.group(0))] = ours
+        if not year or ours is None:
+            continue
+        y = int(year.group(0))
+        if y in conflicted_years:
+            continue
+        if y in gap_ours and gap_ours[y] != ours:
+            del gap_ours[y]
+            conflicted_years.add(y)
+        else:
+            gap_ours[y] = ours
+    base_years = []
+    if base_profit is not None:
+        for year, ours in gap_ours.items():
+            if abs(ours - base_profit) <= max(0.1, abs(base_profit) * 0.02):
+                base_years.append(year)
+    base_year = base_years[0] if len(base_years) == 1 else None
     forecast_years = {int(match.group(1)) for f in fcst
                       if (match := re.fullmatch(r"(20\d{2})E", str(f.get("y") or "").strip()))
                       and (_num(f.get("np_consensus")) is not None
@@ -763,28 +780,43 @@ def _check_growth_consistency(fill: dict, warns: list) -> None:
         elif single and np_avg is not None and cnp_yr and int(cnp_yr) == int(single.group(1)):
             warns.append(f"落盘有一致预期但 growth_plot 漏填：{y_text} np_consensus；"
                          "不得将该年误标为无卖方覆盖")
-        if single and int(single.group(1)) == last_year + 1 and base_profit:
-            g_base = (base_profit / base_np - 1) * 100
-            lo, hi = _num(f.get("np_lo")), _num(f.get("np_hi"))
-            if lo is not None and hi is not None and not (lo - 2 <= g_base <= hi + 2):
-                warns.append(f"valuation 基础情景换算增速（{g_base:.1f}%）越出 growth_plot 本文区间 "
-                             f"[{lo:g}, {hi:g}]（容差 ±2pct）：5 章图与 7 章情景应口径一致")
-        elif single:
-            year = int(single.group(1))
-            lo, hi = _num(f.get("np_lo")), _num(f.get("np_hi"))
-            if (year == last_year + 2 and year - 1 not in gap_ours
-                    and cnp_yr and int(cnp_yr) == last_year + 1 and np_avg and base_profit
-                    and lo is not None and hi is not None):
-                g_base = (base_profit / np_avg - 1) * 100
+        if not single:
+            continue
+        year = int(single.group(1))
+        lo, hi = _num(f.get("np_lo")), _num(f.get("np_hi"))
+        if lo is None or hi is None:
+            continue
+        if year in gap_ours and year - 1 in gap_ours and gap_ours[year - 1] > 0:
+            g_path = (gap_ours[year] / gap_ours[year - 1] - 1) * 100
+            if not (lo - 2 <= g_path <= hi + 2):
+                warns.append(f"growth_plot {y_text} 本文增速区间 [{lo:g}, {hi:g}] 未覆盖 "
+                             f"gap_plot 本文利润路径换算增速（{g_path:.1f}%）（容差 ±2pct）")
+        elif base_year == year and base_profit is not None:
+            prev_np = base_np if year == last_year + 1 else gap_ours.get(year - 1)
+            if prev_np is not None and prev_np > 0:
+                g_base = (base_profit / prev_np - 1) * 100
                 if not (lo - 2 <= g_base <= hi + 2):
                     warns.append(f"valuation 基础情景换算增速（{g_base:.1f}%）越出 growth_plot 本文区间 "
                                  f"[{lo:g}, {hi:g}]（容差 ±2pct）：5 章图与 7 章情景应口径一致")
-            if (year in gap_ours and year - 1 in gap_ours and gap_ours[year - 1] > 0
-                    and lo is not None and hi is not None):
-                g_path = (gap_ours[year] / gap_ours[year - 1] - 1) * 100
-                if not (lo - 2 <= g_path <= hi + 2):
-                    warns.append(f"growth_plot {y_text} 本文增速区间 [{lo:g}, {hi:g}] 未覆盖 "
-                                 f"gap_plot 本文利润路径换算增速（{g_path:.1f}%）（容差 ±2pct）")
+    score_inputs = fill.get("score_inputs") or {}
+    growth_inputs = score_inputs.get("3A") or {}
+    score_lo, score_hi = _num(growth_inputs.get("growth_lo")), _num(growth_inputs.get("growth_hi"))
+    if (fill.get("quality_version") is not None and _quality_version(fill) == 2
+            and base_year is not None and score_lo is not None and score_hi is not None):
+        base_rows = []
+        for f in fcst:
+            if str(f.get("y") or "").strip() != f"{base_year}E":
+                continue
+            lo, hi = _num(f.get("np_lo")), _num(f.get("np_hi"))
+            if lo is not None and hi is not None and hi >= lo:
+                base_rows.append((lo, hi))
+        if not base_rows:
+            warns.append(f"3A 增速区间 [{score_lo:g}, {score_hi:g}] 缺 growth_plot {base_year}E "
+                         "单年本文预测行：合并行不得替代估值基础年份的单年口径")
+        elif not any(abs(score_lo - lo) <= 2 and abs(score_hi - hi) <= 2 for lo, hi in base_rows):
+            ranges = "、".join(f"[{lo:g}, {hi:g}]" for lo, hi in base_rows)
+            warns.append(f"3A 增速区间 [{score_lo:g}, {score_hi:g}] 与 growth_plot {base_year}E "
+                         f"本文区间 {ranges} 不一致（容差 ±2pct）")
 
 
 def _check_quote_present(fill: dict, warns: list) -> None:

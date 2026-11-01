@@ -372,27 +372,28 @@ def _check_hero_cross(fill: dict, warns: list) -> None:
 
 
 def _check_hero_band_claims(fill: dict, warns: list) -> None:
-    """Hero 文案引用「分位/历史带」概念时的数据支撑核对（v4.9）：
-    概念必须在 pe_history（第 11 章同源数据，与 E1 落盘 pe_p25/pe_p75、历史带同口径）有对应字段
-    可佐证——「分位」→ p25/p75，「历史带/历史区间」→ hist_lo/hist_hi；有分位字段时再做
-    现价 PE 相对位置的极性核对（称「低分位」而现价高于 P75、称「高分位」而现价低于 P25 即矛盾）。
-    缺支撑字段 → 告警提示补数据或改文案（数据侧不存在该口径即不可信）。"""
+    """Hero 的全历史分位/极值表述须有同源数据；禁填分型不得再被指示补 pe_history。"""
     ph = fill.get("pe_history") or {}
     p25, p75 = _num(ph.get("p25")), _num(ph.get("p75"))
     has_iq = p25 is not None and p75 is not None
     has_extreme = _num(ph.get("hist_lo")) is not None and _num(ph.get("hist_hi")) is not None
     pe_ttm = _num((fill.get("valuation_inputs") or {}).get("pe_ttm"))
+    std, tier, _legacy = _resolve_type_tier(fill)
+    pe_forbidden = (std == "成长型" and tier == "high") or std == "未盈利/管线"
     for name in ("pe_sub", "price_sub_html", "target_sub_html"):
         txt = _plain_text(fill.get(name) or "")
         if not txt:
             continue
-        # 只盯明确引用概念的字样；无概念字面的 sub（「PE」「现价」）不打扰
         if "分位" not in txt and not re.search(r"历史带|历史区间", txt):
             continue
         if "分位" in txt:
             if not has_iq:
-                warns.append(f"{name} 引用「分位」但 pe_history 未填 p25/p75（E1 落盘 pe_p25/pe_p75 "
-                             f"回填该字段）：Hero 分位说法在报告内无数据佐证，请补数据或改文案")
+                if pe_forbidden:
+                    warns.append(f"{name} 引用全历史「分位」但本分型禁填 pe_history："
+                                 "不得补该字段；请删除全历史分位表述，或改用可比历史时段/其他可核验证据")
+                else:
+                    warns.append(f"{name} 引用「分位」但 pe_history 未填 p25/p75（E1 落盘 pe_p25/pe_p75 "
+                                 f"回填该字段）：Hero 分位说法在报告内无数据佐证，请补数据或改文案")
             elif pe_ttm is not None and (("低分位" in txt or "低位" in txt) and pe_ttm > p75):
                 warns.append(f"{name} 称「低分位/低位」但现价 PE(TTM) {pe_ttm:g}x > P75 {p75:g}x——"
                              f"分位说法与 pe_history 数据矛盾，请核对口径")
@@ -400,8 +401,12 @@ def _check_hero_band_claims(fill: dict, warns: list) -> None:
                 warns.append(f"{name} 称「高分位/高位」但现价 PE(TTM) {pe_ttm:g}x < P25 {p25:g}x——"
                              f"分位说法与 pe_history 数据矛盾，请核对口径")
         if re.search(r"历史带|历史区间", txt) and not has_extreme:
-            warns.append(f"{name} 引用「历史带/历史区间」但 pe_history 未填 hist_lo/hist_hi"
-                         f"（E1 落盘历史带回填该字段）：该说法在报告内无数据佐证，请补数据或改文案")
+            if pe_forbidden:
+                warns.append(f"{name} 引用全「历史带/历史区间」但本分型禁填 pe_history："
+                             "不得补该字段；请删除全历史带表述，或改用可比历史时段/其他可核验证据")
+            else:
+                warns.append(f"{name} 引用「历史带/历史区间」但 pe_history 未填 hist_lo/hist_hi"
+                             f"（E1 落盘历史带回填该字段）：该说法在报告内无数据佐证，请补数据或改文案")
 
 
 def _fin_subclass(st: str) -> str:

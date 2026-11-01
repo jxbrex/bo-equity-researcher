@@ -149,6 +149,9 @@ def test_gap_growth_consensus_validate():
     # base.profit=100 → 换算 0% 越出本文区间 [5,10]（容差 ±2pct）→ 告警
     warns = validate_stderr(minimal_fill(
         quote={"source_file": _period_ref_file("v512_g", {"consensus_np": 120})},
+        gap_plot={"dims": [
+            {"name": "2026E 归母净利（亿元）", "ours": 100, "consensus": 120},
+            {"name": "2026E 目标价（元）", "ours": 11, "consensus": 10}]},
         fin_trend={"years": ["2023", "2024", "2025"], "panels": [
             {"title": "盈利", "bars": [{"name": "归母净利", "unit": "亿", "values": [80.0, 90.0, 100.0]}]},
             {"title": "营收", "bars": [{"name": "营收", "unit": "亿", "values": [800.0, 900.0, 1000.0]}]},
@@ -1333,7 +1336,7 @@ def test_growth_consensus_empty_row_does_not_satisfy_required_year():
         raise AssertionError("空壳 2026E 行不得绕过共识缺年门禁")
 
 
-def test_growth_base_scenario_is_checked_against_consensus_next_year():
+def test_growth_base_scenario_uses_only_own_profit_path():
     fill = minimal_fill(
         date="2026-10-31",
         quote={"source_file": _period_ref_file("v0122_base_next_year", {"consensus_np": 120})},
@@ -1345,7 +1348,131 @@ def test_growth_base_scenario_is_checked_against_consensus_next_year():
     from validate_audit import _check_growth_consistency
     warns = []
     _check_growth_consistency(fill, warns)
-    assert "基础情景换算增速" in "\n".join(warns)
+    out = "\n".join(warns)
+    assert "基础情景换算增速" not in out and "本文利润路径" not in out, \
+        "缺本文利润年份证据时不得拿卖方一致预期作分母"
+
+    fill["gap_plot"] = {"dims": [
+        {"name": "2026E归母净利（亿元）", "ours": 120, "consensus": 120},
+        {"name": "2027E归母净利（亿元）", "ours": 200, "consensus": 240}]}
+    warns = []
+    _check_growth_consistency(fill, warns)
+    out = "\n".join(warns)
+    assert "本文利润路径" in out and "66.7" in out, \
+        "相邻本文利润齐全时才应按200/120−1校验2027区间"
+
+
+def _byd_growth_fill():
+    fill = minimal_fill(
+        quote={"source_file": _period_ref_file("byd_growth_year", {"consensus_np": 407.6})},
+        fin_trend={"years": ["2023", "2024", "2025"], "panels": [
+            {"title": "盈利", "bars": [{"name": "归母净利", "unit": "亿",
+                                      "values": [300.4, 402.5, 326.2]}]}]},
+        growth_plot={"hist": [{"y": "2023", "np": 80.7}, {"y": "2024", "np": 34.0},
+                              {"y": "2025", "np": -19.0}],
+                     "fcst": [{"y": "2026E", "np_lo": -10, "np_hi": 5, "np_consensus": 24.95},
+                              {"y": "2027E", "np_lo": 10, "np_hi": 35}]},
+        gap_plot={"dims": [
+            {"name": "2026E归母净利（亿元）", "ours": 330, "consensus": 407.6},
+            {"name": "2027E归母净利（亿元）", "ours": 400, "consensus": 528.36}]})
+    fill["valuation"]["scenarios"][1]["profit"] = 400
+    return fill
+
+
+def test_growth_consistency_uses_base_profit_year():
+    from validate_audit import _check_growth_consistency
+    fill = _byd_growth_fill()
+    warns = []
+    _check_growth_consistency(fill, warns)
+    out = "\n".join(warns)
+    assert "基础情景换算增速" not in out and "本文利润路径" not in out, \
+        "2027基础利润不得错配到2026，也不得使用卖方407.6作分母"
+
+    fill["growth_plot"]["fcst"][1]["np_lo"] = 0
+    fill["growth_plot"]["fcst"][1]["np_hi"] = 10
+    warns = []
+    _check_growth_consistency(fill, warns)
+    out = "\n".join(warns)
+    assert "本文利润路径" in out and "21.2" in out
+
+
+def test_growth_score_3a_matches_only_base_year_single_row():
+    from validate_audit import _check_growth_consistency
+    fill = _byd_growth_fill()
+    fill["quality_version"] = 2
+    fill["score_inputs"] = {"3A": {"growth_lo": 10, "growth_hi": 30}}
+    warns = []
+    _check_growth_consistency(fill, warns)
+    assert "3A 增速区间" in "\n".join(warns), "2027[10,35]与3A[10,30]应提示不一致"
+
+    fill["growth_plot"]["fcst"][1]["np_hi"] = 30
+    warns = []
+    _check_growth_consistency(fill, warns)
+    assert "3A 增速区间" not in "\n".join(warns), "2026区间不参与2027的3A对照"
+
+    fill["growth_plot"]["fcst"] = [
+        {"y": "2026E", "np_consensus": 24.95},
+        {"y": "2026-27E", "np_lo": 10, "np_hi": 30}]
+    warns = []
+    _check_growth_consistency(fill, warns)
+    assert "3A 增速区间" in "\n".join(warns), "合并行不得冒充基础年份的单年区间"
+
+
+def test_growth_score_3a_skips_when_base_year_unknown():
+    from validate_audit import _check_growth_consistency
+    warns = []
+    _check_growth_consistency(v2_fill(), warns)
+    assert "3A 增速区间" not in "\n".join(warns), "缺利润年份证据不得扩大既有v2告警面"
+
+
+def test_growth_score_3a_accepts_string_quality_version():
+    from validate_audit import _check_growth_consistency
+    fill = _byd_growth_fill()
+    fill["quality_version"] = "2"
+    fill["score_inputs"] = {"3A": {"growth_lo": 10, "growth_hi": 30}}
+    warns = []
+    _check_growth_consistency(fill, warns)
+    assert "3A 增速区间" in "\n".join(warns)
+
+
+def _growth_profit_fill(profit):
+    fill = minimal_fill(
+        fin_trend={"years": ["2023", "2024", "2025"], "panels": [
+            {"title": "盈利", "bars": [{"name": "归母净利", "unit": "亿",
+                                      "values": [80.0, 90.0, 100.0]}]}]},
+        growth_plot={"hist": [{"y": "2023", "np": 10.0}, {"y": "2024", "np": 11.0},
+                              {"y": "2025", "np": 12.0}],
+                     "fcst": [{"y": "2026E", "np_lo": 5, "np_hi": 10}]})
+    fill["valuation"]["scenarios"][1]["profit"] = profit
+    return fill
+
+
+def test_growth_base_year_allows_zero_and_negative_profit():
+    from validate_audit import _check_growth_consistency
+    for profit in (0, -50):
+        fill = _growth_profit_fill(profit)
+        fill["gap_plot"] = {"dims": [{"name": "2026E归母净利（亿元）", "ours": profit, "consensus": 100}]}
+        warns = []
+        _check_growth_consistency(fill, warns)
+        assert "基础情景换算增速" in "\n".join(warns), f"基础利润{profit}不得静默跳过校验"
+
+
+def test_growth_gap_dims_filter_and_order_invariance():
+    from validate_audit import _check_growth_consistency
+    dims = [
+        {"name": "2026E归母净利（亿元）", "ours": 100, "consensus": 110},
+        {"name": "2026E扣非净利（亿元）", "ours": 90, "consensus": 95},
+        {"name": "2026E净利率（%）", "ours": 8, "consensus": 9}]
+    outputs = []
+    for ordered in (dims, list(reversed(dims))):
+        fill = _growth_profit_fill(100)
+        fill["gap_plot"] = {"dims": ordered}
+        warns = []
+        _check_growth_consistency(fill, warns)
+        outputs.append("\n".join(warns))
+    assert all("基础情景换算增速" in out for out in outputs), \
+        "扣非/净利率不得污染归母路径或让告警随顺序消失"
+    assert outputs[0] == outputs[1]
 
 
 def test_segments_gross_profit_share_total_is_checked():

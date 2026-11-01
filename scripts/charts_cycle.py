@@ -208,6 +208,20 @@ def _cycle_verdict(slots: list, pe_line: list, has_ohlc: bool) -> str:
     return verdict
 
 
+def _price_history_points(fill: dict) -> list[dict]:
+    ph = fill.get("price_history") or {}
+    pts = []
+    for p in ph.get("series") or []:
+        m = str(p.get("m") or "").strip()
+        c = _num(p.get("close"))
+        if not m or c is None:
+            continue
+        pts.append({"m": m, "close": c, "pe": _num(p.get("pe")),
+                    "o": _num(p.get("open")), "h": _num(p.get("high")), "l": _num(p.get("low"))})
+    pts.sort(key=lambda p: p["m"])
+    return pts
+
+
 def build_price_history(fill: dict) -> str:
     """11 周期规律·股价/PE 历史图（fill["price_history"] 可选字段，与 PE 历史带同源 E2 月线）：
     v4.11.0 起主形态=季K蜡烛（series 带 open/high/low/close 时——照抄 E2「全序列」行；按日历季度聚合：
@@ -228,17 +242,9 @@ def build_price_history(fill: dict) -> str:
     price_history: {"label":"近5年", "series":[{"m":"2021-09","open":..,"high":..,"low":..,"close":12.3,"pe":15.2}, ...]}
     （旧→新，月频；open/high/low 可省（回退发丝线）；有效点 <12 → 返回空串，静默跳过）"""
     ph = fill.get("price_history") or {}
-    pts = []
-    for p in ph.get("series") or []:
-        m = str(p.get("m") or "").strip()
-        c = _num(p.get("close"))
-        if not m or c is None:
-            continue
-        pts.append({"m": m, "close": c, "pe": _num(p.get("pe")),
-                    "o": _num(p.get("open")), "h": _num(p.get("high")), "l": _num(p.get("low"))})
+    pts = _price_history_points(fill)
     if len(pts) < 12:
         return ""
-    pts.sort(key=lambda p: p["m"])   # v4.11.0 审计：逆序 fill 会画成时间轴镜像（m=YYYY-MM 可字典序排）
     n = len(pts)
     # v4.11.0：门槛自「过半」放宽为 ≥12 点——亏损期 PE(TTM) 无定义天然缺值，分段断线
     # 才是诚实形态（天齐实证：照抄全序列后 29/68 点有效，过半规则会误杀 2022-2024 段）

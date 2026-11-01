@@ -368,6 +368,34 @@ def test_prev_charts_pe_history_keys():
     assert "复盘减配" not in validate_stderr(f2), "五键齐备应静默"
 
 
+def test_prev_charts_price_history_reduction_warns_and_accepts_reason():
+    f = full_fill()
+    f["prev"]["charts"] = {"price_history": True}
+    del f["price_history"]
+    out = validate_stderr(f)
+    assert "复盘减配" in out and "price_history" in out, "股价季K旧有本无应提示"
+
+    f["review_html"] += "<p>股价季K与PE历史图本版按高速层规则不再绘制（全历史带锚不住合理带）。</p>"
+    assert "复盘减配" not in validate_stderr(f), "同句写明图名与禁填原因后应静默"
+
+    f2 = full_fill()
+    f2["prev"]["charts"] = {"price_history": True}
+    assert "复盘减配" not in validate_stderr(f2), "有效月线不少于12点不应误报"
+    f2["price_history"]["series"] = f2["price_history"]["series"][:11]
+    out = validate_stderr(f2)
+    assert "复盘减配" in out and "price_history" in out, "有效月线不足12点等同未生成"
+
+
+def test_prev_charts_pe_history_high_growth_still_requires_reason():
+    f = full_fill(stock_type="成长型", growth_tier="high")
+    f["prev"]["charts"] = {"pe_history": True}
+    del f["pe_history"]
+    out = validate_stderr(f)
+    assert "复盘减配" in out and "pe_history" in out, "禁填分型也须说明旧图为何消失"
+    f["review_html"] += "<p>PE(TTM) 历史带图本版按高速层规则不再绘制（全历史带锚不住合理带）。</p>"
+    assert "复盘减配" not in validate_stderr(f), "合理禁填并写明原因后应静默"
+
+
 def test_prev_fields_warns():
     """#11: prev 锚点缺项（quality/valuation/timing/target_range）+ review_html 无
     关键假设变更表 → 告警到 stderr。"""
@@ -822,6 +850,9 @@ def test_scenario_key_case_insensitive_reconciliation():
         {"y": "2024", "rev": 4.2, "np": 5.0},
         {"y": "2025", "rev": 4.0, "np": 4.8}],
         "fcst": [{"y": "2026E", "np_lo": 5, "np_hi": 10, "np_consensus": 20}]}
+    f2["gap_plot"] = {"dims": [
+        {"name": "2026E归母净利（亿元）", "ours": 100, "consensus": 120},
+        {"name": "2026E目标价（元）", "ours": 11, "consensus": 10}]}
     with tempfile.TemporaryDirectory() as d:
         ref = write_fill({"price": 10.0, "pe_ttm": 11.0,
                           "consensus_np": {"np_avg": 120, "year": 2026}}, d, name="em_cnp.json")

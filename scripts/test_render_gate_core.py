@@ -366,6 +366,10 @@ def test_hero_band_claims_warns():
     # 无概念字面 → 不告警
     out = validate_stderr(minimal_fill())
     assert "分位" not in out and "历史带" not in out
+    # 高速成长禁填 pe_history：不得再指示回填该字段，应指向可比时段证据
+    out = validate_stderr(minimal_fill(stock_type="成长型", growth_tier="high",
+                                      pe_sub="PE(TTM)处近5年23%分位"))
+    assert "分位" in out and "回填该字段" not in out and "可比历史时段" in out
 
 
 def test_conclusion_structure_warns():

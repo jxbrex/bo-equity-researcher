@@ -603,6 +603,48 @@ def test_triggers_strip_all_pending_hidden():
     assert 'trig-dot hit' in html and 'trig-dot pending' in html, "含 hit 应原样渲染"
 
 
+def test_triggers_strip_unescapes_entities_once():
+    raw = R.build_triggers_strip(minimal_fill(triggers=[
+        {"cond": "连续两月海外销量", "target": ">20万/<15万｜实际18.07万/17.02万", "status": "hit"}]))
+    encoded = R.build_triggers_strip(minimal_fill(triggers=[
+        {"cond": "连续两月海外销量", "target": "&gt;20万/&lt;15万｜实际18.07万/17.02万", "status": "hit"}]))
+    assert "&amp;gt;" not in encoded and "&amp;lt;" not in encoded
+    assert "&gt;20万/&lt;15万" in encoded
+    assert encoded == raw, "原始符号与已转义实体应得到同一HTML"
+
+
+def _trigger_stderr(trigger):
+    fill = minimal_fill(triggers=[trigger])
+    return capture_stderr(lambda: R.validate_content(fill, R.compute_valuation(fill)))
+
+
+def test_trigger_two_sided_status_semantics():
+    out = _trigger_stderr({"cond": "连续两月海外销量",
+                           "target": "&gt;20万/&lt;15万｜实际18.07万/17.02万", "status": "miss"})
+    assert "双向阈值" in out and "pending" in out, "上下限均未触及不应标miss"
+
+    out = _trigger_stderr({"cond": "连续两月海外销量",
+                           "target": ">20万/<15万｜实际18.07万/17.02万", "status": "pending"})
+    assert "双向阈值" not in out
+
+    out = _trigger_stderr({"cond": "连续两月海外销量",
+                           "target": ">20万/<15万｜实际21万/17.02万", "status": "pending"})
+    assert "双向阈值" in out and "hit" in out, "任一实际值破上限应标hit"
+
+    out = _trigger_stderr({"cond": "连续两月海外销量",
+                           "target": ">20万/<15万｜实际21万/17.02万", "status": "hit"})
+    assert "双向阈值" not in out
+
+
+def test_trigger_two_sided_parser_skips_ambiguous_actuals():
+    for actual in ("18", "18.07万", "2026-10-30 18/21", "18/17/16"):
+        for status in ("hit", "miss", "pending"):
+            out = _trigger_stderr({"cond": "连续两月海外销量",
+                                   "target": f">20/<15｜实际{actual}", "status": status})
+            assert "双向阈值" not in out and "与 target" not in out, \
+                f"双向实际值不可判定不得落回单向猜测：{actual}/{status}"
+
+
 _GAP_DIMS_A = [
     {"name": "2026E 归母净利（亿元）", "ours": 930, "consensus": 905, "cover": "15 家覆盖",
      "street": [{"org": "野村", "v": 952, "major": True}, {"org": "摩根士丹利", "v": 878, "major": True},

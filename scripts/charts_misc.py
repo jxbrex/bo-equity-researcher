@@ -7,6 +7,7 @@ _inject_l3_charts）/ 12 股东户数趋势（build_holders_plot）与技术事�
 / 2 驱动卡与 11 阶段卡（build_driver_cards / build_cycle_stages）。依赖 charts_base 与 scoring。"""
 
 from math import isfinite
+from html import unescape
 
 from scoring import _num, _fmt, _esc, _parse_prev_scenarios
 from charts_base import *
@@ -523,15 +524,15 @@ def build_triggers_strip(fill: dict) -> str:
     for t in fill.get("triggers") or []:
         if not isinstance(t, dict):
             continue
-        cond = str(t.get("cond") or "").strip()
+        cond = unescape(str(t.get("cond") or "").strip())
         if not cond:
             continue
         status = str(t.get("status") or "pending").strip().lower()
         label, cls = _TRIG_STATUS.get(status, _TRIG_STATUS["pending"])
         if cls != "pending":
             verdict = True
-        metric = str(t.get("metric") or "").strip()
-        target = str(t.get("target") or "").strip()
+        metric = unescape(str(t.get("metric") or "").strip())
+        target = unescape(str(t.get("target") or "").strip())
         mt = ""
         if metric or target:
             mt = (f'<span class="trig-mt">{_esc(metric)}'

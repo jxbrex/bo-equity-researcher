@@ -25,6 +25,7 @@ from validate_common import (
     _is_hk_code,
     _quote_ref,
     _scenario_by_key)
+from quality_rules import PROFILE_KIND, PROFILE_FLAGS, F_ITEM_IDS
 
 
 def _check_price_date(fill: dict) -> None:
@@ -961,6 +962,71 @@ def _check_period_track(fill: dict, warns: list) -> None:
         if summary_len > 100:
             warns.append(f"period_track.summary_html 纯文本 {summary_len} 字 > 100：进度小结定位 ≤2 句，"
                          f"展开论证归 4.4/5.1/9 章")
+
+
+def _check_catalyst_evidence(fill: dict, warns: list) -> None:
+    if _quality_version(fill) != 2:
+        return
+    events = ((fill.get("score_inputs") or {}).get("3C") or {}).get("events") or []
+    missing = []
+    for index, event in enumerate(events, 1):
+        if not event.get("revaluation"):
+            continue
+        absent = [key for key in ("expectation_gap", "observable")
+                  if not str(event.get(key) or "").strip()]
+        if absent:
+            name = str(event.get("name") or f"第{index}项")
+            missing.append(f"{name} 缺 {'/'.join(absent)}")
+    if not missing:
+        return
+    message = ("3C 重估催化须同时给出预期差与可观察结果：" + "；".join(missing)
+               + "——定期报告验证默认 revaluation:false，不得以披露惯例代替重估证据")
+    if str(fill.get("date") or "") >= "2026-11-01":
+        raise ValueError(message)
+    warns.append(message)
+
+
+def _check_quality_profile_contract(fill: dict, warns: list) -> None:
+    if _quality_version(fill) != 2:
+        return
+    profile = _quality_context(fill)["industry_profile"]
+    kind = PROFILE_KIND[profile]
+    spec = (fill.get("score_inputs") or {}).get("1D") or {}
+    common = {"counter_evidence", "custom", "manual_evidence", "kind", "note"}
+    by_kind = {
+        "generic_f": {"f_items", "liquidity", "red_flags", "red_flag_materiality",
+                      "red_flag_materiality_evidence", "f_causal_groups", "f_causal_evidence", "g_checks"},
+        "industry_checklist": {"industry_checks", "industry_check_evidence"},
+        "survival_checklist": {"industry_checks", "industry_check_evidence",
+                               "cash_runway_months", "financing_secured"},
+    }
+    issues = []
+    unknown = sorted(set(spec) - (common | by_kind[kind]))
+    if unknown:
+        issues.append(f"{profile} 不允许的 1D 键: {unknown}")
+    if spec.get("kind") is not None and spec["kind"] != kind:
+        issues.append(f"kind={spec['kind']!r} 与实际分支 {kind!r} 不一致")
+    checks = spec.get("industry_checks") or {}
+    if kind != "generic_f" and isinstance(checks, dict):
+        unknown_flags = sorted(set(checks) - PROFILE_FLAGS[profile])
+        if unknown_flags:
+            issues.append(f"{profile} 未登记行业 flag: {unknown_flags}")
+    if "financing_secured" in spec and not isinstance(spec["financing_secured"], bool):
+        issues.append("financing_secured 必须为布尔值")
+    groups = spec.get("f_causal_groups") or {}
+    evidence = spec.get("f_causal_evidence") or {}
+    if isinstance(groups, dict):
+        for group, names in groups.items():
+            if set(names) == set(F_ITEM_IDS):
+                issues.append("F 因果组不得覆盖全部九项")
+            if not re.search(r"\d", str(evidence.get(group, ""))):
+                issues.append(f"F 因果组 {group} 须给出来源和量化事实")
+    if not issues:
+        return
+    message = "1D profile 输入契约错误：" + "；".join(issues)
+    if str(fill.get("date") or "") >= "2026-11-01":
+        raise ValueError(message)
+    warns.append(message)
 
 
 def _check_quality_inputs(fill: dict, warns: list) -> None:

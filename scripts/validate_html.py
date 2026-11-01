@@ -15,7 +15,9 @@ from scoring import (
     _plain_text,
     _LABEL_REFUSE,
     _cn_placeholders,
-    _quality_version)
+    _quality_version,
+    _quality_context)
+from quality_rules import PROFILE_KIND
 from charts_base import (
     _C_BLUE,
     _sensitivity_items,
@@ -802,21 +804,25 @@ def _check_cn_placeholder(fill: dict) -> None:
             raise ValueError(f"{name} 残留中文占位符: {sorted(set(hits))}——请填写实际内容后重渲")
 
 
-def _check_red_flag_conclusion(fill: dict, sc: dict = None) -> None:
-    """v5.1.2：红旗命中 ≥2 项（red_deductions 条数，1D 红旗扣分明细）→ conclusion_html
-    首卡首句必须含「利润真实性存疑」（fill-schema:61 长期承诺、此前零实现——多红旗报告
-    静默缺失全文最强的利润真实性警示）。与 red_flag→「不建议参与」同强度：拒渲染。"""
-    red = (sc.get("financial_red_flags") if sc and sc.get("quality_version") == 2
-           else fill.get("red_deductions")) or []
+def _check_red_flag_conclusion(fill: dict, sc: dict = None, warns: list = None) -> None:
+    v2 = bool(sc and sc.get("quality_version") == 2)
+    red = (sc.get("financial_red_flags") if v2 else fill.get("red_deductions")) or []
     if len(red) < 2:
         return
+    kind = PROFILE_KIND[_quality_context(fill)["industry_profile"]] if v2 else "generic_f"
+    phrase = "利润真实性存疑" if kind == "generic_f" else "财务风险多项命中"
     concl = fill.get("conclusion_html") or ""
     parts = concl.split("concl-head", 2)
     first_card = "concl-head".join(parts[:2]) if len(parts) > 2 else concl
-    if "利润真实性存疑" not in first_card:
-        raise ValueError(f"红旗命中 {len(red)} 项 ≥2：conclusion_html 首卡必须含「利润真实性存疑」"
-                         "（fill-schema 既定要求，v5.1.2 起执行）——盈利质量红旗多项命中时，"
-                         "结论必须先于一切优点声明存疑")
+    if phrase in first_card or "利润真实性存疑" in first_card:
+        return
+    message = (f"红旗命中 {len(red)} 项 ≥2：conclusion_html 首卡必须含「{phrase}」"
+               "——多项风险应先于优点向读者提示")
+    legacy_count = sc.get("legacy_financial_red_count", len(red)) if v2 else len(red)
+    if v2 and str(fill.get("date") or "") < "2026-11-01" and legacy_count < 2 and warns is not None:
+        warns.append(message)
+        return
+    raise ValueError(message)
 
 
 def _check_handwritten_dupes(fill: dict, warns: list) -> None:

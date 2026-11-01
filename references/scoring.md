@@ -318,7 +318,8 @@ vs 商超进场费、特斯拉直营 vs 4S 经销网络）。口径三条：
 九项依次是利润为正、经营现金流为正、ROA 改善、现金含量合格、长期有息负债下降、
 短债覆盖改善、无稀释、毛利率改善、资产周转改善。布尔未知不得当真/假；同一因果链的
 未通过项只有凭 `f_causal_groups` 明确归组时才合并计数，且每组必须同时在
-`f_causal_evidence` 给出同源事实与来源，得分链同时展示原始与归并后数量。
+`f_causal_evidence` 给出同源事实、来源与量化证据，得分链同时展示原始与归并后数量。
+不得把全部九项合成一个因果组；2026-11-01 起缺失上述证据或全覆盖归并拒渲染，旧 fill 迁移告警。
 成长型可另用 G-Score 作补充检查，但不另算 G 分；研发与资本开支强度不直接加分，另以
 `g_checks.rd_intensity_evidence` 和 `g_checks.capex_intensity_evidence` 保留证据，全部只展示、分数变化为 0。
 金融/特殊行业不用通用 F 清单，改走附录专项清单；`not_applicable` 只豁免有明确依据的
@@ -386,8 +387,9 @@ vs 商超进场费、特斯拉直营 vs 4S 经销网络）。口径三条：
 **命中处理（v2）**：应收、存货、毛利率异常只在 `score_inputs["1D"]["red_flags"]` 内各扣 1 分；
 现金含量是 F 式清单的一项，不再额外扣一次。事实命中但有明确规模证据表明不具重大性时，
 用 `red_flag_materiality` 标 False，并同时在 `red_flag_materiality_evidence` 填对应规模与来源，
-才保留登记且不扣分；缺少证据时仍扣 1 分。派生红旗 ≥2 项时，核心结论首卡必须含
-「利润真实性存疑」。审计非标走红灯 a 项直接回避，不在这里重复扣。
+才保留登记且不扣分；缺少证据时仍扣 1 分。通用盈利质量红旗 ≥2 项时，核心结论首卡必须含
+「利润真实性存疑」；金融/地产/生存清单的多项财务风险改为「财务风险多项命中」（旧字面兼容）。
+已证不重大的免扣项保留展示但不计入结论级多项警示。审计非标走红灯 a 项直接回避，不在这里重复扣。
 
 **1F 增量 ROIC（重资产公司 MANDATORY）**：近3年年均资本开支 > 折旧摊销×1.5 时，必须计算最新重大项目的增量 ROIC = 项目达产后年增净利润 ÷ 项目总投资；与 WACC（默认 8%）对比：>WACC×1.5 加分，<WACC 扣 1 分并注明"再投资毁灭价值"。**本项只归 1F，不在 1D 重复扣分。**
 
@@ -493,6 +495,12 @@ CHANGELOG 更正）。
 | 6-7.9 | 1 个明确催化剂，日期可验证 |
 | 4-5.9 | 方向存在但时点不可验证（"有望""预期"） |
 | <4 | 无可见催化剂，估值修复只能靠市场风格 |
+
+**重估证据门禁（全分型共用）**：`revaluation:true` 除月份外必须同时填 `expectation_gap`
+（市场当前预期与可能 surprise 的差异）和 `observable`（什么可观察结果出现会触发重估）。
+定期报告验证/披露默认 `revaluation:false`，只算方向性窗口；确有财报重估时同样须给出上述
+证据，不得以披露惯例替代。2026-11-01 起缺失拒渲染，旧 fill 逐项迁移告警，不自动改旧分。
+催化剂只表示未来重估窗口，不代表现有公司质量已经提升。
 
 ## 估值分（价格轨 · 独立，不进质量分）
 
@@ -1044,7 +1052,7 @@ WebSearch 或妙想 `mx_finance_search_news` **择一完成一轮**，不足再�
 都须写清事实和跟踪指标，不再用四类扣分表代替信息收集。v2 非空 `yellow_deductions` 或
 `red_deductions` 均拒渲染；v1 旧表只供历史重渲，不是新报告写法。
 
-`risk_items[]` 每项字段为 `{name,status,evidence,impact,home,trigger,source,rule_id?}`：
+`risk_items[]` 每项字段为 `{name,status,evidence,impact,home,trigger,source,rule_id?,unscored_reason?}`：
 
 - `status`：`hit` 已命中 / `watch` 观察 / `unknown` 未核实。未核实不得显示“通过”，
   watch/unknown 不计分，也不计入多项红灯复核。
@@ -1052,7 +1060,12 @@ WebSearch 或妙想 `mx_finance_search_news` **择一完成一轮**，不足再�
 - `home`：九维之一，或 `valuation` / `timing` / `dashboard`，指向读者应查看的位置。
 - `trigger`：下一期观察什么指标或阈值；`source`：公司公告、定期报告、公开行情、行业数据等。
 - `impact=quality,status=hit` 时 `rule_id` 必填，须存在于 `RULE_REGISTRY` 并与该 home 的
-  实际得分链一致；同一活跃 `rule_id` 不得重复登记。这样证明“已计入”是真的，而非文字声称。
+  实际得分链和当前真实负面条件一致；同一活跃 `rule_id` 不得重复登记。UNKNOWN、
+  NOT_APPLICABLE、信息性步骤和正向 custom 不得冒充 hit，2026-11-01 起新增活性检查拒渲染，
+  旧 fill 迁移告警。这样证明“已计入”是真的，而非文字声称。
+- `impact=monitor,status=hit` 时 `unscored_reason` 必填，说明为何不计分并随证据展示，
+  防止把已影响质量分的风险藏进“仅跟踪”。纯跑道 `<18` 还需 `financing_secured=false`
+  才能登记跑道风险；有已落实融资豁免，未披露不得标 hit。
 
 `hit` ≥4 且覆盖 ≥3 个不同 home 时必须填写 `red_review` 复核结论；它只记录是否升级红灯的
 判断，**不按数量自动设置 red_flag**。真正 red_flag 始终由上表致命事实本身一票否决。

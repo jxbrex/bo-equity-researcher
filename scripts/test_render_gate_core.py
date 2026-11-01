@@ -1383,7 +1383,7 @@ def test_v2_industry_red_flags_derive_warning_without_second_deduction():
     assert sc["red_total"] == 0
     with tempfile.TemporaryDirectory() as d:
         fill = prepare_v2_quote(fill, d)
-        expect_valueerror(fill, "利润真实性存疑", kw="利润真实性存疑")
+        expect_valueerror(fill, "财务风险多项命中", kw="财务风险多项命中")
         fill["conclusion_html"] = "利润真实性存疑：资产质量两项恶化。" + fill["conclusion_html"]
         fill["score_inputs"]["1F"]["counter_evidence"] = "资产质量恶化可能拖累未来资本回报"
         R.validate_content(fill, R.compute_valuation(fill), sc)

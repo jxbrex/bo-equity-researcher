@@ -57,7 +57,9 @@
   `solvency/combined_ratio/reserve/investment_assumption`；券商 `proprietary_exposure/net_capital/
   credit_impairment/leverage`。全部通过=A、仅 1 项未通过=B、2 项未通过=C、其余=D；
   只有有明确依据的 `not_applicable` 可豁免单项，并须在 `industry_check_evidence` 逐项填写
-  理由与来源；缺依据按 missing，全部不适用仍 missing，空值不得冒充豁免。
+  理由与来源；缺依据按 missing，全部不适用仍 missing，空值不得冒充豁免。**布尔语义：
+  true=风险命中/未通过，false=风险未命中/通过；未登记 flag 不得静默忽略。多项财务风险命中时，
+  结论首卡写「财务风险多项命中」，不把偿付能力、杠杆或资本充足率误写成利润真实性存疑（旧字面兼容）。**
 - **1F 正常化资本回报**：银行用 ROTCE 或正常化 ROE，保险用正常化 ROE，均对 COE，
   不套工商业 ROIC/WACC。覆盖倍数 ≥1.5=A、≥1=B 基础 6、<1=D 且最高 4；
   `return_metric`、正常化回报与 COE 必须明确，不得拿单季市场贝塔高景气值代替。

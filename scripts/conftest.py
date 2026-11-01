@@ -210,8 +210,11 @@ def v2_fill(**over):
                "dupont_driver": "净利率"},
         "3A": {"growth_lo": 21, "growth_hi": 25, "driver_status": "已验证"},
         "3B": {"projects": [{"name": "核心项目", "stage": "已投产", "contribution": 1}]},
-        "3C": {"events": [{"name": "项目投产", "month": "2026-11", "revaluation": True},
-                          {"name": "新品获批", "month": "2026-12", "revaluation": True}]},
+        "3C": {"events": [
+            {"name": "项目投产", "month": "2026-11", "revaluation": True,
+             "expectation_gap": "市场尚未计入项目盈利贡献", "observable": "按期投产并产生可核验收入后上调利润"},
+            {"name": "新品获批", "month": "2026-12", "revaluation": True,
+             "expectation_gap": "市场尚未计入新品销售贡献", "observable": "获批并形成订单后上调利润"}]},
     }
     for spec in specs.values():
         spec["counter_evidence"] = "2026年行业价格波动幅度超过20%，存在明确反方证据"

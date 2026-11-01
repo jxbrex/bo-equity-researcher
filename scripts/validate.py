@@ -23,6 +23,8 @@ from validate_audit import (
     _check_growth_consistency,
     _check_quote_present,
     _check_quality_inputs,
+    _check_quality_profile_contract,
+    _check_catalyst_evidence,
     _check_period_track)
 from validate_valuation import (
     _check_valuation_inputs,
@@ -92,13 +94,15 @@ def _validate_content_impl(fill: dict, calc: dict, warns: list, sc: dict = None)
     _check_chart_fields(fill)
     _check_quote_present(fill, warns)   # v4.11.1（审核 D5）：date ≥ 2026-09-02 缺 quote 拒渲染
     _check_quality_inputs(fill, warns)  # v2：机械输入双向照抄、profile 与披露日对账
+    _check_quality_profile_contract(fill, warns)  # v2：1D 输入容器与 profile 分支一致
+    _check_catalyst_evidence(fill, warns)  # v2：重估催化须同时有预期差与可观察结果
     _check_gap_plot(fill, calc, warns)  # v4.11.1：gap_plot 分布图字段校验（可选字段，缺失不查）
     _check_gap_plot_street_source(fill, warns)  # v5.5.1 F2：street 落盘第二照抄源（软告警）
     _check_gap_history(fill, warns)     # v5.6.0：gap_history 态度变化照抄对账（软告警）
     _check_dupont(fill, warns)          # v5.8.0：dupont 杜邦乘积链照抄对账（软告警）
 
     _check_red_flag_breaker(fill)
-    _check_red_flag_conclusion(fill, sc)  # v5.1.2：红旗 ≥2 项 → 首卡首句存疑句硬门禁
+    _check_red_flag_conclusion(fill, sc, warns)  # v5.1.2：红旗 ≥2 项 → 首卡首句存疑句硬门禁
     _check_thesis_consistency(fill, calc)
     _check_content_floor(fill)
     _check_l4_form(fill, warns)

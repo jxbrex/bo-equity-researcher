@@ -133,6 +133,26 @@ PROFILE_KIND = {
     "realestate_development": "industry_checklist", "pre_profit": "survival_checklist",
     "turnaround": "survival_checklist",
 }
+PROFILE_FLAG_LABELS = {
+    "receivables": "应收恶化", "inventory": "存货恶化", "gross_margin_anomaly": "毛利率异常",
+    "order_cancellation": "订单取消", "price_war": "价格战",
+    "adjusted_profit_divergence": "经调整利润偏离", "investment_impairment": "投资减值", "goodwill": "商誉风险",
+    "npl_trend": "不良贷款趋势", "provision_trend": "拨备覆盖趋势",
+    "loan_migration": "关注与逾期贷款迁徙", "cet1": "核心一级资本充足率",
+    "solvency": "偿付能力", "combined_ratio": "综合成本率", "reserve": "准备金充足性",
+    "investment_assumption": "投资假设", "proprietary_exposure": "自营风险敞口",
+    "net_capital": "净资本", "credit_impairment": "信用减值", "leverage": "杠杆",
+    "cash_runway": "现金跑道不足", "capitalized_rd": "研发资本化", "license_in": "License-in 依赖",
+    "clinical_disclosure": "临床数据披露", "short_cover": "短债覆盖", "hidden_debt": "隐性债务",
+    "contract_liability": "合同负债", "capitalized_interest": "利息资本化",
+    "financing_gap": "融资缺口", "catalyst": "反转催化缺失", "normal_anchor": "正常化利润锚缺失",
+}
+for _profile, _flags in PROFILE_FLAGS.items():
+    for _flag in _flags:
+        _label = PROFILE_FLAG_LABELS[_flag]
+        RULE_LABELS[f"1D.{_profile.upper()}.{_flag.upper()}"] = _label
+        RULE_LABELS[f"1D.RED.{_flag.upper()}"] = _label
+        RULE_LABELS[f"1D.RED.{_flag.upper()}.IMMATERIAL"] = _label
 FINANCIAL_PROFILES = {"financial_bank", "financial_insurance", "financial_broker"}
 SPECIAL_1B_PROFILES = FINANCIAL_PROFILES | {"internet_platform", "pharma_cxo"}
 RULE_REGISTRY = {
@@ -495,6 +515,17 @@ def _liquidity_band(liquidity):
     return band
 
 
+def _f_hits_with_causal_groups(spec):
+    items = spec.get("f_items") or {}
+    hits = sum(items.get(name) is True for name in F_ITEM_IDS)
+    misses = {name for name in F_ITEM_IDS if items.get(name) is False}
+    for names in (spec.get("f_causal_groups") or {}).values():
+        group_misses = misses & set(names)
+        if group_misses:
+            hits += len(group_misses) - 1
+    return hits
+
+
 def _eval_generic_f(spec, profile, context=None):
     items = spec.get("f_items")
     liquidity = spec.get("liquidity")
@@ -541,6 +572,7 @@ def _eval_generic_f(spec, profile, context=None):
             group_steps.append({"id": f"1D.CAUSAL_GROUP.{group}",
                                 "evidence": f"{evidence.strip()}；同一因果链只计一次: {sorted(group_misses)}",
                                 "delta": 0})
+    hits = _f_hits_with_causal_groups(spec)
     trend_band = "A" if hits >= 8 else "B" if hits >= 6 else "C" if hits >= 4 else "D"
     liquidity_band = _liquidity_band(liquidity)
     band = trend_band if BAND_ORDER[trend_band] >= BAND_ORDER[liquidity_band] else liquidity_band
@@ -624,7 +656,7 @@ def _eval_industry_checklist(spec, profile):
     good = sum(not flags[name] for name in required)
     total = len(required)
     band = ("A" if good == total else "B" if good == total - 1
-            else "C" if good == total - 2 and total > 2 else "D")
+            else "C" if good == total - 2 else "D")
     steps = [{"id": f"1D.{profile.upper()}.{name.upper()}",
               "evidence": str(flags[name]), "delta": 0} for name in required]
     if not_applicable:
@@ -657,6 +689,12 @@ def _eval_survival_checklist(spec, profile):
 
 
 def _eval_1d(spec, context):
+    for name in ("f_items", "liquidity", "red_flags", "industry_checks",
+                 "red_flag_materiality", "red_flag_materiality_evidence",
+                 "f_causal_groups", "f_causal_evidence", "industry_check_evidence", "g_checks"):
+        value = spec.get(name)
+        if value is not None and not isinstance(value, dict):
+            raise ValueError(f"1D.{name} 必须为对象")
     profile = context.get("industry_profile") or "generic"
     if profile not in PROFILE_KIND:
         return _missing("1D", f"未登记行业profile: {profile}")

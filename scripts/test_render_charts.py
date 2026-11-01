@@ -539,7 +539,7 @@ def test_growth_plot_without_consensus_and_with_text_yoy():
     html = build_growth_plot(fill)
     assert html and "扭亏" in html
     assert "polygon" not in html and "差 " not in html
-    assert "无当前卖方净利一致预期" in html
+    assert "未取得可核验的一致预期" in html
     R.validate_content(fill, R.compute_valuation(fill))
 
 

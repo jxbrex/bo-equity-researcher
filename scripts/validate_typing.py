@@ -147,17 +147,45 @@ def _check_typing_v2(fill: dict, warns: list) -> None:
                 warns.append(f"growth_tier=mid 但 fin_trend 扣非 CAGR={cagr * 100:.1f}%"
                              "（中速层 5-25%，缓冲带 ±5pct 外）：应归高速层（60:40 + 高速层权重），请复核")
 
+    shape_issues = []
+    raw_weights = fill.get("weights")
+    if raw_weights is not None and not isinstance(raw_weights, dict):
+        shape_issues.append("weights 必须为平铺九维对象")
+    elif isinstance(raw_weights, dict):
+        allowed = {"1A", "1B", "1C", "1D", "1E", "1F", "3A", "3B", "3C"}
+        unknown = sorted(set(raw_weights) - allowed)
+        if unknown:
+            shape_issues.append(f"weights 只接受平铺九维键，未知键: {unknown}")
+    raw_layer_share = fill.get("layer_share")
+    if raw_layer_share is not None and not isinstance(raw_layer_share, dict):
+        shape_issues.append("layer_share 必须为 L1/L3 对象")
+    elif isinstance(raw_layer_share, dict):
+        unknown = sorted(set(raw_layer_share) - {"L1", "L3"})
+        if unknown:
+            shape_issues.append(f"layer_share 未知键: {unknown}")
+    if shape_issues:
+        message = "；".join(shape_issues)
+        if str(fill.get("date") or "") >= "2026-11-01":
+            raise ValueError(message)
+        warns.append(message)
+
     want = _GROWTH_LAYER.get(tier) if std == "成长型" else _TYPE_LAYER.get(std)
-    ls_raw = fill.get("layer_share") or {}
+    ls_raw = raw_layer_share if isinstance(raw_layer_share, dict) else {}
     if want and ls_raw:
         l1 = _num(ls_raw.get("L1"))
         if l1 is not None and (int(l1), int(100 - l1)) != want:
             warns.append(f"layer_share {l1:g}:{100 - l1:g} 与 {std}{'·' + tier if std == '成长型' else ''} "
                          f"映射 {want[0]}:{want[1]} 不符（v5.3.0 型↔占比对账，首版软约束）")
     elif want and want != (70, 30):
-        warns.append(f"{std} 层占比应为 {want[0]}:{want[1]}，未填 layer_share 将按默认 70:30 计算，分数可能错误")
+        message = f"{std} 层占比应为 {want[0]}:{want[1]}，未填 layer_share 将按默认 70:30 计算，分数可能错误"
+        if str(fill.get("date") or "") >= "2026-11-01":
+            raise ValueError(message)
+        warns.append(message)
     if (std in _TYPE_NONDEFAULT_WEIGHTS or (std == "成长型" and tier == "high")) and not fill.get("weights"):
-        warns.append(f"{std}{'·高速层' if std == '成长型' else ''} 层内权重非默认，未填 weights——脚本将用基础权重计算，分数可能错误")
+        message = f"{std}{'·高速层' if std == '成长型' else ''} 层内权重非默认，未填 weights——脚本将用基础权重计算，分数可能错误"
+        if str(fill.get("date") or "") >= "2026-11-01":
+            raise ValueError(message)
+        warns.append(message)
 
     miss = [k for k in need if not te.get(k)]
     if miss:

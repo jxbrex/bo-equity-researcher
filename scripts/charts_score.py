@@ -95,8 +95,14 @@ def _score_text(key, step, spec):
         return "存在监管处罚"
     if rule_id.startswith("1D.CAUSAL_GROUP."):
         return evidence.split("；同一因果链", 1)[0] + "；同一因果链只计一次"
+    if rule_id.endswith(".IMMATERIAL"):
+        return "命中但不扣分：" + evidence
     if rule_id.startswith("1D.RED.") and evidence in ("True", "False"):
-        return "已核实" if evidence == "True" else "未核实"
+        return "风险命中" if evidence == "True" else "风险未命中"
+    if (key == "1D" and not rule_id.startswith("1D.G.")
+            and re.fullmatch(r"1D\.[A-Z_]+\.[A-Z_]+", rule_id)
+            and evidence in ("True", "False")):
+        return "未通过（风险命中）" if evidence == "True" else "通过（风险未命中）"
     if evidence in ("True", "False"):
         return "通过" if evidence == "True" else "未通过"
     for code, label in _PROFILE_LABELS.items():

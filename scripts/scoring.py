@@ -414,7 +414,9 @@ def compute_valuation_score(calc: dict, inputs: dict, gap_tier=None):
     }
 
 
-from quality_rules import evaluate_dimensions, DIM_KEYS, CRITICAL_KEYS, RULE_REGISTRY, RULE_LABELS
+from quality_rules import (
+    evaluate_dimensions, DIM_KEYS, CRITICAL_KEYS, RULE_REGISTRY, RULE_LABELS,
+    PROFILE_KIND, PROFILE_FLAGS)
 
 
 def _quality_version(fill):
@@ -451,7 +453,10 @@ def _quality_context(fill):
             industry = "turnaround"
         else:
             industry = "generic"
-    w_override = fill.get("weights") or {}
+    raw_weights = fill.get("weights")
+    if raw_weights is not None and not isinstance(raw_weights, dict):
+        raise ValueError("weights 需为平铺九维对象")
+    w_override = raw_weights or {}
     weights = {key: float(w_override.get(key, default)) for key, _layer, _name, default in DIMS}
     for layer in ("L1", "L3"):
         total = sum(weights[d[0]] for d in DIMS if d[1] == layer)
@@ -503,9 +508,20 @@ def _compute_scores_v2(fill):
                                    "points": -float(step["delta"])})
     financial_red_flags = list(red_deductions)
     profile = context.get("industry_profile") or "generic"
-    for name, hit in (score_inputs["1D"].get("industry_checks") or {}).items():
-        if hit is True:
-            financial_red_flags.append({"item": f"{profile}.{name}", "points": 0})
+    kind = PROFILE_KIND[profile]
+    spec_1d = score_inputs["1D"]
+    if kind == "generic_f" and (spec_1d.get("f_items") or {}).get("cash_quality_ok") is False:
+        financial_red_flags.append({"item": "利润现金含量", "points": 0})
+    for name, hit in (spec_1d.get("industry_checks") or {}).items():
+        if hit is True and name in PROFILE_FLAGS[profile]:
+            financial_red_flags.append({
+                "item": RULE_LABELS.get(f"1D.{profile.upper()}.{name.upper()}", name), "points": 0})
+    runway = _num(spec_1d.get("cash_runway_months"))
+    if kind == "survival_checklist" and spec_1d.get("industry_checks") is None \
+            and runway is not None and runway < 18 and spec_1d.get("financing_secured") is False:
+        financial_red_flags.append({"item": "现金跑道不足", "points": 0})
+    legacy_financial_red_count = len(red_deductions) + sum(
+        hit is True for hit in (spec_1d.get("industry_checks") or {}).values())
     red_total = round(sum(item["points"] for item in red_deductions), 2)
     valuation = None
     v_raw = fill.get("valuation_score")
@@ -541,6 +557,7 @@ def _compute_scores_v2(fill):
         "layer_scores": layer_scores, "layer_share": layer_share, "pre_risk_quality": quality,
         "yellow_total": 0, "quality": quality, "red_total": red_total,
         "red_deductions": red_deductions, "financial_red_flags": financial_red_flags,
+        "legacy_financial_red_count": legacy_financial_red_count,
         "valuation": valuation, "timing": timing, "red_flag": (fill.get("red_flag") or "").strip(),
         "weights": weights, "adj_scores": adj_scores, "dimension_results": dimension_results,
         "critical_weaknesses": result["critical_weaknesses"], "quality_version": 2,
@@ -893,10 +910,10 @@ def build_valuation_process_card(calc: dict, vc: dict, inputs: dict) -> str:
         if calc.get("mode") == "mcap":
             legend_txt += '；乐观税未检：市值口径无净利可比'
         elif cons_np is not None and cons_np <= 0:
-            # F16：键存在但 ≤0（亏损预期）与「无卖方覆盖」区分列示
+            # F16：键存在但 ≤0（亏损预期）与「未取得可核验的一致预期」区分列示
             legend_txt += '；乐观税未检：一致预期为负/零，乐观税不适用'
         else:
-            legend_txt += '；乐观税未检：无卖方覆盖'
+            legend_txt += '；乐观税未检：未取得可核验的一致预期均值'
     # v5.0 机制三：赔率 ∞ 地板分级上浮说明（软地板注明调节链不上浮）
     fu = vc.get("floor_uplift")
     if fu:

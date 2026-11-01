@@ -195,7 +195,7 @@ def test_optimism_tax_gate():
     # 缺 consensus_np → tax=None 跳过
     vc_n = R.compute_valuation_score(calc, inputs)
     assert vc_n["tax"] is None and vc_n["score"] == 5.5
-    # F16：consensus_np 键存在但 ≤0（亏损预期）→ legend 单列，与「无卖方覆盖」区分
+    # F16：consensus_np 键存在但 ≤0（亏损预期）→ legend 单列，与「未取得可核验的一致预期」区分
     card_neg = R.build_valuation_process_card(calc, vc_n, dict(inputs, consensus_np=-5))
     assert "一致预期为负/零，乐观税不适用" in card_neg and "无卖方覆盖" not in card_neg
     card_zero = R.build_valuation_process_card(calc, vc_n, dict(inputs, consensus_np=0))
@@ -206,7 +206,7 @@ def test_optimism_tax_gate():
     card_a = R.build_valuation_process_card(calc, vc_a, dict(inputs, consensus_np=80))
     assert "乐观税已检" in card_a and "A 档解封" in card_a
     card_n = R.build_valuation_process_card(calc, vc_n, inputs)
-    assert "乐观税未检：无卖方覆盖" in card_n
+    assert "乐观税未检：未取得可核验的一致预期均值" in card_n
     # mcap 口径：base 无 profit → tax=None，legend 标市值口径
     mcalc = {"central": 0.05, "central_raw": 0.05, "odds": 1.0, "dispersion": 0.5,
              "mode": "mcap", "horizon": "12个月",

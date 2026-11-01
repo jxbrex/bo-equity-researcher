@@ -1052,3 +1052,44 @@ def test_growth_hi_accepts_numeric_zero():
         "3A", {"growth_lo": -5, "growth_hi": 0, "driver_status": "未验证"}, CTX)
     assert result["status"] == "ok"
     assert result["final"] is not None
+
+
+@pytest.mark.parametrize("profile,spec", [
+    ("pre_profit", {"industry_checks": {"cash_runway": True, "financing_gap": True}}),
+    ("financial_insurance", {
+        "industry_checks": {"solvency": True, "combined_ratio": "not_applicable",
+                            "reserve": True, "investment_assumption": "not_applicable"},
+        "industry_check_evidence": {"combined_ratio": "纯寿险无财险综合成本率",
+                                    "investment_assumption": "本检查项不适用"}}),
+    ("realestate_development", {
+        "industry_checks": {"short_cover": True, "hidden_debt": True,
+                            "contract_liability": "not_applicable", "capitalized_interest": "not_applicable"},
+        "industry_check_evidence": {"contract_liability": "无此业务口径",
+                                    "capitalized_interest": "无此业务口径"}}),
+])
+def test_two_failed_industry_checks_are_C(profile, spec):
+    result = qr.evaluate_dimension("1D", spec, dict(CTX, industry_profile=profile))
+    assert result["band"] == "C"
+    assert result["final"] == 5
+
+
+@pytest.mark.parametrize("key", [
+    "f_items", "liquidity", "red_flags", "industry_checks", "red_flag_materiality",
+    "red_flag_materiality_evidence", "f_causal_groups", "f_causal_evidence",
+    "industry_check_evidence", "g_checks",
+])
+def test_1d_rejects_non_mapping_containers(key):
+    spec = _financial_spec()
+    spec[key] = []
+    with pytest.raises(ValueError, match="必须为对象"):
+        qr.evaluate_dimension("1D", spec, CTX)
+
+
+def test_profile_flag_labels_are_complete():
+    for profile, flags in qr.PROFILE_FLAGS.items():
+        for flag in flags:
+            industry_id = f"1D.{profile.upper()}.{flag.upper()}"
+            assert qr.RULE_LABELS.get(industry_id), (profile, flag, industry_id)
+            for suffix in ("", ".IMMATERIAL"):
+                red_id = f"1D.RED.{flag.upper()}{suffix}"
+                assert qr.RULE_LABELS.get(red_id), (profile, flag, red_id)

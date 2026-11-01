@@ -47,14 +47,14 @@ JSON 原样回填，禁止手估、手算、凭记忆补**。各字段的直填�
 | `scores` | v1 必填；v2 禁填 | 旧三轨 9 维最终分对象。v2 非空即拒渲染，不得用手工分替代 `score_inputs` |
 | `valuation_score` | 无需填写 | **估值分永远由脚本计算**（四件套，见 `valuation_inputs`），fill 里不再需要该字段——填了也被脚本计算值覆盖 |
 | `valuation_inputs` | ✓ | **估值分四件套输入（必填，缺键拒渲染）**：`{"pe_ttm":13.5,"pe_band":[14.5,15.5],"div_yield":1.6,"risk_free":1.7}`（pe_ttm 现价 PE、pe_band 合理带 [低,高]、div_yield 税后股息率 %、risk_free 无风险利率 %）。脚本据此自动算估值分，并在 8 估值章末尾汇总卡生成四件套明细（7 章只汇总质量分，不重复估值/时机明细）。**可选 `metric_label`**（如 "P/NAV"、"P/rNPV"、"P/EV"、"经调整PE"）：行业附录市值口径（见 `scoring.md`「市值口径三情景」节）下替换过程卡 PE(TTM) 标签，pe_ttm/pe_band 数值语义随之变为对应比率，映射公式不变；**可选 `consensus_np`**（v5.0，当年卖方一致预期归母净利均值，亿元，照抄 em_fetch 落盘 `consensus_np.np_avg`，禁手估；v5.1.0 起东财降级源亦落盘：当年 EPS 均值×总股本换算，落盘 `src` 键标记口径）——乐观税门禁输入（规则语义唯一权威见 `scoring.md`「决策层三机制（v5.0）」节，不复述）；无卖方覆盖则不填，过程卡自动标注「乐观税未检」 |
-| `weights` | 可选 | 质量层维度权重覆盖（L1 六维层内权重之和=100；L3 三维层内权重之和=100。分型调整时用） |
-| `layer_share` | 可选 | 层占比覆盖：`{"L1":85,"L3":15}`（两值之和=100。分型调整时用） |
+| `weights` | 可选；非默认分型条件必填 | 质量层维度权重覆盖，**只接受平铺 `1A-1F/3A-3C` 数值键**（L1 六维之和=100；L3 三维之和=100）。嵌套 `L1/L3`、未知键或非对象不得静默回落默认值；2026-11-01 起拒渲染，旧 fill 迁移告警。稳定价值、成长高速层、成熟/停滞、未盈利/管线、困境反转及其他非默认映射缺少本字段即拒，默认分型可省略 |
+| `layer_share` | 可选；非默认层占比条件必填 | 层占比覆盖：`{"L1":85,"L3":15}`，只接受 `L1/L3` 两键且之和=100。未知键不得静默忽略；2026-11-01 起拒渲染，旧 fill 迁移告警。85:15、80:20、75:25、60:40 等非默认映射缺失即拒，70:30 默认可省略 |
 | `timing_scores` | ✓（可显式 null） | **时机层**得分对象：`{"筹码面":2.5,"技术面":6.0}`（键名只认筹码面/技术面，旧键名 2B/2C 已移除）。两维可评分时各自**中性 5 分起始 + 清单信号加减**（评分锚见 `scoring.md` 时机分一节），禁止凭感觉给分；**任一子维无可计算信号时给 null 或省略该子维，整个时机总分为 null，显示「数据不足」；不得按 0 或中性 5 分合成，也不重归一权重。整体无信号时 `timing_scores: null`；空对象与非法值仍拒渲染。缺分不改变研究仓位；小表缺哪个子维，该行与合计行都写「数据不足」，新报写数值分拒渲染，旧 fill 仅兼容告警** |
 | `timing_facts` | 可选；有事实时建议必填 | **技术/筹码/资金三组事实卡**（不是指标大表）：`{"source_file":"_timing_600989_2026-10-26.json","technical":{...},"consensus_levels":{...},"chips":{...},"capital":{...}}`。`technical` 照抄 quote 落盘 `timing.technical`：`rsi14/atr14_pct/macd{dif,dea,hist}/volume_ratio_20/ma60_slope_20d_pct/ma120_slope_20d_pct/position_52w_pct`，另有 `as_of/sample_days`；MACD 柱=2×(DIF−DEA)，20 日量比=当日量÷此前 20 日均量，斜率=当前均线相对 20 个交易日前。`consensus_levels` 照抄同源月线近三年 `close_high/close_low/intraday_high/intraday_low` 与期间/月数，**收盘与盘中是两种口径，历史价位不是券商目标价**。`chips` 支持 `average_cost/profit_ratio`，`capital` 支持 `main_net_inflow/southbound/margin`；每项按市场可得性填 `{"value":数值,"unit":"元/%/亿元等","date":"YYYY-MM-DD","source":"真实来源","query":"原始查询"}`，**未获取为 null，不得伪造记录或用中性值代替**；两融以融资余额为 `value`，融券余额及单位另写 `note`。独立证据文件与 fill 的 code/date 相同，筹码/资金逐项照抄并保留原查询；`--out` 对未自动覆盖项生成 null 占位并允许后续 Write 补证；同日重取刷新自动技术/月线/资金项，旧人工记录只补当前仍为 null 的项，筹码与北向/南向等未自动覆盖项保留。技术字段与 quote 对账、筹码/资金与 source_file 对账；声明文件读不到或 code/date 不符拒渲染，改数/改来源/已有证据改空告警。`technical`、`consensus_levels`、`technical.macd` 及非空筹码/资金单项记录必须为对象或 null，非法容器类型直接拒渲染。缺时机总分仍可展示本卡。渲染分技术/筹码/资金三张 `<article>`：RSI/52 周位置/三年区间用尺度图，单日资金只给数值与日期，不画伪趋势；缺项按组汇总，A 股对应字段显示北向/陆股通，原查询与本地路径不进正文；逐项状态判词由脚本按现有数值生成，不新增字段、不参与评分；时机证据渲染成功后自动归档 |
 | `timing_weights` | 可选 | 时机层权重覆盖，默认 `{"筹码面":67,"技术面":33}`，和必须=100 |
 | `yellow_deductions` | v1 必填；v2 禁填 | 旧版黄灯扣分数组，仅供 v1 重渲。v2 非空即拒渲染，非致命风险改填 `risk_items`，不在第 6 章单独扣分；质量类命中仍只在第 4/5 章按对应维度规则反映，是否扣分以规则为准，汇总见第 7 章 |
-| `red_deductions` | v1 可选；v2 禁填 | 旧版 1D 红旗扣分数组，仅供 v1 重渲。v2 非空即拒渲染，改填 `score_inputs["1D"]["red_flags"]`；v2 派生红旗 ≥2 项时 conclusion 首卡必须含「利润真实性存疑」 |
-| `risk_items` | v2 可选，缺省为 [] | **统一风险登记**：`[{"name":"应收恶化","status":"hit","evidence":"周转天数连续上升","impact":"quality","home":"1D","trigger":"周转天数继续上升","source":"公司公告","rule_id":"1D.RED.RECEIVABLES"}, ...]`。`status=hit/watch/unknown`，`impact=quality/valuation/timing/monitor`，`home=九维/valuation/timing/dashboard`。质量类 hit 的 rule_id 必须与本维实际得分链一致且不得重复；watch/unknown 不计分、不计复核命中；未核实不得写通过。空数组只表示未登记，不表示风险排除 |
+| `red_deductions` | v1 可选；v2 禁填 | 旧版 1D 红旗扣分数组，仅供 v1 重渲。v2 非空即拒渲染，改填 `score_inputs["1D"]["red_flags"]`。通用盈利质量多项命中时 conclusion 首卡须含「利润真实性存疑」；金融/地产/生存清单多项财务风险改为「财务风险多项命中」（旧字面兼容）。已证不重大的免扣项保留展示，但不计入结论级多项警示 |
+| `risk_items` | v2 可选，缺省为 [] | **统一风险登记**：`[{"name":"应收恶化","status":"hit","evidence":"周转天数连续上升","impact":"quality","home":"1D","trigger":"周转天数继续上升","source":"公司公告","rule_id":"1D.RED.RECEIVABLES"}, ...]`。`status=hit/watch/unknown`，`impact=quality/valuation/timing/monitor`，`home=九维/valuation/timing/dashboard`。质量类 hit 的 rule_id 必须与本维实际得分链一致、对应当前真实负面条件且不得重复；UNKNOWN、NOT_APPLICABLE、信息性步骤和正向 custom 不得冒充 hit，2026-11-01 起新增活性检查拒渲染，旧 fill 迁移告警。`impact=monitor,status=hit` 必须另填 `unscored_reason` 说明为何不计分并随证据展示。watch/unknown 不计分、不计复核命中；未核实不得写通过。空数组只表示未登记，不表示风险排除 |
 | `red_review` | 条件必填 | `risk_items` 的 hit ≥4 且覆盖 ≥3 个 home 时必填的红灯复核结论；只记录复核，不自动设置 `red_flag` |
 | `red_flag` | 条件 | **红灯标记**：命中红灯填具体项（如 "审计意见非标：无法表示意见"），未命中省略或填 `""`。**熔断硬校验：red_flag 非空时 `position_html` 必须包含「不建议参与」，否则拒渲染** |
 | `thesis_html` | ✓ | Hero 一句话结论（为空 → 告警不拒），**全文提纲挈领句 = 论点 + 关键证据 + 三情景价 + 研究结论**（含 `<span class="scenario-pess/base/opt">` 三情景价）。研究结论只写估值、质量与风险位置，不写分批买卖或加减仓节奏。正例：「全球玻纤龙头+AI电子布第二曲线，中报净利+73.9%兑现高景气，但股东户数单季暴增254.6%且PE处5年90%分位——好公司、坏价格未变。三情景目标价 15.7/37.5/61.8 元，年化中枢 -10.9%——当前价缺乏安全边际」。**只塞三个目标价 = 不合格**（纯文本 <60 字或剥掉三情景价后 <20 字 → 告警）。**一致性硬校验：三个手写价与脚本按 `valuation` 算出的情景中枢价对比，相对偏差 >2% 且绝对差 >0.1 → 拒渲染**；span 类名不齐仅告警；**三 span 全缺且含价格形态 → 拒渲染（v5.1.2，防手写价绕行硬校验）** |
@@ -186,8 +186,8 @@ JSON 原样回填，禁止手估、手算、凭记忆补**。各字段的直填�
 | `red_flags.gross_margin_anomaly` | bool/null | 可选；缺失或 null 封顶 7.9 |
 | `red_flag_materiality` | `{flag: bool}`；false=声明不重大 | 可选；须配下一项证据才免扣 |
 | `red_flag_materiality_evidence` | `{flag:{"scale":"含数字的规模","source":"来源"}}` | 条件必填 |
-| `f_causal_groups` | `{组名:[9 个 f_items 键之一,…]}` | 可选；组间不得重复，每组必须配证据 |
-| `f_causal_evidence` | `{组名:"非空因果说明"}` | 使用因果组时必填 |
+| `f_causal_groups` | `{组名:[9 个 f_items 键之一,…]}` | 可选；组间不得重复，不得把全部九项合成一组，每组必须配证据；2026-11-01 起硬拒，旧 fill 迁移告警 |
+| `f_causal_evidence` | `{组名:"非空因果说明（含来源与量化事实）"}` | 使用因果组时必填；新 fill 缺数字证据拒渲染，旧 fill 迁移告警 |
 | `g_checks.rd_intensity_evidence` | string | 成长型可选，只展示不加分 |
 | `g_checks.capex_intensity_evidence` | string | 同上 |
 
@@ -195,9 +195,10 @@ JSON 原样回填，禁止手估、手算、凭记忆补**。各字段的直填�
 
 | 字段 | 类型 / 合法值 | 必填与缺失后果 |
 |---|---|---|
-| `industry_checks` | `{flag: bool 或 "not_applicable"}`，键集合见行业矩阵 | 行业清单必填；生存型可替代现金跑道；全部 not_applicable → missing |
+| `industry_checks` | `{flag: bool 或 "not_applicable"}`，键集合见行业矩阵 | 行业清单必填；生存型可替代现金跑道；全部 not_applicable → missing。**true=风险命中/未通过，false=风险未命中/通过**；未登记 flag 或其他评分容器不得静默忽略，2026-11-01 起拒渲染，旧 fill 迁移告警 |
 | `industry_check_evidence` | `{flag:"非空说明"}` | 每个 not_applicable 项必填 |
 | `cash_runway_months` | number，月 | 生存型未提供 industry_checks 时必填；使用跑道时 1D/1F 各填一次 |
+| `financing_secured` | bool | 纯跑道可选；`<18` 且为 false 才构成跑道红旗。有已落实融资填 true 豁免；未披露不得把该风险标为 hit |
 
 #### 1E 治理与资本配置
 
@@ -263,8 +264,10 @@ JSON 原样回填，禁止手估、手算、凭记忆补**。各字段的直填�
 | `events` | array<object> | 必填；空数组 → D |
 | `events[].name` | string | 非评分代码消费，可留作写作备注 |
 | `events[].month` | `YYYY-MM`（也接受 `YYYY-M`） | 可选；缺失只算方向，完整日期或超窗不计入重估 |
-| `events[].revaluation` | bool | 可选；true 且处于报告月起 0—12 个月窗口才计入 A/B |
+| `events[].revaluation` | bool | 可选；true 且处于报告月起 0—12 个月窗口才计入 A/B。定期报告验证/披露默认 false，只算方向性窗口 |
 | `events[].evidence` | string | 非评分代码消费，可留作来源备注 |
+| `events[].expectation_gap` | string | `revaluation:true` 条件必填：市场当前预期与可能 surprise 的差异，不得只写披露惯例；2026-11-01 起缺失拒渲染，旧 fill 迁移告警 |
+| `events[].observable` | string | `revaluation:true` 条件必填：什么可观察结果出现会触发重估（指标、事件或阈值）；2026-11-01 起缺失拒渲染，旧 fill 迁移告警 |
 
 #### industry_profile 变体矩阵
 
@@ -319,7 +322,7 @@ fill 与 quote 落盘 `quality_inputs.profile` 的 `stock_type/industry_profile/
     "1F": {"roic":0.18,"wacc":0.08,"incremental_roic":0.15,"roic_basis":"latest","roic_period_months":12,"dupont_driver":"净利率","counter_evidence":"占位反方证据：高回报可能均值回归"},
     "3A": {"growth_lo":25,"growth_hi":35,"driver_status":"已验证","counter_evidence":"占位反方证据：订单增速不等于利润增速"},
     "3B": {"visibility":[{"name":"占位合同负债","level":"合约级","contribution":1.0,"value":"占位金额与日期"}],"counter_evidence":"占位反方证据：交付与验收仍不确定"},
-    "3C": {"events":[{"name":"占位年报验证","month":"2027-04","revaluation":true,"evidence":"占位披露计划"},{"name":"占位项目验收","month":"2027-06","revaluation":true,"evidence":"占位项目公告"}],"counter_evidence":"占位反方证据：事件可能延期"}
+    "3C": {"events":[{"name":"占位年报验证","month":"2027-04","revaluation":false,"evidence":"占位披露计划"},{"name":"占位项目验收","month":"2027-06","revaluation":true,"evidence":"占位项目公告","expectation_gap":"市场未计入验收后的利润贡献","observable":"验收并形成可核验收入后上调正常化利润"}],"counter_evidence":"占位反方证据：事件可能延期"}
   }
 }
 ```

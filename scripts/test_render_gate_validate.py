@@ -1302,3 +1302,477 @@ def test_v2_three_beats_is_warning_for_legacy_fill():
         fill = prepare_v2_quote(fill, d)
         out = validate_stderr(fill)
         assert "三要素" in out
+
+
+def test_profile_contract_covers_all_profiles_and_rejects_unknown_keys():
+    from validate_audit import _check_quality_profile_contract
+    from quality_rules import PROFILE_KIND
+    for profile, kind in PROFILE_KIND.items():
+        fill = v2_fill(date="2026-11-01", industry_profile=profile)
+        fill["score_inputs"]["1D"] = {"kind": kind, "counter_evidence": "反方证据", "note": "补充说明"}
+        warns = []
+        _check_quality_profile_contract(fill, warns)
+        assert warns == [], (profile, warns)
+        fill["score_inputs"]["1D"]["bogus"] = True
+        try:
+            _check_quality_profile_contract(fill, [])
+        except ValueError as exc:
+            assert "bogus" in str(exc) and profile in str(exc)
+        else:
+            raise AssertionError(f"{profile} 未登记键应拒渲染")
+
+
+def test_profile_contract_rejects_generic_industry_checks_but_warns_legacy():
+    from validate_audit import _check_quality_profile_contract
+    fill = v2_fill(date="2026-11-01")
+    fill["score_inputs"]["1D"]["industry_checks"] = {"order_cancellation": True}
+    try:
+        _check_quality_profile_contract(fill, [])
+    except ValueError as exc:
+        assert "industry_checks" in str(exc)
+    else:
+        raise AssertionError("通用 F 错用 industry_checks 应拒渲染")
+    fill["date"] = "2026-10-24"
+    warns = []
+    _check_quality_profile_contract(fill, warns)
+    assert "industry_checks" in "\n".join(warns)
+
+
+def test_profile_contract_rejects_unknown_industry_flag():
+    from validate_audit import _check_quality_profile_contract
+    fill = v2_fill(date="2026-11-01", industry_profile="financial_bank")
+    fill["score_inputs"]["1D"] = {
+        "industry_checks": {"npl_trend": True, "provision_trend": False,
+                            "loan_migration": False, "cet1": False, "npl_tend": True}}
+    try:
+        _check_quality_profile_contract(fill, [])
+    except ValueError as exc:
+        assert "npl_tend" in str(exc)
+    else:
+        raise AssertionError("未登记行业 flag 应拒渲染")
+
+
+def test_profile_contract_causal_group_guard():
+    from validate_audit import _check_quality_profile_contract
+    from quality_rules import F_ITEM_IDS
+    fill = v2_fill(date="2026-11-01")
+    spec = fill["score_inputs"]["1D"]
+    spec["f_items"] = {name: False for name in F_ITEM_IDS}
+    spec["f_causal_groups"] = {"all_items": list(F_ITEM_IDS)}
+    spec["f_causal_evidence"] = {"all_items": "公司2025年报披露同一事件影响9项"}
+    try:
+        _check_quality_profile_contract(fill, [])
+    except ValueError as exc:
+        assert "全部九项" in str(exc)
+    else:
+        raise AssertionError("全部九项合并应拒渲染")
+    spec["f_causal_groups"] = {"asset_injection": ["long_debt_down", "no_dilution"]}
+    spec["f_causal_evidence"] = {"asset_injection": "公司2025年报披露同一资产注入增加债务10亿元并增发"}
+    warns = []
+    _check_quality_profile_contract(fill, warns)
+    assert warns == []
+
+
+def test_score_detail_industry_flags_use_risk_semantics_and_labels():
+    import quality_rules as qr
+    spec = {"industry_checks": {"npl_trend": True, "provision_trend": False,
+                                "loan_migration": False, "cet1": False}}
+    result = qr.evaluate_dimension("1D", spec, {"industry_profile": "financial_bank",
+                                                "report_date": "2026-11-01"})
+    text = R._build_score_detail("1D", result, spec)
+    assert "不良贷款趋势：未通过（风险命中）" in text
+    assert "拨备覆盖趋势：通过（风险未命中）" in text
+
+
+def test_immaterial_red_flag_is_visible_but_not_a_conclusion_warning():
+    fill = v2_fill(date="2026-11-01")
+    spec = fill["score_inputs"]["1D"]
+    spec["red_flags"]["receivables"] = True
+    spec["red_flag_materiality"] = {"receivables": False}
+    spec["red_flag_materiality_evidence"] = {
+        "receivables": {"scale": "涉及应收0.8亿元", "source": "公司2025年报"}}
+    sc = R.compute_scores(fill)
+    assert sc["financial_red_flags"] == []
+    text = R._build_score_detail("1D", sc["dimension_results"]["1D"], spec)
+    assert "应收恶化：命中但不扣分" in text
+
+
+def test_cash_quality_joins_profit_authenticity_warning_with_legacy_migration():
+    from validate_html import _check_red_flag_conclusion
+    fill = v2_fill(date="2026-11-01")
+    fill["score_inputs"]["1D"]["f_items"]["cash_quality_ok"] = False
+    fill["score_inputs"]["1D"]["red_flags"]["receivables"] = True
+    sc = R.compute_scores(fill)
+    assert len(sc["financial_red_flags"]) == 2
+    try:
+        _check_red_flag_conclusion(fill, sc, [])
+    except ValueError as exc:
+        assert "利润真实性存疑" in str(exc)
+    else:
+        raise AssertionError("现金含量与应收双命中应要求结论警示")
+    fill["date"] = "2026-10-24"
+    warns = []
+    _check_red_flag_conclusion(fill, sc, warns)
+    assert "利润真实性存疑" in "\n".join(warns)
+
+
+def test_industry_warning_uses_financial_risk_wording_and_accepts_legacy_phrase():
+    from validate_html import _check_red_flag_conclusion
+    fill = v2_fill(date="2026-11-01", industry_profile="financial_bank")
+    fill["score_inputs"]["1D"] = {
+        "industry_checks": {"npl_trend": True, "provision_trend": True,
+                            "loan_migration": False, "cet1": False}}
+    fill["score_inputs"]["1B"] = {
+        "cost_strength": "strong", "pricing_strength": "neutral", "bargaining_status": "正常",
+        "customer_concentration": 0.1, "supplier_concentration": 0.1}
+    fill["score_inputs"]["1F"] = {
+        "return_metric": "ROE_NORMALIZED", "normalized_return": 0.12, "coe": 0.08,
+        "dupont_driver": "净利率"}
+    sc = R.compute_scores(fill)
+    assert sc["red_total"] == 0 and len(sc["financial_red_flags"]) == 2
+    try:
+        _check_red_flag_conclusion(fill, sc, [])
+    except ValueError as exc:
+        assert "财务风险多项命中" in str(exc)
+    else:
+        raise AssertionError("行业双命中应要求财务风险警示")
+    for phrase in ("财务风险多项命中", "利润真实性存疑"):
+        fill["conclusion_html"] = phrase + "：资产质量两项恶化。" + fill["conclusion_html"]
+        _check_red_flag_conclusion(fill, sc, [])
+        fill["conclusion_html"] = fill["conclusion_html"].replace(phrase + "：资产质量两项恶化。", "", 1)
+
+
+def test_internet_red_flag_summary_uses_chinese_label_not_bool():
+    fill = v2_fill(industry_profile="internet_platform")
+    fill["score_inputs"]["1B"] = {
+        "cost_strength": "strong", "pricing_strength": "strong", "bargaining_status": "正常",
+        "customer_concentration": 0.1, "supplier_concentration": 0.1}
+    fill["score_inputs"]["1D"]["red_flags"] = {
+        "adjusted_profit_divergence": True, "investment_impairment": False, "goodwill": False}
+    sc = R.compute_scores(fill)
+    assert sc["red_deductions"][0]["item"] == "经调整利润偏离"
+    summary = R.build_score_summary(sc)
+    assert "经调整利润偏离" in summary and "True" not in summary
+
+
+def _risk_check(fill, home, rule_id, should_pass):
+    fill["risk_items"] = [_risk_item(name="测试风险", rule_id=rule_id, home=home,
+                                    evidence="与当前结构化事实一致的风险证据")]
+    if should_pass:
+        assert "测试风险" in R.build_risk_register(fill)
+    else:
+        assert "未实际命中" in _risk_error(fill)
+
+
+def test_risk_active_checks_all_nine_dimensions():
+    fill = v2_fill(date="2026-11-01")
+    fill["score_inputs"]["1A"]["demand_decline_2y"] = True
+    _risk_check(fill, "1A", "1A.MATURE.CHECK", True)
+    fill = v2_fill(date="2026-11-01")
+    _risk_check(fill, "1A", "1A.MATURE.CHECK", False)
+
+    fill = v2_fill(date="2026-11-01")
+    fill["score_inputs"]["1B"].update(cost_quartile=2, price_transmission=False)
+    _risk_check(fill, "1B", "1B.VALUE_CHAIN", True)
+    fill = v2_fill(date="2026-11-01")
+    _risk_check(fill, "1B", "1B.VALUE_CHAIN", False)
+
+    fill = v2_fill(date="2026-11-01")
+    fill["score_inputs"]["1C"]["moats"] = fill["score_inputs"]["1C"]["moats"][:1]
+    _risk_check(fill, "1C", "1C.MOAT.COUNT", True)
+    fill = v2_fill(date="2026-11-01")
+    _risk_check(fill, "1C", "1C.MOAT.COUNT", False)
+    fill["score_inputs"]["1C"]["moats"][0]["trend"] = "narrowing"
+    _risk_check(fill, "1C", "1C.MOAT.1", True)
+
+    fill = v2_fill(date="2026-11-01")
+    fill["score_inputs"]["1D"]["f_items"]["profit_positive"] = False
+    _risk_check(fill, "1D", "1D.PROFIT_POSITIVE", True)
+    fill = v2_fill(date="2026-11-01")
+    _risk_check(fill, "1D", "1D.PROFIT_POSITIVE", False)
+
+    fill = v2_fill(date="2026-11-01")
+    fill["score_inputs"]["1E"]["penalties"] = True
+    _risk_check(fill, "1E", "1E.PENALTIES", True)
+    fill = v2_fill(date="2026-11-01")
+    _risk_check(fill, "1E", "1E.DIVIDEND", False)
+
+    fill = v2_fill(date="2026-11-01")
+    fill["score_inputs"]["1F"]["roic"] = 0.04
+    _risk_check(fill, "1F", "1F.ROIC_WACC", True)
+    fill = v2_fill(date="2026-11-01")
+    _risk_check(fill, "1F", "1F.ROIC_WACC", False)
+
+    fill = v2_fill(date="2026-11-01")
+    fill["score_inputs"]["3A"].update(growth_lo=-1, driver_status="未验证")
+    _risk_check(fill, "3A", "3A.GROWTH", True)
+    fill = v2_fill(date="2026-11-01")
+    _risk_check(fill, "3A", "3A.GROWTH", False)
+
+    fill = v2_fill(date="2026-11-01")
+    fill["score_inputs"]["3B"] = {"visibility": [
+        {"name": "机场与线上渠道", "level": "趋势平缓", "contribution": 1, "value": "Q3收入-4.66%"}]}
+    _risk_check(fill, "3B", "3B.VISIBILITY.机场与线上渠道", True)
+    fill = v2_fill(date="2026-11-01")
+    _risk_check(fill, "3B", "3B.PROJECT.核心项目", False)
+
+    fill = v2_fill(date="2026-11-01")
+    fill["score_inputs"]["3C"]["events"] = fill["score_inputs"]["3C"]["events"][:1]
+    _risk_check(fill, "3C", "3C.EVENT_COUNT", True)
+    fill = v2_fill(date="2026-11-01")
+    _risk_check(fill, "3C", "3C.EVENT_COUNT", False)
+
+
+def test_risk_active_rejects_positive_custom_and_not_applicable():
+    fill = v2_fill(date="2026-11-01")
+    fill["score_inputs"]["1C"]["custom"] = {
+        "id": "1C.CUSTOM.TEST", "points": 1, "reason": "额外优势", "evidence": "公开证据"}
+    _risk_check(fill, "1C", "1C.CUSTOM.TEST", False)
+    fill["score_inputs"]["1C"]["custom"]["points"] = -1
+    _risk_check(fill, "1C", "1C.CUSTOM.TEST", True)
+
+    fill = v2_fill(date="2026-11-01", industry_profile="financial_insurance")
+    fill["score_inputs"]["1B"] = {
+        "cost_strength": "strong", "pricing_strength": "strong", "bargaining_status": "正常",
+        "customer_concentration": 0.1, "supplier_concentration": 0.1}
+    fill["score_inputs"]["1F"] = {
+        "return_metric": "ROE_NORMALIZED", "normalized_return": 0.12, "coe": 0.08,
+        "dupont_driver": "净利率"}
+    fill["score_inputs"]["1D"] = {
+        "industry_checks": {"solvency": False, "combined_ratio": "not_applicable",
+                            "reserve": False, "investment_assumption": False},
+        "industry_check_evidence": {"combined_ratio": "纯寿险无财险综合成本率"}}
+    _risk_check(fill, "1D", "1D.NOT_APPLICABLE", False)
+
+
+def test_risk_active_covers_every_industry_checklist_profile():
+    from quality_rules import PROFILE_FLAGS, PROFILE_KIND
+    for profile in ("financial_bank", "financial_insurance", "financial_broker",
+                    "realestate_development", "pharma_pipeline", "pre_profit", "turnaround"):
+        fill = v2_fill(date="2026-11-01", industry_profile=profile)
+        if PROFILE_KIND[profile] == "industry_checklist" and profile.startswith("financial_"):
+            fill["score_inputs"]["1B"] = {
+                "cost_strength": "strong", "pricing_strength": "strong", "bargaining_status": "正常",
+                "customer_concentration": 0.1, "supplier_concentration": 0.1}
+            fill["score_inputs"]["1F"] = {
+                "return_metric": "ROE_NORMALIZED", "normalized_return": 0.12, "coe": 0.08,
+                "dupont_driver": "净利率"}
+        flags = {name: False for name in PROFILE_FLAGS[profile]}
+        flag = sorted(flags)[0]
+        flags[flag] = True
+        fill["score_inputs"]["1D"] = {"industry_checks": flags}
+        rule_id = f"1D.{profile.upper()}.{flag.upper()}"
+        _risk_check(fill, "1D", rule_id, True)
+        flags[flag] = False
+        _risk_check(fill, "1D", rule_id, False)
+
+
+def test_risk_active_runway_requires_no_secured_financing():
+    for secured, expected in ((False, True), (True, False), (None, False)):
+        fill = v2_fill(date="2026-11-01", industry_profile="pre_profit")
+        fill["score_inputs"]["1D"] = {"cash_runway_months": 12, "financing_secured": secured}
+        _risk_check(fill, "1D", "1D.CASH_RUNWAY", expected)
+    fill = v2_fill(date="2026-11-01", industry_profile="pre_profit")
+    fill["score_inputs"]["1D"] = {"cash_runway_months": 30, "financing_secured": False}
+    _risk_check(fill, "1D", "1D.CASH_RUNWAY", False)
+
+
+def test_risk_active_legacy_fill_warns_instead_of_rejecting():
+    fill = v2_fill(date="2026-10-24")
+    fill["risk_items"] = [_risk_item(name="资本回报低于资本成本", rule_id="1F.ROIC_WACC", home="1F")]
+    warns = []
+    html = R.build_risk_register(fill, warns=warns)
+    assert "资本回报低于资本成本" in html and "未实际命中" in "\n".join(warns)
+
+
+def test_monitor_hit_requires_unscored_reason():
+    fill = v2_fill(date="2026-11-01", risk_items=[
+        _risk_item(name="观察性风险", rule_id=None, home="dashboard", impact="monitor")])
+    assert "unscored_reason" in _risk_error(fill)
+    fill["risk_items"][0]["unscored_reason"] = "尚未达到任何评分阈值，仅作后续验证"
+    html = R.build_risk_register(fill)
+    assert "未计分原因：尚未达到任何评分阈值，仅作后续验证" in html
+    fill["date"] = "2026-10-24"
+    fill["risk_items"][0].pop("unscored_reason")
+    warns = []
+    R.build_risk_register(fill, warns=warns)
+    assert "unscored_reason" in "\n".join(warns)
+
+
+def test_catalyst_revaluation_requires_expectation_gap_and_observable():
+    from validate_audit import _check_catalyst_evidence
+    fill = v2_fill(date="2026-11-01")
+    for event in fill["score_inputs"]["3C"]["events"]:
+        event.pop("expectation_gap", None)
+        event.pop("observable", None)
+    try:
+        _check_catalyst_evidence(fill, [])
+    except ValueError as exc:
+        assert "expectation_gap" in str(exc) and "observable" in str(exc)
+    else:
+        raise AssertionError("重估催化缺证据应拒渲染")
+    for index, event in enumerate(fill["score_inputs"]["3C"]["events"]):
+        event["expectation_gap"] = f"市场尚未计入第{index + 1}个项目的盈利贡献"
+        event["observable"] = "按期投产并产生可核验收入后上调正常化利润"
+    warns = []
+    _check_catalyst_evidence(fill, warns)
+    assert warns == []
+    fill["score_inputs"]["3C"]["events"].append({
+        "name": "年报验证", "month": "2027-03", "revaluation": False,
+        "evidence": "公司定期报告披露计划"})
+    _check_catalyst_evidence(fill, warns)
+    assert warns == []
+
+
+def test_catalyst_evidence_legacy_warns_and_all_profiles_share_gate():
+    from validate_audit import _check_catalyst_evidence
+    from quality_rules import PROFILE_KIND
+    fill = v2_fill()
+    for event in fill["score_inputs"]["3C"]["events"]:
+        event.pop("expectation_gap", None)
+        event.pop("observable", None)
+    warns = []
+    _check_catalyst_evidence(fill, warns)
+    assert "expectation_gap" in "\n".join(warns)
+    for profile in PROFILE_KIND:
+        fill = v2_fill(date="2026-11-01", industry_profile=profile)
+        for event in fill["score_inputs"]["3C"]["events"]:
+            event.pop("expectation_gap", None)
+            event.pop("observable", None)
+        try:
+            _check_catalyst_evidence(fill, [])
+        except ValueError as exc:
+            assert "expectation_gap" in str(exc)
+        else:
+            raise AssertionError(f"{profile} 不应绕过催化剂证据门禁")
+
+
+def test_nested_weights_are_rejected_for_new_fill_and_warn_legacy():
+    from validate_typing import _check_typing_v2
+    nested = {"L1": {"1A": 14, "1B": 12, "1C": 18, "1D": 14, "1E": 20, "1F": 22},
+              "L3": {"3A": 40, "3B": 35, "3C": 25}}
+    fill = v2_fill(date="2026-11-01", weights=nested)
+    try:
+        _check_typing_v2(fill, [])
+    except ValueError as exc:
+        assert "平铺" in str(exc) and "L1" in str(exc)
+    else:
+        raise AssertionError("嵌套权重应拒渲染")
+    fill["date"] = "2026-10-24"
+    warns = []
+    _check_typing_v2(fill, warns)
+    assert "平铺" in "\n".join(warns)
+
+
+def test_layer_share_rejects_unknown_keys():
+    from validate_typing import _check_typing_v2
+    fill = v2_fill(date="2026-11-01", layer_share={"L1": 70, "L3": 30, "L4": 0})
+    try:
+        _check_typing_v2(fill, [])
+    except ValueError as exc:
+        assert "layer_share" in str(exc) and "L4" in str(exc)
+    else:
+        raise AssertionError("layer_share 未知键应拒渲染")
+
+
+def test_nondefault_types_require_weights_and_layer_share():
+    from validate_typing import _check_typing_v2
+    cases = [
+        ("稳定价值/金融（银行）", "financial_bank", {"L1": 85, "L3": 15}, None),
+        ("成熟/停滞", "generic", {"L1": 80, "L3": 20}, None),
+        ("未盈利/管线", "pre_profit", {"L1": 75, "L3": 25}, None),
+        ("困境反转", "turnaround", {"L1": 70, "L3": 30}, None),
+        ("成长型", "generic", {"L1": 60, "L3": 40}, "high"),
+    ]
+    for stock_type, profile, layer_share, tier in cases:
+        fill = v2_fill(date="2026-11-01", stock_type=stock_type, industry_profile=profile,
+                       growth_tier=tier, layer_share=layer_share)
+        fill.pop("weights", None)
+        try:
+            _check_typing_v2(fill, [])
+        except ValueError as exc:
+            assert "weights" in str(exc)
+        else:
+            raise AssertionError(f"{stock_type} 缺 weights 应拒渲染")
+    fill = v2_fill(date="2026-11-01", stock_type="成熟/停滞", industry_profile="generic",
+                   weights={"1A": 20, "1B": 10, "1C": 20, "1D": 18, "1E": 16, "1F": 16,
+                            "3A": 30, "3B": 35, "3C": 35})
+    fill.pop("layer_share", None)
+    try:
+        _check_typing_v2(fill, [])
+    except ValueError as exc:
+        assert "layer_share" in str(exc)
+    else:
+        raise AssertionError("非默认层占比缺失应拒渲染")
+
+
+def test_default_type_does_not_require_weight_overrides():
+    from validate_typing import _check_typing_v2
+    fill = v2_fill(date="2026-11-01", stock_type="周期股", industry_profile="generic")
+    fill.pop("weights", None)
+    fill.pop("layer_share", None)
+    warns = []
+    _check_typing_v2(fill, warns)
+    assert "weights" not in "\n".join(warns)
+
+
+def test_missing_consensus_wording_does_not_claim_no_sell_side_coverage():
+    fill = minimal_fill()
+    calc = R.compute_valuation(fill)
+    inputs = dict(fill["valuation_inputs"])
+    vc = R.compute_valuation_score(calc, inputs)
+    card = R.build_valuation_process_card(calc, vc, inputs)
+    assert "未取得可核验的一致预期均值" in card
+    assert "无卖方覆盖" not in card
+
+
+def test_runway_is_counted_once_when_checklist_and_months_coexist():
+    fill = v2_fill(industry_profile="pre_profit")
+    fill["score_inputs"]["1D"] = {
+        "industry_checks": {"cash_runway": True, "financing_gap": False},
+        "cash_runway_months": 12, "financing_secured": False}
+    sc = R.compute_scores(fill)
+    assert sum(item["item"] == "现金跑道不足" for item in sc["financial_red_flags"]) == 1
+
+
+def test_f_hits_uses_causal_adjusted_count_for_risk_activity():
+    fill = v2_fill(date="2026-11-01")
+    for name in ("long_debt_down", "no_dilution"):
+        fill["score_inputs"]["1D"]["f_items"][name] = False
+    fill["score_inputs"]["1D"]["f_causal_groups"] = {
+        "asset_injection": ["long_debt_down", "no_dilution"]}
+    fill["score_inputs"]["1D"]["f_causal_evidence"] = {
+        "asset_injection": "公司2025年报披露同一资产注入增加债务10亿元并增发"}
+    assert R.compute_scores(fill)["adj_scores"]["1D"] == 9
+    _risk_check(fill, "1D", "1D.F.HITS", False)
+
+
+def test_growth_negative_is_active_even_without_tam_and_penetration():
+    fill = v2_fill(date="2026-11-01")
+    fill["score_inputs"]["1A"] = {"stage": "growth", "growth": -5, "policy": "neutral",
+                                  "tam": None, "penetration": None}
+    _risk_check(fill, "1A", "1A.GROWTH.CHECK", True)
+
+
+def test_mature_policy_aliases_are_normalized_for_risk_activity():
+    for policy in ("偏负", "suppressed"):
+        fill = v2_fill(date="2026-11-01")
+        fill["score_inputs"]["1A"]["policy"] = policy
+        _risk_check(fill, "1A", "1A.MATURE.CHECK", True)
+
+
+def test_value_chain_double_weak_is_active_without_concentration():
+    fill = v2_fill(date="2026-11-01")
+    fill["score_inputs"]["1B"].update(cost_quartile=4, price_transmission=False,
+                                      customer_concentration=None, supplier_concentration=None)
+    _risk_check(fill, "1B", "1B.VALUE_CHAIN", True)
+
+
+def test_non_mapping_weights_raise_value_error_during_scoring():
+    fill = v2_fill(weights=["1A"])
+    try:
+        R.compute_scores(fill)
+    except ValueError as exc:
+        assert "平铺" in str(exc)
+    else:
+        raise AssertionError("列表权重应给出 ValueError 而非裸 AttributeError")

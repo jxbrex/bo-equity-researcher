@@ -41,7 +41,7 @@ from scoring import (
     compute_valuation, compute_valuation_score, build_dcf_cards, build_regime_note,
     _edge_info, build_edge_upgrade_rows, _matrix_applies,
 )
-from quality_rules import F_ITEM_IDS
+from quality_rules import F_ITEM_IDS, _liquidity_band, _f_hits_with_causal_groups, POLICY_ALIASES
 from charts_base import _fmt_px, _prev_track_rows, _SOURCE_BANNED_RE
 from charts_scenario import (
     build_scenario_spectrum, build_scenario_block, build_peers_plot,
@@ -64,7 +64,7 @@ from validate import validate_content
 
 # 渲染器版本：嵌入输出 HTML 尾部注释，事后可 grep 验证报告确由本脚本渲染
 # （防"render 报错后手写全文 HTML 绕行"，巨石 2026-08-23 实证）
-RENDERER_VERSION = "v0.12.2"
+RENDERER_VERSION = "v0.12.3"
 
 # Windows 文件名非法字符：\ / : * ? " < > | 及 ASCII 控制字符（\x00-\x1f）
 _WIN_ILLEGAL = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
@@ -297,23 +297,93 @@ def _build_context(fill: dict, calc: dict):
 
 
 def _risk_rule_is_active(sc, home, rule_id):
-    if home != "1D":
+    dimension = sc["dimension_results"][home]
+    step = next(s for s in dimension["rule_steps"] if s["id"] == rule_id)
+    delta = step.get("delta") or 0
+    if delta < 0:
         return True
-    f_names = {value: key for key, value in F_ITEM_IDS.items()}
-    if rule_id in f_names:
-        return sc["score_inputs"]["1D"].get("f_items", {}).get(f_names[rule_id]) is False
-    if rule_id.startswith("1D.RED."):
-        return any(step["id"] == rule_id and ((step.get("delta") or 0) < 0
-                   or rule_id.endswith(".IMMATERIAL"))
-                   for step in sc["dimension_results"]["1D"]["rule_steps"])
-    checks = sc["score_inputs"]["1D"].get("industry_checks") or {}
-    flag = rule_id.rsplit(".", 1)[-1].lower()
-    if flag in checks:
-        return checks[flag] is True
-    return True
+    if delta > 0:
+        return False
+    if "UNKNOWN" in rule_id or rule_id.endswith(".MISSING") or rule_id == "1D.NOT_APPLICABLE":
+        return False
+    if "CUSTOM" in rule_id or (home == "1D" and rule_id.startswith(("1D.G.", "1D.CAUSAL_GROUP."))):
+        return False
+    spec = sc["score_inputs"][home]
+    if home == "1D":
+        f_names = {value: key for key, value in F_ITEM_IDS.items()}
+        if rule_id in f_names:
+            return (spec.get("f_items") or {}).get(f_names[rule_id]) is False
+        if rule_id.startswith("1D.RED."):
+            return rule_id.endswith(".IMMATERIAL")
+        checks = spec.get("industry_checks") or {}
+        flag = rule_id.rsplit(".", 1)[-1].lower()
+        if flag in checks:
+            return checks[flag] is True
+        if rule_id == "1D.F.HITS":
+            return _f_hits_with_causal_groups(spec) < 8
+        if rule_id == "1D.LIQUIDITY":
+            return _liquidity_band(spec["liquidity"]) != "A"
+        if rule_id == "1D.CASH_RUNWAY":
+            return spec.get("cash_runway_months") < 18 and spec.get("financing_secured") is False
+        return False
+    if home == "1A":
+        if rule_id == "1A.LIFECYCLE.DECLINE":
+            return True
+        if rule_id == "1A.MATURE.CHECK":
+            policy = POLICY_ALIASES.get(str(spec.get("policy") or "").lower())
+            return (spec.get("demand_decline_2y") is True or spec.get("substitution_low") is False
+                    or spec.get("structure_ok") is False or spec.get("price_mechanism_ok") is False
+                    or policy in ("mixed", "negative"))
+        if rule_id == "1A.GROWTH.CHECK":
+            policy = POLICY_ALIASES.get(str(spec.get("policy") or "").lower())
+            if spec.get("growth") < 0 or policy == "negative":
+                return True
+            if spec.get("tam") is None or spec.get("penetration") is None:
+                return False
+            return dimension["band"] != "A"
+        return False
+    if home == "1B":
+        if rule_id in ("1B.VALUE_CHAIN", "1B.INDUSTRY_AXES"):
+            return dimension["base"] < 9
+        return False
+    if home == "1C":
+        if rule_id == "1C.MOAT.COUNT":
+            valid = [m for m in spec.get("moats") or [] if m.get("verified") and not m.get("rhetoric")]
+            return len(valid) < 2
+        if rule_id.startswith("1C.MOAT."):
+            return step.get("trend") == "narrowing"
+        if rule_id == "1C.PRESSURE.FAIL":
+            return True
+        return False
+    if home == "1E":
+        return False
+    if home == "1F":
+        if rule_id in ("1F.ROIC_WACC", "1F.NORMALIZED_RETURN_COE"):
+            return dimension["band"] == "D"
+        if rule_id == "1F.CASH_RUNWAY":
+            return spec.get("cash_runway_months") < 18 and spec.get("financing_secured") is False
+        return False
+    if home == "3A":
+        return rule_id == "3A.GROWTH" and dimension["band"] != "A"
+    if home == "3B":
+        if rule_id.startswith("3B.PROJECT."):
+            name = rule_id.removeprefix("3B.PROJECT.")
+            item = next((x for x in spec.get("projects") or [] if x.get("name") == name), None)
+            return bool(item and item.get("stage") not in ("已投产", "试生产"))
+        if rule_id.startswith("3B.VISIBILITY."):
+            name = rule_id.removeprefix("3B.VISIBILITY.")
+            item = next((x for x in spec.get("visibility") or [] if x.get("name") == name), None)
+            return bool(item and (item.get("level") != "合约级"
+                                  or (item.get("level") != "纯叙事" and item.get("value") is None)))
+        if rule_id in ("3B.PRIMARY_FALLBACK", "3B.PRIMARY_GROUP"):
+            return dimension["base"] < 9 or dimension.get("cap") is not None
+        return False
+    if home == "3C":
+        return rule_id == "3C.EVENT_COUNT" and dimension["band"] != "A"
+    return False
 
 
-def build_risk_register(fill: dict, sc: dict = None) -> str:
+def build_risk_register(fill: dict, sc: dict = None, warns: list = None) -> str:
     if sc is None:
         sc = compute_scores(fill)
     if sc.get("quality_version") != 2:
@@ -326,6 +396,13 @@ def build_risk_register(fill: dict, sc: dict = None) -> str:
     impact_names = {"quality": "质量", "valuation": "估值", "timing": "时机", "monitor": "仅跟踪"}
     status_names = {"hit": "命中", "watch": "观察", "unknown": "未核实"}
     active_ids, hits, rows = set(), [], []
+
+    def _migrate_or_raise(message):
+        if str(fill.get("date") or "") >= "2026-11-01":
+            raise ValueError(message)
+        if warns is not None:
+            warns.append(message)
+
     for index, item in enumerate(items, 1):
         prefix = f"risk_items[{index}]"
         if not isinstance(item, dict):
@@ -338,6 +415,9 @@ def build_risk_register(fill: dict, sc: dict = None) -> str:
                                       ("impact", impact, impact_names), ("home", home, home_names)):
             if value not in allowed:
                 raise ValueError(f"{prefix}.{field} 非法值 {value!r}，可选 {sorted(allowed)}")
+        unscored_reason = str(item.get("unscored_reason") or "").strip()
+        if impact == "monitor" and status == "hit" and not unscored_reason:
+            _migrate_or_raise(f"{prefix} 仅跟踪命中必须填写 unscored_reason，说明为何不计分")
         raw_rule_id = item.get("rule_id")
         if raw_rule_id is not None and not isinstance(raw_rule_id, str):
             raise ValueError(f"{prefix}.rule_id 必须是字符串或 null")
@@ -354,7 +434,14 @@ def build_risk_register(fill: dict, sc: dict = None) -> str:
             if rule_id not in step_ids:
                 raise ValueError(f"{prefix}.rule_id {rule_id} 未出现在 {home} 实际得分链中")
             if not _risk_rule_is_active(sc, home, rule_id):
-                raise ValueError(f"{prefix}.rule_id {rule_id} 未实际命中 {home} 的负面事实")
+                message = f"{prefix}.rule_id {rule_id} 未实际命中 {home} 的负面事实"
+                checks = sc["score_inputs"]["1D"].get("industry_checks") or {}
+                legacy_gate = home == "1D" and (
+                    rule_id in F_ITEM_IDS.values() or rule_id.startswith("1D.RED.")
+                    or rule_id.rsplit(".", 1)[-1].lower() in checks)
+                if legacy_gate:
+                    raise ValueError(message)
+                _migrate_or_raise(message)
         if status == "hit":
             hits.append(item)
             if rule_id:
@@ -364,9 +451,12 @@ def build_risk_register(fill: dict, sc: dict = None) -> str:
         reference = home_names[home]
         rule_attr = (f' data-rule-id="{_esc(rule_id)}"'
                      if impact == "quality" and status == "hit" and rule_id else "")
+        evidence_html = _esc(item["evidence"].strip())
+        if unscored_reason:
+            evidence_html += f'<br><span class="source">未计分原因：{_esc(unscored_reason)}</span>'
         rows.append(
             f'<tr{rule_attr}><td>{_esc(item["name"].strip())}</td>'
-            f'<td>{_esc(item["evidence"].strip())}<br><span class="source">来源：{_esc(item["source"].strip())}</span></td>'
+            f'<td>{evidence_html}<br><span class="source">来源：{_esc(item["source"].strip())}</span></td>'
             f'<td>{impact_names[impact]}｜{status_names[status]}</td>'
             f'<td>{_esc(reference)}</td><td>{_esc(item["trigger"].strip())}</td></tr>')
     red_review = str(fill.get("red_review") or "").strip()
@@ -875,7 +965,7 @@ def _preflight(fill_path: str):
             if missing:
                 raise ValueError(f"{exc}\nv2 缺少维度锚点 data-dim: {missing}") from exc
             raise
-        risk_register_html = build_risk_register(fill, sc)
+        risk_register_html = build_risk_register(fill, sc, audit_warnings)
         if missing:
             raise ValueError(f"v2 缺少维度锚点 data-dim: {missing}")
         l1_html = _inject_dimension_scores(

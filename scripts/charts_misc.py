@@ -120,7 +120,7 @@ def build_growth_plot(fill: dict) -> str:
         if diffs:
             note += '；预期差（本文中枢−一致预期）：' + "；".join(diffs)
     else:
-        note += '；无当前卖方净利一致预期，不画共识点、不计算预期差'
+        note += '；未取得可核验的一致预期，不画共识点、不计算预期差'
     note += '；全图为中性色，红涨绿跌仅用于股价方向'
     parts.append(_chart_source("利润增长", source, note))
     return "".join(parts)

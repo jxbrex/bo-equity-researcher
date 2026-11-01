@@ -176,7 +176,70 @@ def test_growth_consensus_rejects_unverifiable_cumulative_year_ranges():
         warns = []
         _check_growth_consistency(fill, warns)
         out = "\n".join(warns)
-        assert "无法按单年一致预期对账" in out and "基础情景换算增速" in out
+        assert "无法按单年一致预期对账" in out and "基础情景换算增速" not in out
+
+
+def test_trigger_decidability_examples():
+    from validate_charts import _check_trigger_decidability
+    for text in ("需求高企", "毛利率承压", "出货失速", "储能超级周期"):
+        fill = {"valuation": {"scenarios": [{"key": "base", "trigger": text}]}}
+        warns = []
+        _check_trigger_decidability(fill, warns)
+        assert any("可判定" in w for w in warns), text
+    for text in ("DRAM 合约价环比转负", "汽车月交付站稳 4.5 万辆", "存储涨价持续至 2027Q1",
+                 "库存环比去化", "产品价格上涨", "新机发布"):
+        fill = {"valuation": {"scenarios": [{"key": "base", "trigger": text}]}}
+        warns = []
+        _check_trigger_decidability(fill, warns)
+        assert not warns, (text, warns)
+
+
+def test_growth_forecast_year_coverage_and_merged_shape():
+    from validate_audit import _check_growth_consistency
+
+    def make(label):
+        return minimal_fill(
+            fin_trend={"years": ["2023", "2024", "2025"], "panels": [
+                {"title": "盈利", "bars": [{"name": "归母净利", "unit": "亿", "values": [80.0, 90.0, 100.0]}]}]},
+            growth_plot={"hist": [{"y": "2023", "np": 10.0}, {"y": "2024", "np": 11.0},
+                                  {"y": "2025", "np": 12.0}],
+                         "fcst": [{"y": label, "np_lo": -50, "np_hi": 50}]})
+
+    for label in ("2026E", "2027E", "2026-27E", "2026-2027E"):
+        warns = []
+        _check_growth_consistency(make(label), warns)
+        assert not any("未覆盖" in w or "合并行" in w or "基础情景换算增速" in w
+                       for w in warns), (label, warns)
+    for label, expected in (("2028E", "未覆盖"), ("2025-27E", "合并行"), ("2026-28E", "合并行")):
+        warns = []
+        _check_growth_consistency(make(label), warns)
+        assert any(expected in w for w in warns), (label, expected, warns)
+
+
+def test_gap_prose_multi_org_single_paragraph():
+    from validate_html import _check_gap_prose_form
+    orgs = {"dims": [{"street": [{"org": "中金"}, {"org": "交银国际"}, {"org": "国泰海通"}]}]}
+    body = ("中金（08-29）预计利润上修，交银国际（08-31）给出更高价格，"
+            "国泰海通（09-04）强调产能释放，三组券商研报假设与本文逐项比较，"
+            "包含数字、日期、预测区间和分歧来源。") * 4
+    fill = minimal_fill(gap_tier="A", gap_plot=orgs, gap_html=f"<p>{body}</p>")
+    warns = []
+    _check_gap_prose_form(fill, warns)
+    assert any("多机构" in w for w in warns), warns
+
+    good = minimal_fill(gap_tier="A", gap_plot=orgs,
+                        gap_html="<ul><li>中金（08-29）假设</li><li>交银国际（08-31）假设</li>"
+                                 "<li>国泰海通（09-04）假设</li></ul>")
+    warns = []
+    _check_gap_prose_form(good, warns)
+    assert not warns, warns
+
+    event_text = ("公司（08-29）披露中报，（09-30）发布分红，（10-01）公告产能进展，"
+                  "均为公司事件时间线，上述事项符合预期。") * 4
+    event = minimal_fill(gap_tier="A", gap_html=f"<p>{event_text}</p>")
+    warns = []
+    _check_gap_prose_form(event, warns)
+    assert not warns, warns
 
 
 def test_growth_consensus_requires_verifiable_source_and_presence():

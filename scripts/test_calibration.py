@@ -54,7 +54,7 @@ def test_collect_reports_walks_subdirs():
     import tempfile
     real_extract = sc.E.extract
     sc.E.extract = lambda path: {"prev": {"quality": 6.7, "valuation": 7.4, "date": "2026-08-01",
-                                          "quality_version": 2}, "code": "600309"}
+                                          "target_range": "10-12", "quality_version": 2}, "code": "600309"}
     try:
         with tempfile.TemporaryDirectory() as d:
             sub = os.path.join(d, "2026-08")
@@ -68,6 +68,29 @@ def test_collect_reports_walks_subdirs():
     assert len(reps) == 1, f"子目录样本被漏: {reps}"
     assert reps[0]["code"] == "600309" and reps[0]["quality"] == 6.7
     assert reps[0]["quality_version"] == 2
+    assert reps[0]["target_range"] == "10-12"
+
+
+def test_fetch_return_fixed_horizons_and_nominal_price(monkeypatch):
+    rows = [{"trade_date": f"202601{i + 1:02d}", "adj_close": 10.0 + i,
+             "close": 100.0 + i} for i in range(31)]
+    monkeypatch.setattr(sc, "_daily_adj_rows", lambda *_args: rows)
+    result = sc.fetch_return("600000", "2026-01-01", "20261231")
+    assert result["entry_date"] == "20260101"
+    term20 = result["terms"][20]
+    assert term20["matured"] is True and term20["exit_date"] == "20260121"
+    assert term20["ret"] == 2.0 and term20["price"] == 120.0
+    for horizon in (60, 120, 250):
+        assert result["terms"][horizon]["matured"] is False
+        assert result["terms"][horizon]["ret"] is None
+
+
+def test_fetch_return_all_unmatured_and_entry_fallback(monkeypatch):
+    rows = [{"trade_date": "20260101", "adj_close": 10.0, "close": 100.0}]
+    monkeypatch.setattr(sc, "_daily_adj_rows", lambda *_args: rows)
+    result = sc.fetch_return("600000", "2026-01-02", "20261231")
+    assert result["entry_date"] == "20260101"
+    assert all(not result["terms"][h]["matured"] for h in sc.HORIZONS)
 
 
 def test_fetch_index_return_string_close():
@@ -102,8 +125,14 @@ def test_calibration_main_separates_quality_versions():
     ]
     real = sc.collect_reports, sc.fetch_return, sc.fetch_index_return, sys.argv
     sc.collect_reports = lambda _directory: [dict(r) for r in reps]
-    sc.fetch_return = lambda code, _start, _today: {
-        "ret": 0.1 if code == "600001" else 0.2, "n_days": 30, "entry_date": "20260102"}
+
+    def fake_return(code, _start, _today):
+        ret = 0.1 if code == "600001" else 0.2
+        return {"entry_date": "20260102", "terms": {
+            h: {"matured": True, "exit_date": "20260201", "ret": ret, "price": 12.0}
+            for h in sc.HORIZONS}}
+
+    sc.fetch_return = fake_return
     sc.fetch_index_return = lambda *_args: 0.0
     sys.argv = ["score_calibration.py", "测试"]
     buf = io.StringIO()
@@ -121,22 +150,96 @@ def test_calibration_main_separates_quality_versions():
     assert "估值分 × 实际收益" not in v1
     assert "估值分 × 实际收益" not in v2
     valuation = [section for section in sections if section.startswith("估值（跨质量版本）")]
-    assert len(valuation) == 2
+    assert len(valuation) == 2 * len(sc.HORIZONS)
     assert all("估值分 × 实际收益" in section for section in valuation)
     assert not any(section.startswith("vlegacy") for section in sections)
 
 
+def test_bucket_table_requires_ten_matured_samples():
+    reps = [{"quality": 6.0, "ret": 0.1, "excess": 0.02} for _ in range(10)]
+    out9 = "\n".join(sc._bucket_table(reps[:9], "quality", sc.Q_BUCKETS, "测试"))
+    assert "样本不足" in out9 and "+10.0%" not in out9
+    out10 = "\n".join(sc._bucket_table(reps, "quality", sc.Q_BUCKETS, "测试"))
+    assert "+10.0%" in out10 and "样本不足" not in out10
+
+
+def test_calibration_main_aligns_horizon_benchmark_and_target():
+    import contextlib
+    import io
+
+    reps = [{"file": "v2.html", "code": "600001", "company": "甲", "rep_date": "2026-01-01",
+             "quality": 6.0, "valuation": 6.0, "timing": 5.0, "price": 10,
+             "target_range": "10-12", "quality_version": 2}]
+    real = sc.collect_reports, sc.fetch_return, sc.fetch_index_return, sys.argv
+    sc.collect_reports = lambda _directory: [dict(r) for r in reps]
+    terms = {h: {"matured": h == 20, "exit_date": "20260121" if h == 20 else None,
+                 "ret": 0.1 if h == 20 else None, "price": 11.0 if h == 20 else None}
+             for h in sc.HORIZONS}
+    sc.fetch_return = lambda *_args: {"entry_date": "20260102", "terms": terms}
+    calls = []
+    sc.fetch_index_return = lambda *args: calls.append(args) or 0.02
+    sys.argv = ["score_calibration.py", "测试"]
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            sc.main()
+    finally:
+        sc.collect_reports, sc.fetch_return, sc.fetch_index_return, sys.argv = real
+    out = buf.getvalue()
+    assert calls == [("A", "20260102", "20260121")]
+    assert "目标价兑现" in out and "未到期" in out and "20交易日" in out
+
+
+def test_hk_nominal_close_join(monkeypatch):
+    calls = []
+
+    def fake_get(url):
+        calls.append(url)
+        price = "100.0" if "fqt=0" in url else "90.0"
+        return {"data": {"klines": [f"2026-01-02,{price}"]}}
+
+    monkeypatch.setattr(sc.em_core, "get", fake_get)
+    rows = sc._daily_adj_rows("01810", "20251201", "20261231", True)
+    assert rows[0]["close"] == 100.0 and rows[0]["adj_close"] == 90.0
+    assert sum("fqt=0" in url for url in calls) == 1
+    assert sum("fqt=1" in url for url in calls) == 1
+
+
+def test_fetch_return_previous_month_cross_year(monkeypatch):
+    seen = {}
+    rows = [{"trade_date": "20251231", "close": 100.0, "adj_close": 100.0},
+            {"trade_date": "20260102", "close": 101.0, "adj_close": 101.0}]
+
+    def fake_rows(_code, start, _end, _is_hk):
+        seen["start"] = start
+        return rows
+
+    monkeypatch.setattr(sc, "_daily_adj_rows", fake_rows)
+    result = sc.fetch_return("600000", "2026-01-01", "20261231")
+    assert seen["start"] == "20251201" and result["entry_date"] == "20251231"
+
+
+def test_index_return_requires_exact_endpoints(monkeypatch):
+    for rows in (["20260801", "20260828"], ["20260802", "20260829"]):
+        monkeypatch.setattr(sc, "_ts", lambda *_args: [
+            {"trade_date": day, "close": "4000.0"} for day in rows])
+        sc._INDEX_CACHE.clear()
+        try:
+            sc.fetch_index_return("A", "20260801", "20260829")
+        except RuntimeError as e:
+            assert "精确" in str(e)
+        else:
+            raise AssertionError("基准缺精确起止端点不应计算超额收益")
+
+
+def test_bucket_table_requires_ten_excess_samples():
+    reps = [{"quality": 6.0, "ret": 0.1, "excess": None} for _ in range(9)]
+    reps.append({"quality": 6.0, "ret": 0.1, "excess": 0.5})
+    out = "\n".join(sc._bucket_table(reps, "quality", sc.Q_BUCKETS, "测试"))
+    assert "+50.0%" not in out and "样本不足" in out
+
+
 if __name__ == "__main__":
-    test_parse_report_name_wiring()
-    print("OK parse_report_name 接线（owner=extract_review，两代命名 + 非报告排除）")
-    test_bucket_of_edges()
-    print("OK bucket_of（边界左闭右开 / None 不入桶）")
-    test_dedup_earliest()
-    print("OK dedup_earliest（同股取最早，独立窗口）")
-    test_collect_reports_walks_subdirs()
-    print("OK collect_reports 子目录递归扫描")
-    test_fetch_index_return_string_close()
-    print("OK fetch_index_return 字符串 close 不丢基准收益")
-    test_calibration_main_separates_quality_versions()
-    print("OK score_calibration 按质量版本分桶")
-    print("全部 6 项测试通过")
+    import pytest
+
+    raise SystemExit(pytest.main([__file__, "-q", "-p", "no:cacheprovider"]))

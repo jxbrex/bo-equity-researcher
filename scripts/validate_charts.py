@@ -427,6 +427,27 @@ def _check_slot_widths(fill: dict, warns: list) -> None:
                              "（槽位契约：三情景锚短值）")
 
 
+def _check_trigger_decidability(fill: dict, warns: list) -> None:
+    """三情景 trigger 须可复盘判定（软告警）：数字/时间线/方向事件词至少居其一。"""
+    event_words = ("转负", "转正", "转涨", "转跌", "跌破", "突破", "创新高", "新低", "扭亏",
+                   "达产", "投产", "获批", "重启", "落地", "站稳", "持续", "回落", "回升",
+                   "下降", "上升", "下滑", "增长", "改善", "恶化", "放缓", "收窄", "扩大",
+                   "上行", "下行", "见顶", "见底", "去化", "上涨", "下跌", "发布")
+    for scenario in (fill.get("valuation") or {}).get("scenarios") or []:
+        if not isinstance(scenario, dict):
+            continue
+        text = str(scenario.get("trigger") or "").strip()
+        if not text:
+            continue
+        has_number = bool(re.search(r"\d", text))
+        has_timeline = bool(re.search(r"20\d{2}(?:年|Q[1-4]|H[12])", text, re.I))
+        has_event = any(word in text for word in event_words)
+        if not has_number and not has_timeline and not has_event:
+            warns.append(f"scenario[{scenario.get('key')}] trigger「{text}」缺少可判定依据："
+                         "须带数值阈值、时间线或可复盘的方向/事件词，避免高企/失速/承压类"
+                         "无法判 hit/miss 的短语（软告警）")
+
+
 def _check_threshold_coverage(fill: dict, warns: list) -> None:
     """v5.1.2：4.3 护城河压力测试给出的阈值须在 14 章 triggers/dash_html 有对应行
     （fill-schema 既定「给了阈值的 14 章必须有对应行，否则删阈值句」——此前只写在文档里）。

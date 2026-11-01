@@ -890,3 +890,31 @@ def _check_handwritten_dupes(fill: dict, warns: list) -> None:
             warns.append("gap_html 散文罗列券商对比数字（≥2 组「→」幅度+上/下调表述）："
                          "与券商态度变化图内容重复——只写方向性结论与本文相对位置，"
                          "两份对比数值由图与判词横条承载")
+
+
+def _check_gap_prose_form(fill: dict, warns: list) -> None:
+    """A 档多机构假设挤单段的保守检测（软告警）：长段+日期锚+机构证据三重门槛。"""
+    if str(fill.get("gap_tier") or "").upper() != "A":
+        return
+    orgs = set()
+    for dim in (fill.get("gap_plot") or {}).get("dims") or []:
+        if isinstance(dim, dict):
+            orgs.update(str(s.get("org") or "").strip() for s in (dim.get("street") or [])
+                        if isinstance(s, dict))
+    history = fill.get("gap_history") or {}
+    for row in (history.get("rows") or []) + (history.get("tp_reports") or []):
+        if isinstance(row, dict):
+            orgs.add(str(row.get("org") or "").strip())
+    orgs.discard("")
+    html = fill.get("gap_html") or ""
+    for match in re.finditer(r"<p\b[^>]*>(.*?)</p>", html, re.I | re.S):
+        block = match.group(1)
+        if re.search(r"<(?:ul|li)\b", block, re.I):
+            continue
+        text = _plain_text(block)
+        if len(text) < 150 or len(re.findall(r"（\d{2}-\d{2}）", text)) < 3:
+            continue
+        org_hits = {org for org in orgs if org in text}
+        if len(org_hits) >= 3:
+            warns.append("gap_html 多机构假设挤在单个 <p> 长段（≥3 个机构日期锚）："
+                         "请按维度改用 <ul><li> 分行列写，提升可读性（软告警）")

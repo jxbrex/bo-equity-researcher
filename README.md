@@ -215,7 +215,7 @@ python "<技能目录>/scripts/extract_review.py" --find 600989.SH --dir "D:\个
 ### 校准工具
 
 ```bash
-python "<技能目录>/scripts/score_calibration.py"   # 存量报告三轨分 vs 报告日后实际收益（分桶统计）
+python "<技能目录>/scripts/score_calibration.py"   # 20/60/120/250 交易日收益与目标价兑现（未到期不回填）
 python "<技能目录>/scripts/score_drift.py"         # 同股相邻两版分数漂移分布（机制一临界宽度校准）
 python "<技能目录>/scripts/monthly_checkup.py"     # 月度体检：到期复盘提醒 + 校准复跑
 ```
@@ -276,7 +276,7 @@ bo-equity-researcher/
 │   ├── charts_gap.py           # 第 9 章图族：预期差逐机构分布图
 │   ├── charts_period.py        # 第 3 章图族：报告期透视（进度子弹图 / 单季双联图）
 │   ├── extract_review.py       # 回测触发判定（--find）+ 旧报告复盘锚点提取 + 扫描剪枝单源
-│   ├── score_calibration.py    # 评分统计校准：存量报告三轨分 vs 报告日后实际收益
+│   ├── score_calibration.py    # 评分统计校准：20/60/120/250 交易日收益与目标价兑现
 │   ├── score_drift.py          # 同股相邻两版分数漂移分布（机制一临界宽度实测校准，v5.2.0）
 │   ├── monthly_checkup.py      # 月度体检：到期复盘提醒 + 评分校准复跑
 │   ├── deploy.ps1              # 技能部署脚本（预览/实际部署 + 旧目录备份退休）
@@ -326,7 +326,7 @@ python test_em_fetch.py         # 市场映射 / 闰日 / 同比文字化 / 429 
 python test_extract_review.py   # 回测触发判定 / 锚点提取
 python test_mcap_mode.py        # 市值口径渲染
 python test_golden.py           # 渲染器端到端 golden 快照（minimal/full/mcap 三份主干 fill + 报告期四态，产物与入库快照逐字节比对）
-python test_calibration.py      # score_calibration 纯函数回归（文件名解析 / 分桶边界 / 同股去重）
+python test_calibration.py      # score_calibration 全量回归（pytest 入口：固定期限 / 基准 / 样本门槛 / 目标兑现）
 python test_monthly_checkup.py  # monthly_checkup 月度体检回归（scan_reports 合并口径 / --disclosure 市场映射）
 python test_deploy_meta.py      # 部署守卫（身份/迁移 / 排除清单 / UTF-8 BOM / 超长行闸）
 python test_visual_check.py     # visual_check 视觉审计降级路径（无浏览器跳过 / 坏 --chrome 路径）

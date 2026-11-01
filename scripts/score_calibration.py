@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""score_calibration.py — 评分统计校准：存量报告的三轨分 vs 报告日后实际收益（思考题①工具化）
+"""score_calibration.py — 评分统计校准：三轨分与目标价 vs 固定期限实际表现
 
 用法:
     python score_calibration.py [报告目录]     # 默认 D:\\个股深度分析
 
-流程：扫描目录 HTML 报告 → extract_review 提取锚点（代码/日期/质量分/估值分/时机分）
-→ tushare 日线（前复权口径：close×adj_factor）算报告日收盘→最新收盘的收益与沪深300超额
-（港股用 hk_daily 原始价、恒生指数基准，分红不调整，窗口短误差可接受，输出标注）
-→ 按质量分/估值分分桶统计。
+流程：扫描目录 HTML 报告 → extract_review 提取锚点 → 报告日收盘后 20/60/120/250 个
+实际交易日的前复权收益与同期基准（港股走东财前复权日 K+恒指）→ 按质量分/估值分分桶。
+目标价兑现使用名义收盘价，与分数收益校准分开。
 
 判读纪律（防过度解读，写在输出里）：
-- 样本同源（同一市场 regime），超额收益只缓解不消除；同股多份报告窗口重叠，给去重口径。
-- 持有期 <20 个交易日的观测标「短窗」，短窗收益主要是噪音，只看不评。
-- 校准结论需要 30+ 独立样本且持有期对齐；本表是描述性起点，每月复跑一次积累样本。
+- 未到期只标「未到期」，绝不用最新收盘代替；股票与基准同起止交易日。
+- 样本同源（同一市场 regime），同股多份窗口重叠，给去重口径。
+- 每桶独立兑现样本 <10 只列计数；显著性结论需要 30+ 独立样本，每月复跑积累。
 """
 import os
 import sys
@@ -83,12 +82,14 @@ def collect_reports(directory: str) -> list:
                 reps.append({"file": fn, "code": code, "company": ext.get("company") or fn,
                              "rep_date": prev.get("date") or rep_date,
                              "quality": legacy_quality, "valuation": None, "timing": None,
-                             "price": ext.get("price"), "legacy": True, "quality_version": version})
+                             "price": ext.get("price"), "target_range": prev.get("target_range"),
+                             "legacy": True, "quality_version": version})
                 continue
             reps.append({"file": fn, "code": code, "company": ext.get("company") or fn,
                          "rep_date": prev.get("date") or rep_date,
                          "quality": q, "valuation": v, "timing": prev.get("timing"),
-                         "price": ext.get("price"), "quality_version": version})
+                         "price": ext.get("price"), "target_range": prev.get("target_range"),
+                         "quality_version": version})
     return reps
 
 
@@ -104,36 +105,46 @@ def _ts(api_name: str, params: dict) -> list:
         raise
 
 
-def _em_kline_daily(secid: str, start: str, end: str) -> list:
-    """东财日 K（klt=101, fqt=1 前复权）→ [{trade_date, adj_close}]。
+HORIZONS = (20, 60, 120, 250)
+
+
+def _em_kline_daily(secid: str, start: str, end: str, adjusted: bool = True) -> list:
+    """东财日 K（klt=101；adjusted 控制 fqt）→ [{trade_date, close, adj_close}]。
     港股日线走此通道（tushare hk_daily 限 1次/小时，批量校准不可用）。"""
     url = em.kline_url(secid, 101, start, end)
+    if not adjusted:
+        url = url.replace("fqt=1", "fqt=0")
     d = em_core.get(url).get("data") or {}
-    return [{"trade_date": k.split(",")[0].replace("-", ""), "adj_close": float(k.split(",")[1])}
+    return [{"trade_date": k.split(",")[0].replace("-", ""),
+             "close": float(k.split(",")[1]), "adj_close": float(k.split(",")[1])}
             for k in (d.get("klines") or [])]
 
 
 def _daily_adj_rows(code: str, start: str, end: str, is_hk: bool) -> list:
-    """日线 + 复权因子合成前复权口径行 [{trade_date, adj_close}]（港股走东财前复权日 K）。"""
+    """日线 + 复权因子合成行 [{trade_date, close, adj_close}]；港股另取名义价 Join。"""
     if is_hk:
-        return _em_kline_daily(em.secid_of(code)[0], start, end)
+        secid = em.secid_of(code)[0]
+        rows = _em_kline_daily(secid, start, end, True)
+        nominal = {r["trade_date"]: r["close"] for r in _em_kline_daily(secid, start, end, False)}
+        return [dict(r, close=nominal[r["trade_date"]]) for r in rows if r["trade_date"] in nominal]
     ts = em_core.to_ts_code(code)
     rows = _ts("daily", {"ts_code": ts, "start_date": start, "end_date": end})
     adj = {r["trade_date"]: float(r["adj_factor"]) for r in
            _ts("adj_factor", {"ts_code": ts, "start_date": start, "end_date": end})
            if r.get("adj_factor") is not None}
-    return [{"trade_date": r["trade_date"],
+    return [{"trade_date": r["trade_date"], "close": float(r["close"]),
              "adj_close": float(r["close"]) * adj.get(r["trade_date"], 1.0)}
             for r in rows if r.get("close") is not None]
 
 
 def fetch_return(code: str, rep_date: str, today: str) -> dict:
-    """报告日收盘（≤报告日最近交易日）→ 最新收盘的前复权收益。
-    单次宽窗口取数（前一月月初→今天），减少限流接口调用次数。
-    返回 {entry_date, exit_date, ret, n_days}，失败抛异常。"""
+    """报告日收盘（≤报告日最近交易日）→ 各固定期限的前复权收益与名义收盘价。
+    单次宽窗口取数；期限不足只标未到期，绝不用最新收盘回填。"""
     is_hk = len(code) == 5
     d0 = rep_date.replace("-", "")
-    rows = _daily_adj_rows(code, f"{int(d0[:4])}{max(1, int(d0[4:6]) - 1):02d}01", today, is_hk)
+    year, month = int(d0[:4]), int(d0[4:6])
+    start = f"{year - 1}1201" if month == 1 else f"{year}{month - 1:02d}01"
+    rows = _daily_adj_rows(code, start, today, is_hk)
     rows.sort(key=lambda r: r["trade_date"])  # tushare 返回倒序，统一升序
     if not rows:
         raise RuntimeError("日线空返回")
@@ -143,12 +154,18 @@ def fetch_return(code: str, rep_date: str, today: str) -> dict:
             entry = r  # ≤报告日最后一个交易日
     if entry is None:
         raise RuntimeError(f"报告日 {rep_date} 前无交易数据")
-    exit_ = rows[-1]
-    if exit_["trade_date"] <= entry["trade_date"]:
-        raise RuntimeError("报告日后无新交易日（报告即最新）")
-    return {"entry_date": entry["trade_date"], "exit_date": exit_["trade_date"],
-            "ret": exit_["adj_close"] / entry["adj_close"] - 1,
-            "n_days": sum(1 for r in rows if entry["trade_date"] < r["trade_date"])}
+    entry_idx = rows.index(entry)
+    terms = {}
+    for horizon in HORIZONS:
+        exit_idx = entry_idx + horizon
+        if exit_idx >= len(rows):
+            terms[horizon] = {"matured": False, "exit_date": None, "ret": None, "price": None}
+            continue
+        exit_ = rows[exit_idx]
+        terms[horizon] = {"matured": True, "exit_date": exit_["trade_date"],
+                          "ret": exit_["adj_close"] / entry["adj_close"] - 1,
+                          "price": exit_["close"]}
+    return {"entry_date": entry["trade_date"], "terms": terms}
 
 
 _INDEX_CACHE = {}
@@ -169,11 +186,12 @@ def fetch_index_return(market: str, start_td: str, end_td: str) -> float:
     if not rows:
         raise RuntimeError("指数数据空返回")
     rows = sorted(rows, key=lambda r: r["trade_date"])
-    base = float(rows[0]["close"])   # tushare 字符串 close 须显式 float（审计#17：
-    for r in rows:                   # 否则下游 TypeError 被外层 except 吞成 None，
-        if r["trade_date"] <= start_td:  # A 股超额收益整列静默丢失
-            base = float(r["close"])  # ≤报告日最后一个交易日收盘
-    last = float(rows[-1]["close"])
+    start_row = next((r for r in rows if r["trade_date"] == start_td), None)
+    end_row = next((r for r in rows if r["trade_date"] == end_td), None)
+    if start_row is None or end_row is None:
+        raise RuntimeError(f"基准缺少精确起止交易日: {start_td} / {end_td}")
+    base = float(start_row["close"])
+    last = float(end_row["close"])
     ret = last / base - 1
     _INDEX_CACHE[key] = ret
     return ret
@@ -188,6 +206,9 @@ def dedup_earliest(reps: list) -> list:
     return list(seen.values())
 
 
+MIN_MATURED_N = 10
+
+
 def _bucket_table(reps: list, key: str, buckets, title: str) -> list:
     lines = [f"\n### {title}\n", "| 桶 | n | 平均收益 | 中位收益 | 胜率 | 平均超额 |",
              "|---|---|---|---|---|---|"]
@@ -199,64 +220,120 @@ def _bucket_table(reps: list, key: str, buckets, title: str) -> list:
         rets = sorted(r["ret"] for r in members)
         exc = [r["excess"] for r in members if r.get("excess") is not None]
         n = len(members)
+        if n < MIN_MATURED_N:
+            lines.append(f"| {label} | {n} | 样本不足 | — | — | — |")
+            continue
         med = rets[n // 2] if n % 2 else (rets[n // 2 - 1] + rets[n // 2]) / 2
         win = sum(1 for x in rets if x > 0) / n
-        lines.append(f"| {label} | {n} | {sum(rets) / n:+.1%} | {med:+.1%} | "
-                     f"{win:.0%} | {sum(exc) / len(exc):+.1%} |" if exc else
-                     f"| {label} | {n} | {sum(rets) / n:+.1%} | {med:+.1%} | {win:.0%} | — |")
+        row = f"| {label} | {n} | {sum(rets) / n:+.1%} | {med:+.1%} | {win:.0%} | "
+        if len(exc) >= MIN_MATURED_N:
+            row += f"{sum(exc) / len(exc):+.1%} |"
+        elif not exc:
+            row += "— |"
+        else:
+            row += "样本不足 |"
+        lines.append(row)
     return lines
+
+
+def _target_bounds(value):
+    if not value:
+        return None
+    try:
+        lo, hi = str(value).replace("–", "-").split("-", 1)
+        low, high = float(lo.strip()), float(hi.strip().split()[0].rstrip("元"))
+    except (TypeError, ValueError):
+        return None
+    return (low, high) if low <= high else None
+
+
+def _target_table(reps: list) -> list:
+    members = [r for r in reps if r.get("target_dev") is not None]
+    n = len(members)
+    lines = ["\n### 目标价兑现（名义收盘价，独立于分数收益校准）\n",
+             "| n | 命中率 | 平均偏差 | 判读 |", "|---|---|---|---|"]
+    if n < MIN_MATURED_N:
+        lines.append(f"| {n} | — | — | 样本不足 n<{MIN_MATURED_N}，不做显著性结论 |")
+    else:
+        hit = sum(1 for r in members if r["target_hit"]) / n
+        dev = sum(r["target_dev"] for r in members) / n
+        lines.append(f"| {n} | {hit:.0%} | {dev:+.1%} | 描述性结果，仍需更多独立样本 |")
+    return lines
+
+
+def _evaluate_horizon(rep: dict, horizon: int) -> dict:
+    term = rep["terms"][horizon]
+    if not term["matured"]:
+        return None
+    result = rep.copy()
+    result.update(ret=term["ret"], n_days=horizon, exit_date=term["exit_date"], price=term["price"])
+    mkt = "HK" if len(rep["code"]) == 5 else "A"
+    try:
+        result["excess"] = term["ret"] - fetch_index_return(mkt, rep["entry_date"], term["exit_date"])
+    except Exception:
+        result["excess"] = None
+    bounds = _target_bounds(rep.get("target_range"))
+    if bounds:
+        low, high = bounds
+        result["target_hit"] = low <= term["price"] <= high
+        result["target_dev"] = term["price"] / ((low + high) / 2) - 1
+    return result
 
 
 def main():
     directory = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_DIR
     today = date.today().strftime("%Y%m%d")
     reps = collect_reports(directory)
-    print(f"# 评分校准：{directory} 共 {len(reps)} 份有效报告（{today} 收盘口径）\n")
+    print(f"# 评分校准：{directory} 共 {len(reps)} 份有效报告（固定期限，{today} 数据截止）\n")
 
     ok, fail = [], 0
     for r in reps:
         try:
-            fr = fetch_return(r["code"], r["rep_date"], today)
-            r.update(fr)
-            mkt = "HK" if len(r["code"]) == 5 else "A"
-            try:
-                r["excess"] = r["ret"] - fetch_index_return(mkt, fr["entry_date"], today)
-            except Exception:
-                r["excess"] = None
+            r.update(fetch_return(r["code"], r["rep_date"], today))
+            r["evaluated"] = {h: result for h in HORIZONS if (result := _evaluate_horizon(r, h))}
             ok.append(r)
         except Exception as e:
             fail += 1
             print(f"跳过 {r['file']}（收益计算失败: {e}）", file=sys.stderr)
-    print(f"收益计算成功 {len(ok)} 份，失败 {fail} 份"
-          f"（失败多为报告日即最新交易日/标的停牌）\n")
+    print(f"收益计算成功 {len(ok)} 份，失败 {fail} 份；未到期桶只标未到期，不回填最新价\n")
 
-    print("## 明细（按报告日排序）\n")
-    print("| 公司 | 代码 | 报告日 | 质量 | 估值 | 时机 | 持有交易日 | 收益 | 超额 | 备注 |")
-    print("|---|---|---|---|---|---|---|---|---|---|")
+    print("## 明细（按报告日排序；每格=收益/超额/目标偏差）\n")
+    print("| 公司 | 代码 | 报告日 | 质量 | 估值 | 时机 | 20日 | 60日 | 120日 | 250日 | 备注 |")
+    print("|---|---|---|---|---|---|---|---|---|---|---|")
     for r in sorted(ok, key=lambda x: x["rep_date"]):
-        note = "短窗(<20日)只看不评" if r["n_days"] < SHORT_WINDOW else ""
-        if r.get("legacy"):
-            note = (note + "；" if note else "") + "旧版单轨综合分，仅展示不入桶"
-        exc = f"{r['excess']:+.1%}" if r.get("excess") is not None else "—"
+        cells = []
+        for horizon in HORIZONS:
+            term = r["evaluated"].get(horizon)
+            if not term:
+                cells.append("未到期")
+                continue
+            exc = f"{term['excess']:+.1%}" if term.get("excess") is not None else "—"
+            dev = f"{term['target_dev']:+.1%}" if term.get("target_dev") is not None else "—"
+            cells.append(f"{term['ret']:+.1%}/{exc}/{dev}")
+        note = "旧版单轨综合分，仅展示不入桶" if r.get("legacy") else ""
         print(f"| {r['company']} | {r['code']} | {r['rep_date']} | {r['quality']} | "
-              f"{r['valuation']} | {r['timing']} | {r['n_days']} | {r['ret']:+.1%} | {exc} | {note} |")
+              f"{r['valuation']} | {r['timing']} | {' | '.join(cells)} | {note} |")
 
-    ok_b = [r for r in ok if not r.get("legacy")]
-    for version in sorted({r.get("quality_version", 1) for r in ok_b}, key=str):
-        version_reps = [r for r in ok_b if r.get("quality_version", 1) == version]
-        for label, group in (("全口径（同股多份都计入，窗口有重叠）", version_reps),
-                             ("去重口径（同股仅取最早一份，独立窗口）", dedup_earliest(version_reps))):
-            print(f"\n## 分桶统计——v{version}｜{label}")
-            for line in _bucket_table(group, "quality", Q_BUCKETS, "质量分 × 实际收益"):
+    for horizon in HORIZONS:
+        group = [r["evaluated"][horizon] for r in ok if horizon in r["evaluated"]]
+        ok_b = [r for r in group if not r.get("legacy")]
+        for version in sorted({r.get("quality_version", 1) for r in ok_b}, key=str):
+            version_reps = [r for r in ok_b if r.get("quality_version", 1) == version]
+            for label, members in (("全口径（同股多份都计入，窗口有重叠）", version_reps),
+                                   ("去重口径（同股仅取最早一份，独立窗口）", dedup_earliest(version_reps))):
+                print(f"\n## 分桶统计——v{version}｜{label}｜{horizon}交易日")
+                for line in _bucket_table(members, "quality", Q_BUCKETS, "质量分 × 实际收益"):
+                    print(line)
+        for label, members in (("全口径（同股多份都计入，窗口有重叠）", ok_b),
+                               ("去重口径（同股仅取最早一份，独立窗口）", dedup_earliest(ok_b))):
+            print(f"\n## 分桶统计——估值（跨质量版本）｜{label}｜{horizon}交易日")
+            for line in _bucket_table(members, "valuation", V_BUCKETS, "估值分 × 实际收益"):
                 print(line)
-    for label, group in (("全口径（同股多份都计入，窗口有重叠）", ok_b),
-                         ("去重口径（同股仅取最早一份，独立窗口）", dedup_earliest(ok_b))):
-        print(f"\n## 分桶统计——估值（跨质量版本）｜{label}")
-        for line in _bucket_table(group, "valuation", V_BUCKETS, "估值分 × 实际收益"):
+        for line in _target_table(group):
             print(line)
 
-    print("\n---\n判读纪律：样本同 regime + 短窗为主，本表是描述性起点；"
-          "显著性结论需 30+ 独立样本且持有期对齐，每月复跑积累。")
+    print("\n---\n判读纪律：样本同 regime，窗口按各自期限对齐；每桶独立兑现样本 <10 只列计数，"
+          "显著性结论仍需 30+ 独立样本，每月复跑积累。")
 
 
 if __name__ == "__main__":

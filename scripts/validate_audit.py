@@ -691,6 +691,34 @@ def _check_growth_consistency(fill: dict, warns: list) -> None:
     if not last_year:
         return
     last_year = int(last_year)
+    covered_years = set()
+    for f in fcst:
+        lo, hi = _num(f.get("np_lo")), _num(f.get("np_hi"))
+        if lo is None or hi is None or hi < lo:
+            continue
+        y_text = str(f.get("y") or "").strip()
+        single = re.fullmatch(r"(20\d{2})E", y_text)
+        if single:
+            covered_years.add(int(single.group(1)))
+            continue
+        merged = re.fullmatch(r"(20\d{2})\s*[-–~]\s*(\d{2}|\d{4})E", y_text)
+        if not merged:
+            if re.search(r"[-–~]", y_text):
+                warns.append(f"growth_plot {y_text} 合并行形状无法识别：应写成 2026-27E 或 2026-2027E")
+            continue
+        start = int(merged.group(1))
+        end = int(merged.group(2))
+        if len(merged.group(2)) == 2:
+            end = start // 100 * 100 + end
+        if start != last_year + 1 or end != start + 1:
+            warns.append(f"growth_plot {y_text} 合并行口径无法对上：应从 {last_year + 1} 起连续两年，"
+                         "不得用其他起点或跨年跨度冒充利润年度覆盖")
+            continue
+        covered_years.update((start, end))
+    candidates = (last_year + 1, last_year + 2)
+    if not any(year in covered_years for year in candidates):
+        warns.append(f"growth_plot.fcst 未覆盖 valuation 利润年度候选 {candidates[0]}E/{candidates[1]}E："
+                     "次年或次后年至少一个须有对应单年或连续两年预测行（不臆断具体归属）")
     cnp = (_quote_ref(fill) or {}).get("consensus_np") or {}
     np_avg = _num(cnp.get("np_avg"))
     cnp_yr = _num(cnp.get("year"))
@@ -735,8 +763,7 @@ def _check_growth_consistency(fill: dict, warns: list) -> None:
         elif single and np_avg is not None and cnp_yr and int(cnp_yr) == int(single.group(1)):
             warns.append(f"落盘有一致预期但 growth_plot 漏填：{y_text} np_consensus；"
                          "不得将该年误标为无卖方覆盖")
-        year_match = re.search(r"20\d{2}", y_text)
-        if year_match and int(year_match.group(0)) == last_year + 1 and base_profit:
+        if single and int(single.group(1)) == last_year + 1 and base_profit:
             g_base = (base_profit / base_np - 1) * 100
             lo, hi = _num(f.get("np_lo")), _num(f.get("np_hi"))
             if lo is not None and hi is not None and not (lo - 2 <= g_base <= hi + 2):

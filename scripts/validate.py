@@ -58,7 +58,8 @@ from validate_html import (
     _check_l4_form,
     _check_cn_placeholder,
     _check_red_flag_conclusion,
-    _check_handwritten_dupes)
+    _check_handwritten_dupes,
+    _check_gap_prose_form)
 from validate_typing import _check_typing_v2
 from validate_charts import (
     _check_chart_fields,
@@ -69,6 +70,7 @@ from validate_charts import (
     _check_price_history_pe,
     _check_review_miss_diagnostics,
     _check_slot_widths,
+    _check_trigger_decidability,
     _check_threshold_coverage,
     _check_driver_cards,
     _check_sensitivity_units,
@@ -138,7 +140,9 @@ def _validate_content_impl(fill: dict, calc: dict, warns: list, sc: dict = None)
     _check_sensitivity_units(fill, warns)  # v5.1.1：sensitivity.delta 量纲规范
     _check_sensitivity_coverage(fill, warns)  # v5.5.0 B4：大分部（gp_pct ≥15）覆盖硬闸
     _check_slot_widths(fill, warns)       # v5.1.2：槽位契约补闸（trigger/chips 长度）
+    _check_trigger_decidability(fill, warns)  # 三情景 trigger 可判定性（软告警）
     _check_handwritten_dupes(fill, warns)  # v5.1.2：手写表与脚本生成并存检测
+    _check_gap_prose_form(fill, warns)     # A 档多机构假设挤单段（软告警）
     _check_threshold_coverage(fill, warns)  # v5.1.2：4.3 阈值 14 章承载
     _check_cycle_stages(fill, warns)      # v4.11.3：周期阶段卡字段（cycle_stages）
     _check_dcf(fill, warns)               # v4.11.3：DCF 双卡字段（dcf）

@@ -26,6 +26,7 @@ from validate_common import (
     _quote_ref,
     _scenario_by_key)
 from quality_rules import PROFILE_KIND, PROFILE_FLAGS, F_ITEM_IDS
+from org_tier import norm_org
 
 
 def _check_price_date(fill: dict) -> None:
@@ -315,29 +316,76 @@ def _audit_pairs(warns: list, pairs, fmt, *, miss=None, rv_none: bool = True) ->
             warns.append(fmt(label, fv, rv))
 
 
+def _check_street_rows(dim: dict, rows: list, value_key: str, source_label: str,
+                       warns: list) -> None:
+    """street 前向错值与整维漏抄共用对账；允许只展示落盘机构的子集。"""
+    name = str(dim.get("name") or "").strip()
+    valid_rows = [r for r in rows if isinstance(r, dict) and _num(r.get(value_key)) is not None]
+    points = [s for s in (dim.get("street") or [])
+              if isinstance(s, dict) and _num(s.get("v")) is not None]
+    if valid_rows and not points:
+        warns.append(f"gap_plot.street 漏抄「{name}」：{source_label} 有 {len(valid_rows)} 条记录，"
+                     "该维度却无有效机构点——至少照抄一个有效点，展示子集不受限")
+        return
+    for s in points:
+        v = _num(s.get("v"))
+        org = str(s.get("org") or "").strip()
+        pool = [_num(r.get(value_key)) for r in valid_rows
+                if not org or norm_org(str(r.get("org") or "").strip()) == norm_org(org)]
+        pool = [x for x in pool if x is not None]
+        if not any(abs(v - rv) <= _tol_floor(rv) for rv in pool):
+            shown = "、".join(f"{x:g}" for x in pool) or "无"
+            warns.append(f"gap_plot「{name}」street {org or '未具名'} {v:g} 在 {source_label} 中"
+                         f"无对应记录（同机构落盘值 {shown}）——"
+                         f"street 须照抄落盘源、禁手填（容差：相对 1%，下限 0.005）")
+
+
+def _check_a_share_street(fill: dict, gp: dict, warns: list) -> None:
+    """A 股 tushare E5 完整 detail/aim_detail 与 street 对账；历史无键及东财降级跳过。"""
+    ref = _quote_ref(fill)
+    if not ref or ref.get("e5_source") != "tushare":
+        return
+    captured = ref.get("gap_plot")
+    if not isinstance(captured, dict):
+        return
+    detail = captured.get("detail") or {}
+    aim_detail = captured.get("aim_detail") or []
+    for dim in (gp.get("dims") or []):
+        if not _gap_dim_ok(dim):
+            continue
+        name = str(dim.get("name") or "").strip()
+        if "目标价" in name:
+            rows, value_key = aim_detail, "tp"
+        else:
+            match = re.search(r"(20\d{2})E?", name)
+            if ("净利" not in name or "净利率" in name or "扣非" in name
+                    or not match or not isinstance(detail, dict)):
+                continue
+            rows, value_key = detail.get(match.group(1)), "np"
+        if isinstance(rows, list) and rows:
+            _check_street_rows(dim, rows, value_key, "quote 落盘 gap_plot", warns)
+
+
 def _check_gap_plot_street_source(fill: dict, warns: list) -> None:
-    """v5.5.1 F2 gap_plot.street 落盘第二照抄源（首版软告警，不拒——升拒登记 handoff）。
-    纪律：street 逐机构数值必须照抄落盘。A 股走 em_fetch E5「净利明细/目标价明细」行（无
-    source_file，存量合法用法不告警）；港股 E5（tushare report_rc）无逐机构明细，须把调研
-    得到的逐机构预测先落盘为 `_street_{code}_{date}.json` 并由 `gap_plot.source_file` 指向，
-    street 照抄其数值（小米 01810 2026-10-07 实证：六家机构数字无合规路径入图）。
-    告警范围：① 港股（5 位代码）street 非空而无 source_file（手填嫌疑）；② source_file
-    读不到 / 结构非法 / 缺 source / 维度无记录 / 记录缺机构名或日期 / 数值对不上。"""
+    """gap_plot.street 落盘照抄（软告警）：A 股读 quote.gap_plot，港股/调研读 source_file；
+    前向查错值，反向只查整维漏抄；机构名按 norm_org 匹配。"""
     gp = fill.get("gap_plot")
     if not isinstance(gp, dict):
         return
-    street_dims = [d for d in (gp.get("dims") or [])
-                   if _gap_dim_ok(d) and any(isinstance(s, dict) and _num(s.get("v")) is not None
-                                             for s in (d.get("street") or []))]
-    if not street_dims:
+    dims = [d for d in (gp.get("dims") or []) if _gap_dim_ok(d)]
+    if not dims:
         return
     src = str(gp.get("source_file") or "").strip()
     if not src:
         if _is_hk_code(fill):
-            warns.append("gap_plot.street 无落盘源（港股标的）：E5 落盘对港股无逐机构明细，"
-                         "street 来源须先落盘为 `_street_{code}_{date}.json` 并由 "
-                         "gap_plot.source_file 指向（调研得到的机构名/数值/日期/来源四要素），"
-                         "street 照抄其数值——否则视为手填（fill-schema「gap_plot」节）")
+            if any(any(isinstance(s, dict) and _num(s.get("v")) is not None
+                       for s in (d.get("street") or [])) for d in dims):
+                warns.append("gap_plot.street 无落盘源（港股标的）：E5 落盘对港股无逐机构明细，"
+                             "street 来源须先落盘为 `_street_{code}_{date}.json` 并由 "
+                             "gap_plot.source_file 指向（调研得到的机构名/数值/日期/来源四要素），"
+                             "street 照抄其数值——否则视为手填（fill-schema「gap_plot」节）")
+        else:
+            _check_a_share_street(fill, gp, warns)
         return
     try:
         with open(src, encoding="utf-8") as f:
@@ -355,33 +403,21 @@ def _check_gap_plot_street_source(fill: dict, warns: list) -> None:
     if not str(doc.get("source") or "").strip():
         warns.append(f"gap_plot.source_file 缺 source（调研来源说明）: {src}——"
                      "四要素（机构名/数值/日期/来源）缺一即无法追溯出处")
-    for d in street_dims:
+    for d in dims:
         name = str(d.get("name") or "").strip()
         rows = recs.get(name)
         if not isinstance(rows, list):
-            warns.append(f"gap_plot「{name}」street 在 source_file 中无对应维度记录: {src}"
-                         f"——维度名须与落盘源 dims 的键完全一致")
+            if any(isinstance(s, dict) and _num(s.get("v")) is not None
+                   for s in (d.get("street") or [])):
+                warns.append(f"gap_plot「{name}」street 在 source_file 中无对应维度记录: {src}"
+                             f"——维度名须与落盘源 dims 的键完全一致")
             continue
         bad = [r for r in rows if not isinstance(r, dict) or not str(r.get("org") or "").strip()
                or not str(r.get("date") or "").strip()]
         if bad:
             warns.append(f"gap_plot「{name}」source_file 有 {len(bad)} 条记录缺机构名/日期: {src}"
                          f"——四要素（机构名/数值/日期/来源）缺一不可追溯")
-        for s in d["street"]:
-            v = _num(s.get("v"))
-            if v is None:
-                continue
-            org = str(s.get("org") or "").strip()
-            # P1-2：署名非空 → 只与落盘同机构记录比（防张冠李戴：数值撞上别家机构不算对账成功）；
-            # 同 org 多条任一命中即通过（对应「同机构取最新」口径）；未具名点退全池数值比对
-            pool = [_num(r.get("v")) for r in rows if isinstance(r, dict)
-                    and (not org or str(r.get("org") or "").strip() == org)]
-            pool = [x for x in pool if x is not None]
-            if not any(abs(v - rv) <= _tol_floor(rv) for rv in pool):
-                shown = "、".join(f"{x:g}" for x in pool) or "无"
-                warns.append(f"gap_plot「{name}」street {org or '未具名'} {v:g} 在 source_file 中"
-                             f"无对应记录（同机构落盘值 {shown}）: {src}——"
-                             f"street 须照抄落盘源、禁手填（容差：相对 1%，下限 0.005）")
+        _check_street_rows(d, rows, "v", f"source_file: {src}", warns)
 
 
 def _check_gap_history(fill: dict, warns: list) -> None:
@@ -432,9 +468,10 @@ def _check_gap_history(fill: dict, warns: list) -> None:
         warns.append("gap_history 已填但 quote.source_file 缺失或读不到：态度变化数值无落盘源"
                      "可核对——应照抄 em_fetch E5「券商态度变化」行（--out 落盘 gap_history）")
         return
-    ref_rows = {str(h.get("org") or "").strip(): h
-                for h in ((ref.get("gap_history") or {}).get("rows") or [])
-                if isinstance(h, dict)}
+    ref_rows = {}
+    for h in ((ref.get("gap_history") or {}).get("rows") or []):
+        if isinstance(h, dict):
+            ref_rows.setdefault(norm_org(str(h.get("org") or "").strip()), []).append(h)
     if not ref_rows:
         warns.append("gap_history 已填但落盘 JSON 无 gap_history.rows：E5 未产出可比行"
                      "（近 180 天无券商最新研报，或历史上无上一份可比）或 fill 手填"
@@ -446,7 +483,10 @@ def _check_gap_history(fill: dict, warns: list) -> None:
         org = str(r.get("org") or "").strip()
         if not org:
             continue
-        h = ref_rows.get(org)
+        candidates = ref_rows.get(norm_org(org), [])
+        h = next((x for x in candidates if str(x.get("org") or "").strip() == org), None)
+        if h is None and candidates:
+            h = max(candidates, key=lambda x: str(x.get("d_to") or ""))
         if h is None:
             warns.append(f"gap_history「{org}」在落盘 gap_history.rows 中无对应机构——"
                          f"须照抄 E5「券商态度变化」行、禁手填")
@@ -469,7 +509,7 @@ def _check_gap_history(fill: dict, warns: list) -> None:
         if tp and not ref_tp:
             warns.append("gap_history.tp_reports 已填但落盘 JSON 无该键：手填嫌疑——"
                          "请重跑 em_fetch --out 落盘后照抄")
-        ref_set = {(str(x.get("org") or "").strip(), str(x.get("date") or "").strip()):
+        ref_set = {(norm_org(str(x.get("org") or "").strip()), str(x.get("date") or "").strip()):
                    _num(x.get("tp")) for x in ref_tp if isinstance(x, dict)}
         for i, x in enumerate(tp):
             if not isinstance(x, dict):
@@ -480,7 +520,7 @@ def _check_gap_history(fill: dict, warns: list) -> None:
                 warns.append(f"gap_history.tp_reports[{i}]（{org or '未具名'}）org/tp 不可解析："
                              f"该行图内剔除")
                 continue
-            rv = ref_set.get((org, str(x.get("date") or "").strip()))
+            rv = ref_set.get((norm_org(org), str(x.get("date") or "").strip()))
             # v5.8.2：容差收敛 _tol_floor 单源（ref_tp 空时不逐行告警的守卫逐字保留）
             if ref_tp and (rv is None or abs(fv - rv) > _tol_floor(rv)):
                 warns.append(f"gap_history.tp_reports「{org} {x.get('date')}」tp={fv:g} "

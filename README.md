@@ -189,7 +189,8 @@ python "<技能目录>/scripts/em_fetch.py" 600989 --peers=600309,002001,600426
 python "<技能目录>/scripts/em_fetch.py" 600989 --peers=600309,002001,600426 --no-e5
 
 # 新报告同时取九维机械输入（分型按标的实际替换；旧命令不加 quality-v2 时输出不变）
-python "<技能目录>/scripts/em_fetch.py" 600989 --quality-v2 --stock-type=成长型 --growth-tier=mid --industry-profile=generic --out=_em_600989_quote.json
+# 有 peers 时目标命令也携带清单：同年度 XSMLL 有效值 ≥3 家才生成均值，缺值不置零
+python "<技能目录>/scripts/em_fetch.py" 600989 --quality-v2 --stock-type=成长型 --growth-tier=mid --industry-profile=generic --peers=600309,002001,600426 --out=_em_600989_quote.json
 
 # 2-3. 模型分析打分（评分锚 references/scoring.md）→ 写 fill JSON（契约 references/fill-schema.md）
 

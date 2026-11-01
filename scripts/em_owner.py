@@ -163,8 +163,9 @@ def _cap_note(cap: int, total: int) -> str:
 def _e5_render_ready(detail: dict, aim_detail: list, history: list, tp_reports: list) -> dict:
     """E5 渲染就绪行（v5.8.3 自 _sec_e5 下沉的数据变换）：逐机构明细/目标价明细/券商态度
     变化/目标价研报清单四行的截断、家数声明与 "·".join 格式化在此一次算好，_sec_e5 瘦身为
-    纯拼接。截断口径与落盘一致：明细 20 家、history/tp_reports 落盘 12 家、清单去重后 8 家；
-    清单按（机构,目标价）去重、份数=截断后原始份数；条目全缺目标价时清单行 None（不出行）。
+    纯拼接。摘要明细截断 20 家，quote 的 detail/aim_detail 完整落盘；history/tp_reports
+    落盘 12 家、清单去重后 8 家；清单按（机构,目标价）去重、份数=截断后原始份数；
+    条目全缺目标价时清单行 None（不出行）。
     摘要行文案逐字同旧 _sec_e5 内联实现。"""
     detail_lines = []
     for yr in sorted(detail or {}):
@@ -257,7 +258,7 @@ def fetch_consensus(code: str) -> dict:
                 if r.get("eps") is not None:
                     slot["eps"].append(float(r["eps"]))
                 if org and r.get("np") is not None:
-                    k = (yr, org)
+                    k = (yr, norm_org(org))
                     if k not in latest_by_org or rd > latest_by_org[k]["report_date"]:
                         latest_by_org[k] = r
             if r.get("min_price") and r.get("max_price"):
@@ -266,23 +267,27 @@ def fetch_consensus(code: str) -> dict:
                     tp_reports.append({"org": org,
                                        "date": (f"{rd[:4]}-{rd[4:6]}-{rd[6:8]}" if len(rd) == 8 else rd),
                                        "tp": round((float(r["min_price"]) + float(r["max_price"])) / 2, 2)})
-                if org and (org not in aim_by_org or rd > aim_by_org[org]["report_date"]):
-                    aim_by_org[org] = r
+                org_key = norm_org(org)
+                if org and (org_key not in aim_by_org or rd > aim_by_org[org_key]["report_date"]):
+                    aim_by_org[org_key] = r
             rt = (r.get("rating") or "").strip()
             if rt:
                 ratings[rt] = ratings.get(rt, 0) + 1
-        # 逐机构明细（同机构 180 天内多份取最新）：np 万元→亿；目标价=(min+max)/2
+        # 逐机构明细（同机构归一后 180 天内多份取最新）：np 万元→亿；目标价=(min+max)/2；
+        # 聚合键归一，行内保留最新一份原始机构名供展示。
         detail = {}
-        for (yr, org), r in latest_by_org.items():
-            detail.setdefault(yr, []).append({"org": org, "np": round(float(r["np"]) / 1e4, 1),
+        for (yr, _org_key), r in latest_by_org.items():
+            detail.setdefault(yr, []).append({"org": (r.get("org_name") or "").strip(),
+                                              "np": round(float(r["np"]) / 1e4, 1),
                                               "date": r.get("report_date", "")})
         for v in detail.values():
             v.sort(key=lambda x: -x["np"])
-        aim_detail = [{"org": org, "tp": round((float(r["min_price"]) + float(r["max_price"])) / 2, 2),
+        aim_detail = [{"org": (r.get("org_name") or "").strip(),
+                       "tp": round((float(r["min_price"]) + float(r["max_price"])) / 2, 2),
                        "date": r.get("report_date", "")}
-                      for org, r in sorted(aim_by_org.items(),
-                                           key=lambda kv: -(float(kv[1]["min_price"])
-                                                            + float(kv[1]["max_price"])))]
+                      for _org_key, r in sorted(aim_by_org.items(),
+                                                key=lambda kv: -(float(kv[1]["min_price"])
+                                                                 + float(kv[1]["max_price"])))]
         hist_rows = {}       # gap_history 数据源：归一化机构名 → [(rd, yr, np亿, tp中值, rating)]。
         # v5.9.0 起收集全历史（非 180 天 recent）——对比口径「最新一份 vs 上一份」的上一份
         # 不限窗口（tushare report_rc 返回全历史，v5.9.0 探针实证最早 2019 年）；

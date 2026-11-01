@@ -318,3 +318,12 @@ def test_incomplete_balance_sheet_is_unknown_not_zero_debt(monkeypatch):
     assert result["coverage"]["1D.f_items.long_debt_down"] == "missing"
     assert result["1D"]["liquidity"]["debt_ratio"] is None
     assert result["coverage"]["1D.liquidity.debt_ratio"] == "missing"
+
+
+def test_zero_peer_gross_margin_mean_is_data_not_missing(monkeypatch):
+    rows = _bundle(_rows(2025, "20260320"))
+    _install(monkeypatch, rows)
+    profile = dict(PROFILE, peer_gross_margin_mean=0.0, gross_margin_explained=False)
+    result = qi.fetch_quality_inputs("600000", None, "2026-04-01", profile)
+    assert result["1D"]["red_flags"]["gross_margin_anomaly"] is True
+    assert result["coverage"]["1D.red_flags.gross_margin_anomaly"] == "ok"

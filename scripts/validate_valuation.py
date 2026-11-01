@@ -200,8 +200,8 @@ def _check_anchor_discipline(fill: dict, warns: list) -> None:
     """v5.1.0 估值锚纪律（恒瑞 2026-09 实证：两版报告间无新增基本面证据——中报对两版
     均为存量——悲观 PE 带却 35-40→26-32，驱动量只有股价与卖方研报，循环论证）：
     ①回测模式 prev.scenarios 必填（锚移动台账数据源，照抄 extract_review 输出禁手改）；
-    ②增量证据锁死：基础情景 PE 带相对上版移动 → valuation.pe_band_evidence 必填且至少
-      一条 type=基本面或市场参数；带未移动 → 该键须缺席/空（防口径漂移）。价格/卖方观点不构成
+    ②增量证据锁死：三情景任一 PE 带相对上版移动 → valuation.pe_band_evidence 必填且至少
+      一条 type=基本面或市场参数；可比带均未移动 → 该键须缺席/空（防口径漂移）。价格/卖方观点不构成
       移动理由（双向禁用：跌不许下修、涨不许上修）；上版解析失败降级告警不拒；
     ③回滚条款前置（v5.4.0 双尺全量生效）：合理带与基础情景带任一中枢偏离历史 P25-P75
       中枢 >15%（重构声明）→ valuation.rollback_html 必填——首版（无 prev）同样执行；
@@ -217,35 +217,42 @@ def _check_anchor_discipline(fill: dict, warns: list) -> None:
                              "scenarios 数组（锚移动台账数据源，禁手改；v5.1.0 起必填）")
         v = fill.get("valuation") or {}
         scen = v.get("scenarios") or []
-        base = _scenario_by_key(scen, "base")
-        prev_pe = (_parse_prev_scenarios(prev["scenarios"]).get("base") or {}).get("pe")
+        parsed = _parse_prev_scenarios(prev["scenarios"])
         ev = v.get("pe_band_evidence")
-        if base is not None and prev_pe is not None:
-            pe = base.get("pe") or []
+        comparable = 0
+        moved = []
+        for key, label in (("pess", "悲观"), ("base", "基础"), ("opt", "乐观")):
+            current = _scenario_by_key(scen, key)
+            prev_pe = (parsed.get(key) or {}).get("pe")
+            if current is None or prev_pe is None:
+                continue
+            pe = current.get("pe") or []
             cur_pe = (_num(pe[0]) if len(pe) >= 1 else None, _num(pe[1]) if len(pe) >= 2 else None)
-            if None not in cur_pe:
-                moved = (cur_pe[0], cur_pe[1]) != prev_pe
-                if moved:
-                    if not ev or not isinstance(ev, list):
-                        raise ValueError(
-                            f"基础情景 PE 带相对上版移动（{prev_pe[0]:g}-{prev_pe[1]:g}x → "
-                            f"{cur_pe[0]:g}-{cur_pe[1]:g}x）但 valuation.pe_band_evidence 缺失："
-                            f"增量证据锁死纪律——两版间无新增基本面证据时 PE 带不得移动"
-                            f"（v5.1.0 估值锚纪律一）")
-                    for i, e in enumerate(ev):
-                        if not isinstance(e, dict) or e.get("type") not in _ANCHOR_EVIDENCE_TYPES:
-                            raise ValueError(
-                                f"pe_band_evidence[{i}].type 非法: {(e or {}).get('type') if isinstance(e, dict) else e!r}"
-                                f"——四选一：{'/'.join(_ANCHOR_EVIDENCE_TYPES)}")
-                        if not str(e.get("note") or "").strip():
-                            raise ValueError(f"pe_band_evidence[{i}].note 为空——证据须写明可核查内容")
-                    if not any(e["type"] in ("基本面", "市场参数") for e in ev):
-                        raise ValueError(
-                            f"pe_band_evidence 无「基本面」或「市场参数」类条目（现有："
-                            f"{'/'.join(e['type'] for e in ev)}）——PE 带移动必须锚定新增基本面或市场参数证据"
-                            f"（基本面|市场参数），纯价格/卖方观点触发不合法；若两类证据均无，请将 PE 带锁回上版数值")
-                elif ev:
-                    raise ValueError("PE 带与上版一致，pe_band_evidence 应缺席（画蛇添足防口径漂移）")
+            if None in cur_pe:
+                continue
+            comparable += 1
+            if cur_pe != prev_pe:
+                moved.append(f"{label} {prev_pe[0]:g}-{prev_pe[1]:g}x → {cur_pe[0]:g}-{cur_pe[1]:g}x")
+        if moved:
+            if not ev or not isinstance(ev, list):
+                raise ValueError(
+                    f"PE 带相对上版移动（{'；'.join(moved)}）但 valuation.pe_band_evidence 缺失："
+                    f"增量证据锁死纪律——两版间无新增基本面证据时 PE 带不得移动"
+                    f"（v5.1.0 估值锚纪律一）")
+            for i, e in enumerate(ev):
+                if not isinstance(e, dict) or e.get("type") not in _ANCHOR_EVIDENCE_TYPES:
+                    raise ValueError(
+                        f"pe_band_evidence[{i}].type 非法: {(e or {}).get('type') if isinstance(e, dict) else e!r}"
+                        f"——四选一：{'/'.join(_ANCHOR_EVIDENCE_TYPES)}")
+                if not str(e.get("note") or "").strip():
+                    raise ValueError(f"pe_band_evidence[{i}].note 为空——证据须写明可核查内容")
+            if not any(e["type"] in ("基本面", "市场参数") for e in ev):
+                raise ValueError(
+                    f"pe_band_evidence 无「基本面」或「市场参数」类条目（现有："
+                    f"{'/'.join(e['type'] for e in ev)}）——PE 带移动必须锚定新增基本面或市场参数证据"
+                    f"（基本面|市场参数），纯价格/卖方观点触发不合法；若两类证据均无，请将 PE 带锁回上版数值")
+        elif comparable and ev:
+            raise ValueError("PE 带与上版一致，pe_band_evidence 应缺席（画蛇添足防口径漂移）")
         elif ev:
             warns.append("上版三情景 PE 解析失败或本版为市值口径：PE 带移动校验跳过，"
                          "pe_band_evidence 已填无法比对——请人工核对锚移动归因")

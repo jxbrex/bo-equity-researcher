@@ -202,6 +202,100 @@ def test_gap_plot_street_org_match():
             "未具名点应退全池数值比对"
 
 
+def test_gap_plot_street_a_share_reconcile_and_reverse():
+    dims = [{"name": "2026E 归母净利（亿元）", "ours": 100, "consensus": 100,
+             "street": [{"org": "中金", "v": 95}]},
+            {"name": "目标价（元）", "ours": 20, "consensus": 20,
+             "street": [{"org": "中金", "v": 21}]}]
+    with tempfile.TemporaryDirectory() as d:
+        ref = write_fill(
+            {"price": 10.0, "pe_ttm": 11.0, "e5_source": "tushare",
+             "gap_plot": {"detail": {"2026": [
+                 {"org": "中金公司", "np": 95, "date": "20260830"},
+                 {"org": "华泰", "np": 90, "date": "20260829"}]},
+                          "aim_detail": [{"org": "中金公司", "tp": 21, "date": "20260830"}]}},
+            d, name="em_street_a.json")
+        q = {"source_file": ref, "date": "2026-10-21"}
+        out = validate_stderr(minimal_fill(quote=q, gap_plot={"dims": dims}))
+        assert "无对应记录" not in out and "street 漏抄" not in out, out
+
+        wrong = [dict(dims[0], street=[{"org": "中金", "v": 94}]), dims[1]]
+        out = validate_stderr(minimal_fill(quote=q, gap_plot={"dims": wrong}))
+        assert "无对应记录" in out, "A 股 street 错值应告警"
+
+        empty = [dict(dim, street=[]) for dim in dims]
+        out = validate_stderr(minimal_fill(quote=q, gap_plot={"dims": empty}))
+        assert "street 漏抄" in out and "2026E 归母净利" in out and "目标价" in out, out
+
+
+def test_gap_plot_street_a_share_skip_conditions():
+    base = {"price": 10.0, "pe_ttm": 11.0, "e5_source": "tushare",
+            "gap_plot": {"detail": {"2026": [{"org": "中金公司", "np": 95, "date": "20260830"}]},
+                         "aim_detail": []}}
+    with tempfile.TemporaryDirectory() as d:
+        ref = write_fill(base, d, name="em_street_skip.json")
+        q = {"source_file": ref, "date": "2026-10-21"}
+        for dim in ({"name": "2027E 归母净利（亿元）", "ours": 100, "consensus": 100,
+                     "street": [{"org": "中金", "v": 94}]},
+                    {"name": "2026E 出货量（万台）", "ours": 100, "consensus": 100,
+                     "street": [{"org": "中金", "v": 94}]},
+                    {"name": "2026E 净利率（%）", "ours": 100, "consensus": 100, "street": []},
+                    {"name": "2026E 扣非净利（亿元）", "ours": 100, "consensus": 100, "street": []}):
+            out = validate_stderr(minimal_fill(quote=q, gap_plot={"dims": [dim]}))
+            assert "无对应记录" not in out and "street 漏抄" not in out, out
+
+        em_ref = write_fill(dict(base, e5_source="em"), d, name="em_street_em.json")
+        dim = {"name": "2026E 归母净利（亿元）", "ours": 100, "consensus": 100,
+               "street": [{"org": "中金", "v": 94}]}
+        out = validate_stderr(minimal_fill(
+            quote={"source_file": em_ref, "date": "2026-10-21"}, gap_plot={"dims": [dim]}))
+        assert "无对应记录" not in out and "street 漏抄" not in out, out
+
+        legacy_ref = write_fill({"price": 10.0, "pe_ttm": 11.0, "e5_source": "tushare"},
+                                d, name="em_street_legacy.json")
+        out = validate_stderr(minimal_fill(
+            quote={"source_file": legacy_ref, "date": "2026-10-21"}, gap_plot={"dims": [dim]}))
+        assert "无对应记录" not in out and "street 漏抄" not in out, out
+
+
+def test_gap_history_org_norm_keeps_alias_candidates():
+    older = dict(_GH_ROW, org="中金", np_from=80.0, np_to=85.0, d_to="2026-09-27")
+    for rows in ([dict(_GH_ROW), older], [older, dict(_GH_ROW)]):
+        with tempfile.TemporaryDirectory() as d:
+            ref = write_fill({"price": 10.0, "pe_ttm": 11.0,
+                              "gap_history": {"rows": rows}}, d, name="em_gh_aliases.json")
+            out = validate_stderr(minimal_fill(
+                quote={"source_file": ref, "date": "2026-10-21"},
+                gap_history={"rows": [dict(_GH_ROW)]}))
+            assert "无对应机构" not in out and "不一致" not in out, out
+
+
+def test_gap_plot_street_hk_reverse_miss_and_org_norm():
+    dim = {"name": "2026E 归母净利（亿元）", "ours": 100, "consensus": 100, "street": []}
+    with tempfile.TemporaryDirectory() as d:
+        src = write_fill(
+            {"source": "调研", "dims": {"2026E 归母净利（亿元）": [
+                {"org": "中金公司", "v": 95, "date": "2026-09-28"}]}},
+            d, name="_street_hk_reverse.json")
+        gp = {"dims": [dim], "source_file": src}
+        out = validate_stderr(minimal_fill(code="01810", gap_plot=gp))
+        assert "street 漏抄" in out and "2026E 归母净利" in out, out
+
+        copied = dict(dim, street=[{"org": "中金", "v": 95}])
+        out = validate_stderr(minimal_fill(code="01810", gap_plot={"dims": [copied], "source_file": src}))
+        assert "无对应记录" not in out and "street 漏抄" not in out, out
+
+
+def test_gap_history_org_norm_match():
+    with tempfile.TemporaryDirectory() as d:
+        ref = write_fill({"price": 10.0, "pe_ttm": 11.0,
+                          "gap_history": {"rows": [dict(_GH_ROW)]}}, d, name="em_gh_alias.json")
+        out = validate_stderr(minimal_fill(
+            quote={"source_file": ref, "date": "2026-10-21"},
+            gap_history={"rows": [dict(_GH_ROW, org="中金")]}))
+        assert "无对应机构" not in out, out
+
+
 def test_is_hk_code_single_source():
     """v5.5.1 P1-3：港股判定收单源 `_is_hk_code`（5 位数字）——period_track 硬拒文案、
     gap_plot street 无源门、cagr_adjustments 例外三处共用同一判定。"""

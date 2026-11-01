@@ -17,8 +17,8 @@ python "<技能目录>\scripts\em_fetch.py" [代码] --peers=[peer1],[peer2],[pe
 # 例（普通目标+peers，目标保留 E5）: python "<技能目录>\scripts\em_fetch.py" 600989 --peers=600309,002001,600426
 # 例（peers 委派专用，连目标 E5 也跳过）: python "<技能目录>\scripts\em_fetch.py" 600989 --peers=600309,002001,600426 --no-e5
 
-# 新报告同时取九维机械输入（分型按标的实际替换，--out 必须保留）
-python "<技能目录>\scripts\em_fetch.py" 600989 --quality-v2 --stock-type=成长型 --growth-tier=mid --industry-profile=generic --out=_em_600989_quote.json
+# 新报告同时取九维机械输入（分型按标的实际替换，--out 必须保留；有 peers 时清单一并携带）
+python "<技能目录>\scripts\em_fetch.py" 600989 --quality-v2 --stock-type=成长型 --growth-tier=mid --industry-profile=generic --peers=600309,002001,600426 --out=_em_600989_quote.json
 ```
 
 `--quality-v2` 是显式开关，旧命令不加时输出不变。三个 profile 参数必须按 Phase 0.5 结论
@@ -26,6 +26,8 @@ python "<技能目录>\scripts\em_fetch.py" 600989 --quality-v2 --stock-type=成
 披露信息，摘要完整打印 `quality_inputs` JSON，`--out` 落盘同名子键，fill 的 `score_inputs`
 只合并其中 1D/1F 机械字段，九维其余事实与人工判断仍按 `scoring.md` 查证，不能把整包
 直接当九维答案。落盘与 fill 双向漏抄/不一致会告警；profile 不一致或报告日后披露会拒渲染。
+A 股 tushare E5 的完整 `detail/aim_detail` 同时随 quote 的 `gap_plot` 子键落盘，按预测年与
+`norm_org` 合并机构别名并保留最新原始名；fill 的 `gap_plot.street` 仍照抄同一明细，禁手估。
 `1D.liquidity.ocf_short_cover` 统一用最近完整年度经营现金流÷短期有息负债，债务余额仍取
 报告日前最新可见报告期；短债覆盖 <1 且该比率 >2 才触发流动性上调一档。
 `roic_basis=normalized` 时，`roic_normalized_components` 必须保留三个完整年度值且与 ROIC

@@ -604,6 +604,36 @@ def test_16_consensus_detail():
     print("16. E5 逐机构明细 通过")
 
 
+def test_16b_consensus_detail_org_norm_and_capture():
+    """机构别名按预测年合并并保留最新原名；完整明细随 quote 落盘而非只进摘要。"""
+    import em_owner
+    rows = [
+        {"org_name": "中金", "report_date": "20260701", "quarter": "2026Q4",
+         "np": 8000000, "min_price": 20, "max_price": 22},
+        {"org_name": "中金公司", "report_date": "20260830", "quarter": "2026Q4",
+         "np": 8500000, "min_price": 30, "max_price": 32},
+        {"org_name": "中金", "report_date": "20260812", "quarter": "2027Q4", "np": 9000000},
+    ]
+    _orig_ts, _orig_consensus = em_core.ts_call, em.fetch_consensus
+    _orig_cap = dict(em._CAPTURE)
+    try:
+        em_core.ts_call = lambda name, params, **k: rows
+        c = em_owner.fetch_consensus("600938")
+        em.fetch_consensus = lambda code: c
+        em._CAPTURE.clear()
+        em._sec_e5("600938", False)
+        captured = dict(em._CAPTURE)
+    finally:
+        em_core.ts_call = _orig_ts
+        em.fetch_consensus = _orig_consensus
+        em._CAPTURE.clear()
+        em._CAPTURE.update(_orig_cap)
+    assert c["detail"]["2026"] == [{"org": "中金公司", "np": 850.0, "date": "20260830"}]
+    assert c["detail"]["2027"] == [{"org": "中金", "np": 900.0, "date": "20260812"}]
+    assert c["aim_detail"] == [{"org": "中金公司", "tp": 31.0, "date": "20260830"}]
+    assert captured["gap_plot"] == {"detail": c["detail"], "aim_detail": c["aim_detail"]}
+
+
 def test_17_period_track():
     """17. 报告期进度（v5.0 第 3 章数据源，无网络 mock ts_call）：
     A股中报——累计四值+同比、单季拆分 Q2=H1−Q1、近三年同期占比带；
@@ -1474,6 +1504,66 @@ def test_30_quality_v2_summary_out_and_legacy_unchanged():
         else:
             em.fetch_quality_inputs = original_fetch
     print("30. 质量v2摘要落盘与旧命令不变 通过")
+
+
+def test_30b_peer_gross_margin_mean_rules(monkeypatch):
+    rows = {
+        "600000": [{"REPORT_DATE_NAME": "2025年报", "XSMLL": 60}],
+        "600309": [{"REPORT_DATE_NAME": "2025年报", "XSMLL": 30},
+                   {"REPORT_DATE_NAME": "2024年报", "XSMLL": 99}],
+        "600519": [{"REPORT_DATE_NAME": "2025年报", "XSMLL": 40}],
+        "600028": [{"REPORT_DATE_NAME": "2025年报", "XSMLL": 50}],
+        "002001": [{"REPORT_DATE_NAME": "2025年报", "XSMLL": "None"},
+                   {"REPORT_DATE_NAME": "2024年报", "XSMLL": 88}],
+        "600426": [{"REPORT_DATE_NAME": "2024年报", "XSMLL": 70}],
+        "000858": [{"REPORT_DATE_NAME": "2025年报", "XSMLL": "—"}],
+    }
+    monkeypatch.setattr(em, "secid_of", lambda code: (
+        "", code.split(".")[0] + (".SH" if code.startswith("6") else ".SZ"), False))
+    monkeypatch.setattr(em, "fetch_annual_rows", lambda code, secucode: rows[code])
+    peers = ["600309", "600519", "600028", "002001", "600426", "000858"]
+    assert em._peer_gross_margin_mean("600000", peers) == 40
+    assert em._peer_gross_margin_mean("600000", ["600309", "600519", "600426"]) is None
+    assert em._peer_gross_margin_mean("600000", ["002001", "600426", "000858"]) is None
+    assert em._peer_gross_margin_mean("600000", ["600309", "600309", "600519"]) is None
+    assert em._peer_gross_margin_mean("600000", ["600309.SH", "600309", "600519"]) is None
+    assert em._peer_gross_margin_mean("600000", ["600000", "600309", "600519"]) is None
+
+
+def test_30c_quality_v2_peers_profile(monkeypatch):
+    rows = {
+        "600000": [{"REPORT_DATE_NAME": "2025年报", "XSMLL": 60}],
+        "600309": [{"REPORT_DATE_NAME": "2025年报", "XSMLL": 30}],
+        "600519": [{"REPORT_DATE_NAME": "2025年报", "XSMLL": 40}],
+        "600028": [{"REPORT_DATE_NAME": "2025年报", "XSMLL": 50}],
+    }
+    calls = []
+    original_cap = dict(em._CAPTURE)
+
+    def fake_summary(code, *args):
+        em._CAPTURE.clear()
+        em._CAPTURE["price"] = 10.5
+        return "旧摘要"
+
+    def fake_quality(code, secucode, as_of, profile):
+        calls.append(profile)
+        return {"profile": profile}
+
+    monkeypatch.setattr(em, "summarize", fake_summary)
+    monkeypatch.setattr(em._C, "_tushare_token", lambda: "configured")
+    monkeypatch.setattr(em, "fetch_quality_inputs", fake_quality)
+    monkeypatch.setattr(em, "secid_of", lambda code: ("", code, False))
+    monkeypatch.setattr(em, "fetch_annual_rows", lambda code, secucode: rows[code])
+    monkeypatch.setattr(sys, "argv", [
+        "em_fetch.py", "600000", "--quality-v2", "--stock-type=周期股",
+        "--industry-profile=generic", "--peers=600309,600519,600028"])
+    try:
+        em.main()
+    finally:
+        em._CAPTURE.clear()
+        em._CAPTURE.update(original_cap)
+    assert calls == [{"stock_type": "周期股", "growth_tier": None,
+                      "industry_profile": "generic", "peer_gross_margin_mean": 40}]
 
 
 def test_32_timing_indicator_known_series():

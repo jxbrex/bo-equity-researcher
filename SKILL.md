@@ -163,8 +163,13 @@ sensitivity 的 name）或写**带数字的排除理由**（`excluded`，如「A
 取数优先级：**em_fetch.py（首选，一条命令）→ 妙想 MCP 直调（缺席或返回明确积分/额度耗尽提示时，经 mx-data/mx-search/mx-xuangu skill 接力）→ 手工 curl → 定性搜索**。
 **新报告本体取数同时启用九维机械输入**：在目标公司命令上增加 `--quality-v2`，并按 Phase 0.5
 结论增加 `--stock-type=... --growth-tier=... --industry-profile=...`；`--out` 仍必须保留。
+有同业对比时，目标公司的 quality-v2 命令也须携带同一 `--peers` 清单：脚本按目标最新年报同年度
+聚合 XSMLL，有效值 ≥3 家才写 `peer_gross_margin_mean`，缺值不置零、不回退其他年份；委派 peers
+可提前并行预热缓存，但 `--no-e5` 仍不得与 quality-v2 同用。
 缺 profile 只会得到 `profile_missing`，不得默认套通用 F。摘要会完整打印 quality_inputs JSON，
 落盘同名子键供双向对账；旧命令不加开关时输出不变。机械字段只覆盖 1D/1F，其他维度仍须查证。
+A 股 tushare E5 的完整逐机构 `detail/aim_detail` 随 quote 的 `gap_plot` 子键落盘，按预测年与
+`norm_org` 合并别名、取最新一份并保留原始展示名，供第 9 章 street 照抄对账。
 **v5.0 新增输出**：em_fetch 摘要新增「报告期进度」照抄行（最新报告期四累计值+同比/单季拆分/近三年同期占比带/完成度分母说明），落盘 JSON 新增 `period_track`/`consensus_np` 键——fill 的 `period_track` 照抄键与 `valuation_inputs.consensus_np` 一律照抄该行/落盘回填，禁手估（v4.11.0 holders/price_history 同款照抄纪律；契约见 fill-schema.md）。**v5.0.1 扩充**：单季拆分照抄键新增扣非与经营现金流（`sq_dedt`/`sq_ocf` 及 prev/yoy 四键，累计差分口径）。**v5.1.0 补源**：E5 走东财降级源（tushare report_rc 空/失败）时，当年 EPS 均值按 ×总股本（总市值/现价）换算落盘 `consensus_np`（落盘 `src` 键标记换算口径）——此前该分支不落盘，恒瑞 2026-09 实证致第 3 章进度条与预期差拆解口径分裂。**v5.5.1 港股补源**：E5 对港股无逐机构明细（tushare `report_rc` 不覆盖港股），第 9 章 `gap_plot` 的 `street` 无照抄行——填报方把调研（卖方研报/电话调研）得到的逐机构预测**先落盘**为 `_street_{code}_{date}.json`（含机构名/数值/日期/来源四要素）再照抄填 `gap_plot.street`，并在 `gap_plot` 加 `source_file` 指向该文件（契约见 fill-schema.md「gap_plot」节；无 `source_file` 的港股 street 会被软校验判为手填嫌疑）。
 **时机事实与证据**：`--out` 同时生成 `_timing_{code}_{date}.json`。摘要的 RSI14、ATR14%、MACD、
 20 日量比、均线斜率、52 周位置和近三年高低直接照抄；E1/E2 共用同一次月线，不另发请求。
@@ -288,8 +293,9 @@ MCP 可用且未明确额度耗尽时直调。MCP 缺席，或调用返回明确
 （先独立取数打分 → 再读旧报告 → 全量重写 → 最后新旧对比）。复盘内容只进 R 章节，
 **禁止生成独立 `_复盘.md` 文件**。
 **v5.1.0 起回测模式新增两件照抄/必填**：`prev.scenarios` 照抄 extract_review 输出的
-scenarios 数组原文（锚移动台账与 PE 带移动校验的共同数据源，禁手改）；基础情景 PE 带
-相对上版移动时 `valuation.pe_band_evidence` 必填增量证据清单（至少一条「基本面」或「市场参数」类），
+scenarios 数组原文（锚移动台账与 PE 带移动校验的共同数据源，禁手改）；悲观、基础、乐观
+三情景任一可比 PE 带相对上版移动时 `valuation.pe_band_evidence` 必填增量证据清单
+（至少一条「基本面」或「市场参数」类），
 移动无理由则锁回上版数值——估值锚纪律见 `references/scoring.md`「估值锚纪律」节。
 
 ### Phase 7: 拼装成稿

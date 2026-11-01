@@ -507,3 +507,42 @@ def test_anchor_market_parameter_can_move_without_fundamental():
     assert "写不出基本面增量的移动不合法" not in html
     f["valuation"]["pe_band_evidence"] = [{"type": "价格", "note": "股价一个月下跌16.6%"}]
     expect_valueerror(f, kw="基本面|市场参数")
+
+
+def _anchor_same_prev():
+    return [{"scenario": "悲观情景", "归母净利": "75 亿", "PE": "8-10x", "目标价": "6-7.5 元"},
+            {"scenario": "基础情景", "归母净利": "95 亿", "PE": "10-12x", "目标价": "9.5-11.4 元"},
+            {"scenario": "乐观情景", "归母净利": "110 亿", "PE": "12-14x", "目标价": "13.2-15.4 元"}]
+
+
+def test_anchor_discipline_pess_opt_moves_require_evidence():
+    for index, pe, label in ((0, "9-11x", "悲观"), (2, "13-15x", "乐观")):
+        f = full_fill()
+        prev = _anchor_same_prev()
+        prev[index]["PE"] = pe
+        f["prev"]["scenarios"] = prev
+        del f["valuation"]["pe_band_evidence"]
+        expect_valueerror(f, kw=label)
+
+
+def test_anchor_discipline_multi_band_move_message_lists_all():
+    f = full_fill()
+    del f["valuation"]["pe_band_evidence"]
+    try:
+        R.validate_content(f, R.compute_valuation(f))
+    except ValueError as e:
+        assert all(label in str(e) for label in ("悲观", "基础", "乐观")), str(e)
+    else:
+        raise AssertionError("三条 PE 带同时移动但无证据应拒")
+
+
+def test_anchor_discipline_partial_and_unparseable_prev_keep_legacy_boundary():
+    f = full_fill()
+    f["prev"]["scenarios"] = [_anchor_same_prev()[1]]
+    del f["valuation"]["pe_band_evidence"]
+    R.validate_content(f, R.compute_valuation(f))
+
+    f = full_fill()
+    f["prev"]["scenarios"] = [{"scenario": "基础情景", "PE": "不可解析"}]
+    out = validate_stderr(f)
+    assert "无法比对" in out

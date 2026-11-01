@@ -346,6 +346,9 @@ fill 与 quote 落盘 `quality_inputs.profile` 的 `stock_type/industry_profile/
 
 ### gap_plot 调研落盘细则（v5.5.1 自字段表行拆出）
 
+- **A 股 tushare 明细落盘（v0.12.5）**：`quote.source_file` 的 `gap_plot.detail/aim_detail`
+  完整保存 E5 逐机构净利/目标价明细，不截断为 `gap_history` 的 12 行。明细按预测年与
+  `norm_org` 合并别名、取最新一份，行内保留该研报的原始机构名；历史 quote 无此键时保持兼容。
 - **触发场景**：E5 落盘无「净利明细/目标价明细」照抄行时（tushare `report_rc` 不覆盖
   港股，或 A 股限流降级为东财汇总），调研所得逐机构预测须**先落盘**
   `_street_{code}_{date}.json`（直接放报告目录 `_archive/`），再照抄进 `gap_plot.street`——
@@ -355,11 +358,13 @@ fill 与 quote 落盘 `quality_inputs.profile` 的 `stock_type/industry_profile/
   （完全一致）、每记录须含机构名/数值/日期、文件级须含来源，四要素缺一即无法追溯。
 - **fill 侧**：`gap_plot` 加可选字段 `source_file` 指向该文件（报告图注只写调研来源与日期，
   不露本地全路径），`street` 照抄其数值；`gap_html` 同样只写可核验来源，不写本地路径。
-- **机器校验（首版软告警不拒，升拒登记 handoff）**：港股 5 位代码 street 非空而无
-  `source_file` → 告警（手填嫌疑）；`source_file` 读不到 / 结构非法 / 缺 source /
-  维度无记录 / 记录缺机构名或日期 / 同机构数值对不上（容差：相对 1%，下限 0.005）→ 告警。
-  **A 股无 `source_file` 且 street 直接照抄 E5 行是合法存量用法**，不告警；A 股东财降级
-  需要调研补源时，按本节的 `_street` 结构补齐并校验。
+- **机器校验（软告警不拒，升拒登记 handoff）**：A 股无独立 `source_file` 时，street 与
+  quote 的 `gap_plot.detail/aim_detail` 对账；港股或调研补源走 `source_file`。两侧均检查
+  前向错值/无对应机构（容差：相对 1%，下限 0.005）及“落盘有记录而整个维度无有效点”的
+  street 漏抄，机构按 `norm_org` 匹配；只展示机构子集不告警。港股 street 非空而无
+  `source_file`、`source_file` 读不到 / 结构非法 / 缺 source / 维度无记录 / 记录缺机构名或日期
+  同样告警。历史 quote 无新键、东财降级、非净利/目标价维度跳过；A 股东财降级需要调研补源时，
+  按本节的 `_street` 结构补齐并校验。
 
 ### l1_html / l3_html 写作细则（v4.9.2 自上方字段表整行拆出，内容不变）
 
@@ -442,9 +447,10 @@ fill 与 quote 落盘 `quality_inputs.profile` 的 `stock_type/industry_profile/
   减半、调节链不上浮）；**无 floor 证据 → 悲观下限不得 ≥现价**（渲染拒过——下修悲观情景或
   补证据）。待遇规则语义唯一权威见 `scoring.md`「决策层三机制（v5.0）」节，不复述。
 - **估值锚纪律（v5.1.0 起，门禁见 validate `_check_anchor_discipline`）**：
-  - `pe_band_evidence`（复盘专属）= 基础情景 PE 带相对上版（prev.scenarios）移动时必填的
-    增量证据清单 `[{"type":"基本面|价格|卖方观点|市场参数","note":"…"}]`，至少一条「基本面」或
-    「市场参数」类（两类均无时锁回上版数值；未移动则该键禁填）。市场参数只支撑全体折现率
+  - `pe_band_evidence`（复盘专属）= 悲观、基础、乐观三情景任一可比 PE 带相对上版
+    （prev.scenarios）移动时必填的增量证据清单 `[{"type":"基本面|价格|卖方观点|市场参数","note":"…"}]`，
+    至少一条「基本面」或「市场参数」类（两类均无时锁回上版数值；可比带均未移动则该键禁填；
+    上版缺某带时只跳过该带）。市场参数只支撑全体折现率
     或行业估值带的系统性调整，不得冒充个股相对重估证据；价格/卖方观点单独不得移动。
   - `rollback_html` = **双尺之一中枢偏离 pe_history 近三年 P25-P75 中枢 >15%（估值重构声明）**
     时必填的回滚条款（「回滚条件：〈可观测证据〉→ 回滚至历史带/上版带」句式，渲染进估值分卡

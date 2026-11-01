@@ -39,6 +39,7 @@ tushare 不可用时自动回落东财野生端点（curl 传输，防 TLS 指�
       / 有息负债（tushare balancesheet）
 """
 import json
+import math
 import os
 import sys
 import urllib.parse
@@ -593,6 +594,9 @@ def _sec_e5(pure: str, is_hk: bool) -> list:
             lines.extend(c.get("detail_lines") or [])
             if c.get("aim_line"):
                 lines.append(c["aim_line"])
+            if c.get("detail") or c.get("aim_detail"):
+                _CAPTURE["gap_plot"] = {"detail": c.get("detail") or {},
+                                        "aim_detail": c.get("aim_detail") or []}
             if c.get("aim"):
                 lines.append(f"目标价区间: {c['aim'][0]:.1f}-{c['aim'][1]:.1f}元")
             if c.get("ratings"):
@@ -777,6 +781,43 @@ def summarize(code: str, years: int, searches: list = None, include_e5: bool = T
     return "\n".join(out)
 
 
+def _peer_gross_margin_mean(target_code, peers):
+    """目标最新年报同年度的 peer XSMLL 均值；有效值不足三家保持缺失。"""
+    def annual_rows(code):
+        secucode = secid_of(code)[1]
+        return fetch_annual_rows(secucode.split(".")[0], secucode)
+
+    def report_year(row):
+        return str(row.get("REPORT_DATE_NAME") or row.get("REPORT_DATE")
+                   or row.get("END_DATE") or "")[:4]
+
+    target_secucode = secid_of(target_code)[1]
+    target_rows = annual_rows(target_code)
+    if not target_rows:
+        return None
+    year = report_year(target_rows[0])
+    if not year.isdigit():
+        return None
+    values = []
+    seen = set()
+    for peer in peers:
+        secucode = secid_of(peer)[1]
+        if secucode == target_secucode or secucode in seen:
+            continue
+        seen.add(secucode)
+        rows = fetch_annual_rows(secucode.split(".")[0], secucode)
+        row = next((r for r in rows if report_year(r) == year), None)
+        if row is None:
+            continue
+        try:
+            value = float(row.get("XSMLL"))
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(value):
+            values.append(value)
+    return sum(values) / len(values) if len(values) >= 3 else None
+
+
 def main():
     if any(a in ("--help", "-h") for a in sys.argv[1:]):
         print(__doc__)
@@ -823,6 +864,10 @@ def main():
         _secid, secucode, _is_hk = secid_of(args[0])
         profile = {key: opts.get(key.replace("_", "-"))
                    for key in ("stock_type", "growth_tier", "industry_profile")}
+        peers = [p.strip() for p in (opts.get("peers") or "").split(",") if p.strip()]
+        peer_mean = _peer_gross_margin_mean(args[0], peers) if peers else None
+        if peer_mean is not None:
+            profile["peer_gross_margin_mean"] = peer_mean
         quality_inputs = fetch_quality_inputs(secucode.split(".")[0], secucode,
                                               date.today().isoformat(), profile)
         _CAPTURE["quality_inputs"] = quality_inputs

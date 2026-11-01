@@ -1208,7 +1208,7 @@ def test_peers_waiver_accepts_existing_chinese_wording():
 
 
 def test_v2_dimension_requires_judgment_evidence_and_comparison():
-    fill = v2_fill(date="2026-10-31")
+    fill = v2_fill(date="2026-11-01")
     start = fill["l1_html"].index('<div class="dim-block" data-dim="1A">')
     end = fill["l1_html"].index('<div class="dim-block" data-dim="1B">')
     fill["l1_html"] = (fill["l1_html"][:start]
@@ -1218,7 +1218,7 @@ def test_v2_dimension_requires_judgment_evidence_and_comparison():
                        + fill["l1_html"][end:])
     with tempfile.TemporaryDirectory() as d:
         fill = prepare_v2_quote(fill, d)
-        expect_valueerror(fill, "九维正文三要素", kw="三要素")
+        expect_valueerror(fill, "九维正文四要素", kw="四要素")
 
 
 def test_growth_consensus_year_cannot_be_omitted_for_new_report():
@@ -1295,13 +1295,13 @@ def test_segments_gross_profit_share_total_is_checked():
     assert "毛利占比合计" in "\n".join(warns)
 
 
-def test_v2_three_beats_is_warning_for_legacy_fill():
+def test_v2_four_beats_is_warning_for_legacy_fill():
     fill = v2_fill()
     fill["l1_html"] = fill["l1_html"].replace("<strong>对比：</strong>", "<strong>历史：</strong>", 1)
     with tempfile.TemporaryDirectory() as d:
         fill = prepare_v2_quote(fill, d)
         out = validate_stderr(fill)
-        assert "三要素" in out
+        assert "四要素" in out
 
 
 def test_profile_contract_covers_all_profiles_and_rejects_unknown_keys():
@@ -1776,3 +1776,64 @@ def test_non_mapping_weights_raise_value_error_during_scoring():
         assert "平铺" in str(exc)
     else:
         raise AssertionError("列表权重应给出 ValueError 而非裸 AttributeError")
+
+
+def _four_element_block():
+    return ("<div class=\"dim-block\" data-dim='1A'><div class='dim-header'>"
+            "<span class='dim-name'>4.1 赛道与宏观</span><!--SCORE_BADGE--></div>"
+            "<p><strong>判词：</strong>行业处于成熟期，政策只能提供需求下限。</p>"
+            "<p><strong>论据：</strong>2026年1-9月行业销售额同比+14.9%（海口海关）。</p>"
+            "<p><strong>对比：</strong>Q3增速+2.4%，低于前九月累计+14.9%，较上版放缓。</p>"
+            "<p><strong>评分：</strong>总量成熟且替代不低，未满足A/B档条件。</p>"
+            "<!--SCORE_DETAIL--></div>")
+
+
+def test_four_elements_allow_concise_but_specific_content():
+    from validate_html import _check_dim_blocks
+    fill = v2_fill(date="2026-11-01", l1_html=_four_element_block(), l3_html="")
+    warns = []
+    _check_dim_blocks(fill, warns)
+    assert "四要素" not in "\n".join(warns)
+
+
+def test_four_elements_reject_missing_and_generic_content():
+    from validate_html import _check_dim_blocks
+    cases = [
+        ("判词", "<p><strong>判词：</strong>2026年行业增长14.9%。</p>", "判词"),
+        ("论据缺失", "", "论据"),
+        ("空论据", "<p><strong>论据：</strong>。</p>", "量化论据"),
+        ("泛论据", "<p><strong>论据：</strong>行业增长。</p>", "量化论据"),
+        ("泛对比", "<p><strong>对比：</strong>行业情况。</p>", "对比基准"),
+        ("泛评分", "<p><strong>评分：</strong>见评分依据。</p>", "评分理由"),
+    ]
+    for name, replacement, expected in cases:
+        block = _four_element_block()
+        if name == "判词":
+            block = block.replace("<p><strong>判词：</strong>行业处于成熟期，政策只能提供需求下限。</p>", replacement)
+        elif name == "论据缺失":
+            block = block.replace("<p><strong>论据：</strong>2026年1-9月行业销售额同比+14.9%（海口海关）。</p>", replacement)
+        elif name == "空论据" or name == "泛论据":
+            block = block.replace("<p><strong>论据：</strong>2026年1-9月行业销售额同比+14.9%（海口海关）。</p>", replacement)
+        elif name == "泛对比":
+            block = block.replace("<p><strong>对比：</strong>Q3增速+2.4%，低于前九月累计+14.9%，较上版放缓。</p>", replacement)
+        else:
+            block = block.replace("<p><strong>评分：</strong>总量成熟且替代不低，未满足A/B档条件。</p>", replacement)
+        fill = v2_fill(date="2026-11-01", l1_html=block, l3_html="")
+        try:
+            _check_dim_blocks(fill, [])
+        except ValueError as exc:
+            assert expected in str(exc), (name, str(exc))
+        else:
+            raise AssertionError(f"{name} 不应通过四要素校验")
+
+
+def test_four_elements_legacy_fill_gets_migration_warning():
+    from validate_html import _check_dim_blocks
+    fill = v2_fill(date="2026-10-24", l1_html=_four_element_block(), l3_html="")
+    fill["l1_html"] = fill["l1_html"].replace(
+        "<p><strong>论据：</strong>2026年1-9月行业销售额同比+14.9%（海口海关）。</p>", "")
+    fill["l1_html"] = fill["l1_html"].replace(
+        "<p><strong>评分：</strong>总量成熟且替代不低，未满足A/B档条件。</p>", "")
+    warns = []
+    _check_dim_blocks(fill, warns)
+    assert "四要素" in "\n".join(warns)

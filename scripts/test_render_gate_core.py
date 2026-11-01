@@ -478,8 +478,7 @@ def test_backtest_triggers_warning():
 
 
 def test_governance_strip_compact_warns():
-    """v4.9.1 补充修订二：4.5 治理块单行化——trig-strip 块内 <p> 恰为 2（判词+评分）→ 不告警；
-    trig 行后另起 <p> 正文（>2 个 <p>）→ 告警；4.5 未用 trig-strip 的存量写法 → 不打扰。"""
+    """四要素各自独立成段：不超过 4 个 <p> 不告警；超过 4 个才提示拆段凑数。"""
 
     def l1_with_35(inner):
         dims = [('<div class="dim-block"><p>该维度分析：公司基本面稳健，数据支撑充分，'
@@ -495,28 +494,28 @@ def test_governance_strip_compact_warns():
     compact = ('<p><strong>判词：</strong>股权集中、激励充分，论据详实可靠具备参考价值。</p>'
                f'<div class="trig-strip">{trig}{trig}</div>'
                '<p><strong>评分：</strong>7.5——基准 7.0，激励到位 +0.5；关联交易关注 −0.0。</p>')
-    assert "恰为 2" not in validate_stderr(minimal_fill(l1_html=l1_with_35(compact))), "紧凑形态不应告警"
+    assert "四要素" not in validate_stderr(minimal_fill(l1_html=l1_with_35(compact))), "紧凑形态不应告警"
+    extra = '<p>补充正文一段，论据详实可靠具备参考价值和数据支撑。</p>'
     loose = compact.replace('</div><p><strong>评分',
-                            f'</div><p>补充正文一段，论据详实可靠具备参考价值和数据支撑。</p>{trig}'
-                            '<p><strong>评分')
+                            f'</div>{extra}{extra}{extra}<p><strong>评分')
     out = validate_stderr(minimal_fill(l1_html=l1_with_35(loose)))
-    assert "恰为 2" in out, "trig 行后另起 <p> 正文应告警"
+    assert "四要素应各自独立成段" in out, "超过四个段落应提示拆段凑数"
     legacy = ('<p>公司治理正文一段，未用分块列示的存量写法，论据详实可靠具备参考价值与数据支撑。'
               '治理结构稳定，激励到位，分红持续。</p>')
-    assert "恰为 2" not in validate_stderr(minimal_fill(l1_html=l1_with_35(legacy))), "未用 trig-strip 不打扰"
+    assert "四要素" not in validate_stderr(minimal_fill(l1_html=l1_with_35(legacy))), "未用 trig-strip 不打扰"
 
-    # 补充修订四：4.3 护城河 / 5.3 催化剂同款 <p> 恰为 2 规则
+    # 4.3 护城河 / 5.3 催化剂同款四要素独立成段规则
     def dim_with(name, inner):
         return ('<div class="dim-block"><div class="dim-header">'
                 f'<span class="dim-name">{name}</span></div>' + inner + '</div>')
     dims5 = [('<div class="dim-block"><p>该维度分析：公司基本面稳健，数据支撑充分，'
               '论据详实可靠，行业地位稳固，具备长期参考价值。</p></div>')] * 5
-    assert "恰为 2" not in validate_stderr(minimal_fill(
+    assert "四要素" not in validate_stderr(minimal_fill(
         l1_html="".join(dims5) + dim_with("4.3 商业模式与护城河", compact))), "4.3 紧凑形态不应告警"
-    assert "恰为 2" in validate_stderr(minimal_fill(
+    assert "四要素应各自独立成段" in validate_stderr(minimal_fill(
         l1_html="".join(dims5) + dim_with("4.3 商业模式与护城河", loose))), "4.3 另起正文应告警"
     l3_43 = ("".join(dims5[:2]) + dim_with("5.3 催化剂", loose))
-    assert "恰为 2" in validate_stderr(minimal_fill(l3_html=l3_43)), "5.3 另起正文应告警"
+    assert "四要素应各自独立成段" in validate_stderr(minimal_fill(l3_html=l3_43)), "5.3 另起正文应告警"
 
 
 def test_peers_orientation_warns():

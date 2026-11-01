@@ -441,6 +441,12 @@ def _check_v2_counter_evidence(fill: dict, sc: dict = None) -> None:
         raise ValueError("\n".join(missing))
 
 
+def _label_paragraph_text(block: str, label: str):
+    match = re.search(
+        rf"<p[^>]*>\s*<strong>\s*{re.escape(label)}\s*[：:][^<]*</strong>(.*?)</p>", block, re.S)
+    return _plain_text(match.group(1)).strip() if match else None
+
+
 def _check_dim_blocks(fill: dict, warns: list, sc: dict = None) -> None:
     """dim-block 内容地板（纯文本 <40 字拒渲染 / <80 字告警）与极端分证据校验。"""
     # dim-block 内容地板（deepseek 中兴/豪威"每块一句话凑数"缩水实证）：
@@ -451,24 +457,37 @@ def _check_dim_blocks(fill: dict, warns: list, sc: dict = None) -> None:
     # 提取不到编号 → 按位置兜底并告警（写法漂移可见，不静默）
     if _quality_version(fill) == 2:
         missing_beats = []
+        judgement_words = ("是", "处", "仍", "未", "已", "将", "应", "属", "仅", "更", "较",
+                           "形成", "构成", "支撑", "压制", "改善", "恶化", "回升", "回落",
+                           "优于", "弱于", "高于", "低于", "意味着", "表明", "反映", "受益",
+                           "受限", "依赖", "缺乏", "守住")
+        comparison_words = ("同业", "历史", "基准", "阈值", "上版", "候选", "高于", "低于",
+                            "优于", "弱于", "强于", "收窄", "放缓", "回升", "回落", "改善",
+                            "恶化", "增加", "下降", "提升", "减少", "领先", "落后", "相当",
+                            "接近", "偏离", "更", "较")
         for field in ("l1_html", "l3_html"):
             for blk in _split_dim_blocks(fill.get(field) or ""):
                 name_match = re.search(r'dim-name[^>]*>\s*(\d\.\d[^<]*)', blk)
                 name = name_match.group(1).strip() if name_match else "未命名维度"
-                text = _dim_body_text(blk)
                 missing = []
-                if not re.search(r"判词\s*[：:]", text):
+                judgement = _label_paragraph_text(blk, "判词")
+                if not judgement or not re.search("|".join(map(re.escape, judgement_words)), judgement):
                     missing.append("判词")
-                if not re.search(r"\d", text):
+                evidence = _label_paragraph_text(blk, "论据")
+                if not evidence or len(evidence) < 4 or not re.search(r"\d", evidence):
                     missing.append("量化论据")
-                if not re.search(r"对比\s*[：:]", text):
-                    missing.append("对比")
+                comparison = _label_paragraph_text(blk, "对比")
+                if not comparison or not re.search("|".join(map(re.escape, comparison_words)), comparison):
+                    missing.append("对比基准")
+                score = _label_paragraph_text(blk, "评分")
+                if not score or len(score) < 4 or re.fullmatch(r"(?:详见|见|请见|查看)?评分依据[。]?", score):
+                    missing.append("评分理由")
                 if missing:
                     missing_beats.append(f"{name} 缺 {'/'.join(missing)}")
         if missing_beats:
-            message = ("九维正文三要素缺失：" + "；".join(missing_beats)
-                       + "——每块须有判词、量化论据和明确对比，评分依据详情不计入正文")
-            if str(fill.get("date") or "") >= "2026-10-31":
+            message = ("九维正文四要素缺失：" + "；".join(missing_beats)
+                       + "——每块须有判词、量化论据、对比基准和评分理由，独立成段且不得空泛")
+            if str(fill.get("date") or "") >= "2026-11-01":
                 raise ValueError(message)
             warns.append(message)
 
@@ -542,14 +561,14 @@ def _check_internal_codes(fill: dict, warns: list) -> None:
 def _check_writing_discipline(fill: dict, warns: list) -> None:
     """v4.7.1 写作纪律告警（东方电气反馈）：四拍挤段 / 3 年趋势三年并排。
     （pe_history 无第 11 章承载告警已迁 _check_ch11_binding 表驱动，v5.8.2）"""
-    # 三要素可并入既有段落；评分末拍仍须独立，避免手写评分与正文论证混成一段。
+    # 四要素均须独立成段，避免手写评分与正文论证混成一段。
     beats = ("判词：", "论据：", "对比：", "评分：", "评分依据：")
     for name in ("l1_html", "l3_html"):
         for pm in re.finditer(r"<p[^>]*>(.*?)</p>", fill.get(name) or "", flags=re.S):
             hits = sum(1 for b in beats if b in pm.group(1))
             if ("评分：" in pm.group(1) or "评分依据：" in pm.group(1)) and hits >= 2:
                 warns.append(f"{name} 存在四拍挤段（单段含 {hits} 个拍名）："
-                             f"评分末拍应独立成段；判词/论据/对比可并入既有段落")
+                             f"判词/论据/对比/评分四要素均应独立成段")
                 break  # 每字段报一次即可
     # 3 年趋势表只写 起→终（方向词）：三年数字并排反而看不出趋势
     peers = fill.get("peers_html") or ""
@@ -634,9 +653,9 @@ def _check_governance_strip(fill: dict, warns: list) -> None:
             if tag is None or "trig-strip" not in blk:
                 continue
             np = len(re.findall(r"<p[ >]", blk))
-            if np > 2:
-                warns.append(f"{tag} 维度块含 {np} 个 <p>（应恰为 2：判词段+评分末拍段）："
-                             f"trig 行后不要另起 <p> 正文，论据压进 .trig-mt 一句内联（fill-schema 条款）")
+            if np > 4:
+                warns.append(f"{tag} 维度块含 {np} 个 <p>（四要素应各自独立成段）："
+                             f"判词/论据/对比/评分不得合并或拆段凑数（fill-schema 条款）")
             # v4.11.0（天齐 09-13 实证）：评分末拍写了扣分项但 trig 行无一「扣分」状态——
             # 方块只剩正面/中性，扣分结论断层。审计修订：扣分项识别容忍写法漂移
             #（嵌套括号/全角减号 − – －/无「扣分项（」前缀的裸负分），扣分行识别容忍 class 顺序

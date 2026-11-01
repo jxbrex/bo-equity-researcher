@@ -3,6 +3,13 @@
 本文件收纳 SKILL.md 正文剔除的事故实证典故，格式为「规则 → 典故来源」，按主题分组。
 规则本体以 SKILL.md / references/*.md 为准，此处只保留来历备查。
 
+## 2026-11-01 CI 矩阵与 Python 3.9 兼容修复（v0.12.6）
+
+- v0.12.5 真实 CI 暴露三类环境/夹具问题：Ubuntu 26.04 不再提供 Python 3.9；`test_29_summarize_clears_capture` 未 stub summarize 的月线预取，CI 无缓存时泄漏为真实网络；`visual_check` 的 `ignore_cleanup_errors` 仅 Python 3.10+ 支持。
+- Ubuntu runner 固定 `ubuntu-24.04`；测试夹具补齐 `fetch_kline_monthly` stub，保持无网络契约；临时目录仅在 Python 3.10+ 传 `ignore_cleanup_errors`，3.9 走兼容路径。
+- 本地全量 pytest → **726 passed**，官方 golden **17 项通过**。本版不改 P0 业务规则、评分、报告结构或 P1–P4 优先级；真实四组合 CI 由本次推送核销。
+- 本版经用户确认后按仓库流程提交、push/tag/Release/deploy。
+
 ## 2026-11-01 P0 证据链与估值锚闭环（v0.12.5）
 
 - 增量证据锁由基础情景扩到悲观、基础、乐观三情景任一可比 PE 带；多条移动一次列全，上版缺某带只跳过该带，可比带未移动仍禁止多填证据，不改 `pe_band_evidence` 字段结构。

@@ -137,4 +137,7 @@ def test_main_ignores_temp_cleanup_errors(monkeypatch, tmp_path):
 
     monkeypatch.setattr(visual_check.tempfile, "TemporaryDirectory", fake_tempdir)
     assert visual_check.main() == 0
-    assert captured.get("ignore_cleanup_errors") is True
+    if sys.version_info >= (3, 10):
+        assert captured.get("ignore_cleanup_errors") is True
+    else:
+        assert "ignore_cleanup_errors" not in captured

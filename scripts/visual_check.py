@@ -253,7 +253,8 @@ def main() -> int:
     total = 0
     failed_widths = []
     reports = []
-    with tempfile.TemporaryDirectory(prefix="visual-check-", ignore_cleanup_errors=True) as tmp:
+    temp_kwargs = {"ignore_cleanup_errors": True} if sys.version_info >= (3, 10) else {}
+    with tempfile.TemporaryDirectory(prefix="visual-check-", **temp_kwargs) as tmp:
         work = Path(tmp)
         for w in widths:
             r = measure(chrome, html, work, w)

@@ -1416,8 +1416,9 @@ def test_29_summarize_clears_capture():
     """29. summarize 入口 _CAPTURE.clear()（v5.8.2 审计修复，无网络段级 stub）：第一次调用
     写入的 consensus_eps 残留键不得污染第二次输出——原 _sec_e5 东财降级路径先捕获存根、
     再按 "consensus_eps" in _CAPTURE 决定是否标注「已换算落盘」行；stub 镜像该条件行为。"""
-    _orig = {n: getattr(em, n) for n in ("_sec_e1", "_sec_e3", "_sec_quality", "_sec_e2",
-                                         "_sec_e4", "_sec_forecast", "_sec_gov", "_sec_e6")}
+    _orig = {n: getattr(em, n) for n in ("fetch_kline_monthly", "_sec_e1", "_sec_e3",
+                                         "_sec_quality", "_sec_e2", "_sec_e4",
+                                         "_sec_forecast", "_sec_gov", "_sec_e6")}
     _orig_e5, _orig_cap = em._sec_e5, dict(em._CAPTURE)
     _note = "（当年 EPS 均值已按 ×总股本 换算落盘 consensus_np——第 3 章完成度分母照抄源）"
 

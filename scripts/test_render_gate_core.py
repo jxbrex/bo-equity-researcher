@@ -1349,15 +1349,54 @@ def test_v2_render_computes_scores_once():
     assert '<div class="risk-register">' in html and "评分依据" in html
 
 
-def test_chart_injection_stays_out_of_preflight():
+def test_chart_injection_is_shared_by_check_and_render():
     fill = minimal_fill(target_range="999-1000")
     with tempfile.TemporaryDirectory() as d:
         path = write_fill(fill, d)
         check_err = capture_stderr(lambda: R.check_fill(path))
-        assert "<!--FIN_TREND-->" not in check_err
-        assert "<!--GROWTH-->" not in check_err
+        assert "<!--FIN_TREND-->" in check_err
+        assert "<!--GROWTH-->" in check_err
+        assert check_err.index("target_range") < check_err.index("<!--FIN_TREND-->")
         render_err = capture_stderr(lambda: R.render(path, out_path=os.path.join(d, "out.html")))
         assert render_err.index("target_range") < render_err.index("<!--FIN_TREND-->")
+
+
+def test_check_fill_runs_final_html_gates_without_writing(capsys):
+    from conftest import period_fill
+    fill = period_fill("q3")
+    period = fill["period_track"]
+    period.update(sq_prev_rev=120.0, sq_rev_yoy=40.4)
+    period["restatement"] = {
+        "fields": ["sq_prev_rev", "sq_rev_yoy"],
+        "reason": "按 em_fetch 字段生成",
+        "source": "公司2025年报与2026年三季报",
+    }
+    quote_path = fill["quote"]["source_file"]
+    with tempfile.TemporaryDirectory() as d:
+        path = write_fill(fill, d)
+        out_path = os.path.join(d, "out.html")
+        with pytest.raises(SystemExit) as exc_info:
+            R.check_fill(path)
+        assert exc_info.value.code == 2
+        err = capsys.readouterr().err
+        assert "内部实现名" in err and "em_fetch" in err
+        assert not os.path.exists(out_path)
+        assert not os.path.exists(os.path.join(d, "_archive"))
+        assert os.path.exists(path) and os.path.exists(quote_path)
+
+
+def test_final_svg_multiset_matches_rendered_repl():
+    svg = '<svg aria-label="测试图"><text>4.3</text></svg>'
+    repl = {"CHART": f"<div>{svg}</div>"}
+    R._check_final_charts(f"<html>{svg}</html>", repl)
+    for html in ("<html></html>", f"<html>{svg}{svg}</html>",
+                 '<html><svg aria-label="测试图"><text>10.0</text></svg></html>'):
+        try:
+            R._check_final_charts(html, repl)
+        except ValueError as exc:
+            assert "SVG" in str(exc)
+        else:
+            raise AssertionError("最终 SVG 缺失、重复或被改写都必须拒绝")
 
 
 def test_v2_red_flags_stay_in_1d_and_two_hits_require_warning():

@@ -119,7 +119,7 @@ def build_growth_plot(fill: dict) -> str:
     if has_cons:
         note += '，◆=卖方一致预期（券商研报汇总）'
         if diffs:
-            note += '；预期差（本文中枢−一致预期）：' + "；".join(diffs)
+            note += '；预期差（区间中点−一致预期）：' + "；".join(diffs)
     else:
         note += '；未取得可核验的一致预期，不画共识点、不计算预期差'
     note += '；全图为中性色，红涨绿跌仅用于股价方向'

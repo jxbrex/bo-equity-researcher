@@ -275,6 +275,16 @@ def _check_prev_charts(fill: dict, warns: list) -> None:
                      f"（字段缺失或有效月线不足 12 点）{why}")
 
 
+def check_final_review_charts(fill: dict) -> None:
+    """新复盘的减配原因在最终渲染前必须成立；旧报告仍走原迁移告警。"""
+    if str(fill.get("date") or "") < "2026-11-04":
+        return
+    warns = []
+    _check_prev_charts(fill, warns)
+    if warns:
+        raise ValueError("最终 HTML 复盘图表完整性校验失败：" + "\n".join(warns))
+
+
 def _two_sided_trigger_verdict(target):
     text = unescape(str(target or ""))
     parts = re.split(r"[｜|]", text, maxsplit=1)

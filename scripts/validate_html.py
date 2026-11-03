@@ -447,6 +447,55 @@ def _label_paragraph_text(block: str, label: str):
     return _plain_text(match.group(1)).strip() if match else None
 
 
+def _dim_beat_missing(block: str) -> list:
+    judgement_words = ("是", "处", "仍", "未", "已", "将", "应", "属", "仅", "更", "较",
+                       "形成", "构成", "支撑", "压制", "改善", "恶化", "回升", "回落",
+                       "优于", "弱于", "高于", "低于", "意味着", "表明", "反映", "受益",
+                       "受限", "依赖", "缺乏", "守住")
+    comparison_words = ("同业", "历史", "基准", "阈值", "上版", "候选", "高于", "低于",
+                        "优于", "弱于", "强于", "收窄", "放缓", "回升", "回落", "改善",
+                        "恶化", "增加", "下降", "提升", "减少", "领先", "落后", "相当",
+                        "接近", "偏离", "更", "较")
+    missing = []
+    judgement = _label_paragraph_text(block, "判词")
+    if not judgement or not re.search("|".join(map(re.escape, judgement_words)), judgement):
+        missing.append("判词")
+    evidence = _label_paragraph_text(block, "论据")
+    if not evidence or len(evidence) < 4 or not re.search(r"\d", evidence):
+        missing.append("量化论据")
+    comparison = _label_paragraph_text(block, "对比")
+    if not comparison or not re.search("|".join(map(re.escape, comparison_words)), comparison):
+        missing.append("对比基准")
+    score = _label_paragraph_text(block, "评分")
+    if not score or len(score) < 4 or re.fullmatch(r"(?:详见|见|请见|查看)?评分依据[。]?", score):
+        missing.append("评分理由")
+    return missing
+
+
+def check_final_dimensions(html: str, fill: dict, sc: dict) -> None:
+    """在模板合成后复核九维块与四要素，避免预检后的注入或条件块损伤正文。"""
+    if _quality_version(fill) != 2:
+        return
+    errors = []
+    expected = set((sc or {}).get("dimension_results") or {})
+    seen = set(re.findall(r"data-dim\s*=\s*['\"]([^'\"]+)['\"]", html))
+    missing_dims = sorted(expected - seen)
+    if missing_dims:
+        errors.append("最终 HTML 缺九维块：" + "/".join(missing_dims))
+    for block in _split_dim_blocks(html):
+        name_match = re.search(r'dim-name[^>]*>\s*(\d\.\d[^<]*)', block)
+        name = name_match.group(1).strip() if name_match else "未命名维度"
+        missing = _dim_beat_missing(block)
+        if missing and str(fill.get("date") or "") >= "2026-11-01":
+            errors.append(f"{name} 缺 {'/'.join(missing)}")
+        for label in ("判词", "论据", "对比", "评分"):
+            count = len(re.findall(rf"<p[^>]*>\s*<strong>\s*{label}\s*[：:]", block))
+            if count > 1:
+                errors.append(f"{name} 的 {label} 段重复 {count} 次")
+    if errors:
+        raise ValueError("最终 HTML 九维正文校验失败：" + "；".join(errors))
+
+
 def _check_dim_blocks(fill: dict, warns: list, sc: dict = None) -> None:
     """dim-block 内容地板（纯文本 <40 字拒渲染 / <80 字告警）与极端分证据校验。"""
     # dim-block 内容地板（deepseek 中兴/豪威"每块一句话凑数"缩水实证）：
@@ -457,31 +506,11 @@ def _check_dim_blocks(fill: dict, warns: list, sc: dict = None) -> None:
     # 提取不到编号 → 按位置兜底并告警（写法漂移可见，不静默）
     if _quality_version(fill) == 2:
         missing_beats = []
-        judgement_words = ("是", "处", "仍", "未", "已", "将", "应", "属", "仅", "更", "较",
-                           "形成", "构成", "支撑", "压制", "改善", "恶化", "回升", "回落",
-                           "优于", "弱于", "高于", "低于", "意味着", "表明", "反映", "受益",
-                           "受限", "依赖", "缺乏", "守住")
-        comparison_words = ("同业", "历史", "基准", "阈值", "上版", "候选", "高于", "低于",
-                            "优于", "弱于", "强于", "收窄", "放缓", "回升", "回落", "改善",
-                            "恶化", "增加", "下降", "提升", "减少", "领先", "落后", "相当",
-                            "接近", "偏离", "更", "较")
         for field in ("l1_html", "l3_html"):
             for blk in _split_dim_blocks(fill.get(field) or ""):
                 name_match = re.search(r'dim-name[^>]*>\s*(\d\.\d[^<]*)', blk)
                 name = name_match.group(1).strip() if name_match else "未命名维度"
-                missing = []
-                judgement = _label_paragraph_text(blk, "判词")
-                if not judgement or not re.search("|".join(map(re.escape, judgement_words)), judgement):
-                    missing.append("判词")
-                evidence = _label_paragraph_text(blk, "论据")
-                if not evidence or len(evidence) < 4 or not re.search(r"\d", evidence):
-                    missing.append("量化论据")
-                comparison = _label_paragraph_text(blk, "对比")
-                if not comparison or not re.search("|".join(map(re.escape, comparison_words)), comparison):
-                    missing.append("对比基准")
-                score = _label_paragraph_text(blk, "评分")
-                if not score or len(score) < 4 or re.fullmatch(r"(?:详见|见|请见|查看)?评分依据[。]?", score):
-                    missing.append("评分理由")
+                missing = _dim_beat_missing(blk)
                 if missing:
                     missing_beats.append(f"{name} 缺 {'/'.join(missing)}")
         if missing_beats:

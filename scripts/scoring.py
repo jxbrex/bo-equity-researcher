@@ -13,6 +13,7 @@ import math
 import re
 import statistics
 import sys
+from copy import deepcopy
 
 
 # 维度元数据：key -> (层, 显示名, 层内默认权重)
@@ -477,6 +478,113 @@ def _quality_context(fill):
             "weights": weights, "layer_share": layer_share}
 
 
+def _actual_profit_by_year(fill: dict):
+    raw_years = [str(y) for y in ((fill.get("fin_trend") or {}).get("years") or [])]
+    profits = {}
+    for panel in (fill.get("fin_trend") or {}).get("panels") or []:
+        if not isinstance(panel, dict):
+            continue
+        for bar in panel.get("bars") or []:
+            name = str((bar or {}).get("name") or "")
+            if "归母净利" not in name or "扣非" in name:
+                continue
+            values = [_num(v) for v in (bar.get("values") or [])]
+            if values and len(values) == len(raw_years) and None not in values:
+                profits = {match.group(0): value for year, value in zip(raw_years, values)
+                           if (match := re.search(r"20\d{2}", year))}
+    return raw_years, profits
+
+
+def _growth_currency_compatible(fill: dict) -> bool:
+    return str(fill.get("currency") or "元").strip().lower() in ("元", "人民币", "cny", "rmb")
+
+
+def normalize_growth_fill(fill: dict) -> dict:
+    """生成增长链规范化视图；原始 fill 与旧版手填值均不被改写。"""
+    normalized = deepcopy(fill)
+    if _quality_version(normalized) != 2:
+        return normalized
+    valuation = normalized.get("valuation") or {}
+    scenarios = valuation.get("scenarios") or []
+    if not any(isinstance(s, dict) and _num(s.get("profit")) is not None for s in scenarios):
+        return normalized
+
+    is_new = str(normalized.get("date") or "") >= "2026-11-04"
+    raw_year = valuation.get("profit_year")
+    if raw_year is not None and not re.fullmatch(r"20\d{2}", str(raw_year).strip()):
+        raise ValueError(f"valuation.profit_year 须为四位年度，实际: {raw_year!r}")
+    year_number = _num(raw_year)
+    if is_new and year_number is None:
+        raise ValueError("新利润口径报告必填 valuation.profit_year（三情景 profit 所属年度）")
+    profit_year = int(year_number) if year_number is not None else None
+    if year_number is not None and (year_number != profit_year or not 2000 <= profit_year <= 2100):
+        raise ValueError(f"valuation.profit_year 须为四位年度，实际: {raw_year!r}")
+    derived = set(normalized.get("_growth_derived") or [])
+
+    def assign(obj, key, path, value):
+        if is_new and key in obj and path not in derived:
+            raise ValueError(f"{path} 可由统一利润假设计算，请删除重复字段，不要手工填写")
+        if not is_new and key in obj and path not in derived:
+            return
+        obj[key] = value
+        derived.add(path)
+
+    base_scenario = next((s for s in scenarios
+                          if isinstance(s, dict) and str(s.get("key") or "").lower() == "base"), {})
+    base_profit = _num(base_scenario.get("profit"))
+    if profit_year is not None and base_profit is not None:
+        for dim in (normalized.get("gap_plot") or {}).get("dims") or []:
+            if not isinstance(dim, dict):
+                continue
+            name = str(dim.get("name") or "")
+            match = re.search(r"20\d{2}", name)
+            if (match and int(match.group(0)) == profit_year and "净利" in name
+                    and "扣非" not in name and "净利率" not in name):
+                assign(dim, "ours", f"gap_plot.dims.{profit_year}E.ours", base_profit)
+
+    raw_years, profits = _actual_profit_by_year(normalized)
+    match = re.search(r"20\d{2}", raw_years[-1]) if raw_years else None
+    actual_year = int(match.group(0)) if match else None
+    actual_profit = profits.get(str(actual_year)) if actual_year is not None else None
+    if profit_year is None or actual_year is None or profit_year != actual_year + 1 \
+            or actual_profit is None or actual_profit <= 0 or not _growth_currency_compatible(normalized):
+        if derived:
+            normalized["_growth_derived"] = sorted(derived)
+        return normalized
+
+    rates = []
+    for key in ("pess", "base", "opt"):
+        scenario = next((s for s in scenarios
+                         if isinstance(s, dict) and str(s.get("key") or "").lower() == key), {})
+        profit = _num(scenario.get("profit"))
+        if profit is None:
+            if derived:
+                normalized["_growth_derived"] = sorted(derived)
+            return normalized
+        rates.append((profit / actual_profit - 1) * 100)
+    growth_lo, growth_hi = round(min(rates), 1), round(max(rates), 1)
+
+    score_inputs = normalized.get("score_inputs") or {}
+    growth_inputs = score_inputs.get("3A") or {}
+    if isinstance(growth_inputs, dict):
+        assign(growth_inputs, "growth_lo", "score_inputs.3A.growth_lo", growth_lo)
+        assign(growth_inputs, "growth_hi", "score_inputs.3A.growth_hi", growth_hi)
+
+    growth_plot = normalized.get("growth_plot") or {}
+    fcst = growth_plot.get("fcst")
+    if isinstance(fcst, list):
+        row = next((f for f in fcst if isinstance(f, dict)
+                    and str(f.get("y") or "").strip() == f"{profit_year}E"), None)
+        if row is None:
+            row = {"y": f"{profit_year}E"}
+            fcst.append(row)
+        assign(row, "np_lo", f"growth_plot.fcst.{profit_year}E.np_lo", growth_lo)
+        assign(row, "np_hi", f"growth_plot.fcst.{profit_year}E.np_hi", growth_hi)
+    if derived:
+        normalized["_growth_derived"] = sorted(derived)
+    return normalized
+
+
 def _compute_scores_v2(fill):
     if fill.get("scores"):
         raise ValueError("v2 不得用 scores 手写最终分，请提供 score_inputs")
@@ -567,7 +675,12 @@ def _compute_scores_v2(fill):
 
 def compute_scores(fill: dict):
     if _quality_version(fill) == 2:
-        return _compute_scores_v2(fill)
+        normalized = normalize_growth_fill(fill)
+        result = _compute_scores_v2(normalized)
+        if not any(path.startswith("score_inputs.")
+                   for path in normalized.get("_growth_derived") or []):
+            result["score_inputs"] = fill.get("score_inputs")
+        return result
     """v4.0 三轨：质量分（L1 六维 + L3 三维，不含估值）+ 估值分（独立）+ 时机分（独立参考）。
     返回 dict：layer_scores / layer_share / pre_risk_quality /
     yellow_total / quality（质量分）/ valuation（估值分）/ timing（时机分）/ red_flag。

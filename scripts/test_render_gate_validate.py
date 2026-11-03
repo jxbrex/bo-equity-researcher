@@ -1468,6 +1468,198 @@ def _yifeng_growth_fill():
     return fill
 
 
+def _new_growth_view_fill():
+    fill = _yifeng_growth_fill()
+    fill["date"] = "2026-11-04"
+    fill["valuation"]["profit_year"] = 2026
+    fill["score_inputs"]["3A"] = {"driver_status": "部分兑现"}
+    fill["growth_plot"]["fcst"] = [{"y": "2026E"}]
+    fill["gap_plot"]["dims"] = [{"name": "2026E归母净利（亿元）", "consensus": 19.09}]
+    return fill
+
+
+def test_growth_view_derives_next_year_single_source():
+    from scoring import normalize_growth_fill
+    fill = _new_growth_view_fill()
+    before = repr(fill)
+    normalized = normalize_growth_fill(fill)
+    assert normalized["score_inputs"]["3A"]["growth_lo"] == 4.3
+    assert normalized["score_inputs"]["3A"]["growth_hi"] == 16.8
+    assert normalized["growth_plot"]["fcst"][0]["np_lo"] == 4.3
+    assert normalized["growth_plot"]["fcst"][0]["np_hi"] == 16.8
+    assert normalized["gap_plot"]["dims"][0]["ours"] == 18.9
+    assert repr(fill) == before, "规范化不得修改原始 fill"
+
+
+def test_growth_view_scenario_changes_update_derived_consumers():
+    from scoring import normalize_growth_fill
+    boundary = _new_growth_view_fill()
+    boundary["valuation"]["scenarios"][0]["profit"] = 17.6
+    normalized = normalize_growth_fill(boundary)
+    assert normalized["score_inputs"]["3A"]["growth_lo"] == 4.9
+    assert normalized["growth_plot"]["fcst"][0]["np_lo"] == 4.9
+
+    base = _new_growth_view_fill()
+    base["valuation"]["scenarios"][1]["profit"] = 19.0
+    normalized = normalize_growth_fill(base)
+    assert normalized["gap_plot"]["dims"][0]["ours"] == 19.0
+
+
+def test_growth_view_rejects_manual_derived_fields_for_new_report():
+    from scoring import normalize_growth_fill
+    cases = [
+        ("score_inputs.3A.growth_lo", lambda f: f["score_inputs"]["3A"].update(growth_lo=4.2908)),
+        ("growth_plot.fcst.2026E.np_lo", lambda f: f["growth_plot"]["fcst"][0].update(np_lo=4.2908)),
+        ("gap_plot.dims.2026E.ours", lambda f: f["gap_plot"]["dims"][0].update(ours=18.9)),
+    ]
+    for path, mutate in cases:
+        fill = _new_growth_view_fill()
+        mutate(fill)
+        try:
+            normalize_growth_fill(fill)
+        except ValueError as exc:
+            assert path in str(exc) and "删除重复字段" in str(exc)
+        else:
+            raise AssertionError(f"新报告手填可派生字段应拒绝：{path}")
+
+
+def test_growth_view_normalization_is_idempotent():
+    from scoring import normalize_growth_fill
+    normalized = normalize_growth_fill(_new_growth_view_fill())
+    assert normalize_growth_fill(normalized) == normalized
+
+
+def test_growth_view_legacy_manual_fields_remain_supported():
+    from scoring import normalize_growth_fill
+    fill = _yifeng_growth_fill()
+    fill["valuation"]["profit_year"] = 2026
+    fill["score_inputs"]["3A"]["growth_lo"] = 10
+    fill["gap_plot"]["dims"][0]["ours"] = 18.8
+    normalized = normalize_growth_fill(fill)
+    assert normalized["score_inputs"]["3A"]["growth_lo"] == 10
+    assert normalized["gap_plot"]["dims"][0]["ours"] == 18.8
+
+
+def test_growth_view_later_year_does_not_invent_single_year_growth():
+    from scoring import normalize_growth_fill
+    fill = _new_growth_view_fill()
+    fill["valuation"]["profit_year"] = 2027
+    fill["score_inputs"]["3A"].update(growth_lo=10, growth_hi=30)
+    fill["growth_plot"]["fcst"] = [{"y": "2026-27E", "np_lo": 10, "np_hi": 35}]
+    fill["gap_plot"]["dims"] = [{"name": "2027E归母净利（亿元）", "consensus": 19.09}]
+    normalized = normalize_growth_fill(fill)
+    assert normalized["score_inputs"]["3A"]["growth_lo"] == 10
+    assert normalized["growth_plot"]["fcst"][0] == {"y": "2026-27E", "np_lo": 10, "np_hi": 35}
+    assert normalized["gap_plot"]["dims"][0]["ours"] == 18.9
+
+
+def test_growth_view_nonpositive_or_missing_actual_does_not_invent_growth():
+    from scoring import normalize_growth_fill
+    for actual in (0, -1, None):
+        fill = _new_growth_view_fill()
+        if actual is None:
+            fill["fin_trend"] = {}
+        else:
+            fill["fin_trend"]["panels"][0]["bars"][0]["values"][-1] = actual
+        normalized = normalize_growth_fill(fill)
+        assert "growth_lo" not in normalized["score_inputs"]["3A"]
+        assert "np_lo" not in normalized["growth_plot"]["fcst"][0]
+
+
+def test_growth_view_mcap_and_missing_profit_year_boundaries():
+    from scoring import normalize_growth_fill
+    mcap = _new_growth_view_fill()
+    mcap["valuation"].pop("profit_year")
+    for scenario in mcap["valuation"]["scenarios"]:
+        scenario.pop("profit")
+        scenario.pop("pe")
+        scenario["mcap"] = [100, 120]
+    normalized = normalize_growth_fill(mcap)
+    assert "profit_year" not in normalized["valuation"]
+
+    missing = _new_growth_view_fill()
+    missing["valuation"].pop("profit_year")
+    try:
+        normalize_growth_fill(missing)
+    except ValueError as exc:
+        assert "valuation.profit_year" in str(exc)
+    else:
+        raise AssertionError("新利润口径报告缺 profit_year 应明确拒绝")
+
+
+def test_growth_view_mixed_currency_does_not_derive():
+    from scoring import normalize_growth_fill
+    fill = _new_growth_view_fill()
+    fill["currency"] = "港元"
+    normalized = normalize_growth_fill(fill)
+    assert "growth_lo" not in normalized["score_inputs"]["3A"]
+    assert "np_lo" not in normalized["growth_plot"]["fcst"][0]
+    assert normalized["gap_plot"]["dims"][0]["ours"] == 18.9
+
+
+def test_growth_cumulative_scenario_range_checked_when_profit_path_known():
+    from validate_audit import _check_growth_consistency
+    fill = _byd_growth_fill()
+    fill["date"] = "2026-11-04"
+    fill["quality_version"] = 2
+    fill["valuation"]["profit_year"] = 2027
+    for scenario, profit in zip(fill["valuation"]["scenarios"], (280, 400, 480)):
+        scenario["profit"] = profit
+    fill["growth_plot"]["fcst"] = [
+        {"y": "2026E", "np_consensus": 24.95},
+        {"y": "2026-27E", "np_lo": 10, "np_hi": 35},
+    ]
+    try:
+        _check_growth_consistency(fill, [])
+    except ValueError as exc:
+        assert "累计增速" in str(exc) and "47.1" in str(exc)
+    else:
+        raise AssertionError("合并年度区间未覆盖三情景累计增速应拒绝")
+
+    fill["growth_plot"]["fcst"][1].update(np_lo=-15, np_hi=48)
+    warns = []
+    _check_growth_consistency(fill, warns)
+    assert "累计增速" not in "\n".join(warns)
+
+
+def test_growth_cumulative_row_missing_bounds_gets_readable_rejection():
+    from validate_audit import _check_growth_consistency
+    fill = _byd_growth_fill()
+    fill["date"] = "2026-11-04"
+    fill["valuation"]["profit_year"] = 2027
+    fill["growth_plot"]["fcst"] = [{"y": "2026-27E"}]
+    try:
+        _check_growth_consistency(fill, [])
+    except ValueError as exc:
+        assert "np_lo/np_hi" in str(exc) and "累计区间" in str(exc)
+    except TypeError as exc:
+        raise AssertionError(f"缺区间应给可读 ValueError，而非 TypeError: {exc}")
+    else:
+        raise AssertionError("合并行缺累计区间必须拒绝")
+
+
+def test_growth_view_rejects_non_four_digit_profit_year():
+    from scoring import normalize_growth_fill
+    for invalid in ("2026E", "2026-27"):
+        fill = _new_growth_view_fill()
+        fill["valuation"]["profit_year"] = invalid
+        try:
+            normalize_growth_fill(fill)
+        except ValueError as exc:
+            assert "profit_year" in str(exc) and "四位年度" in str(exc)
+        else:
+            raise AssertionError(f"非法 profit_year 应拒绝：{invalid}")
+
+
+def test_growth_plot_labels_interval_midpoint_not_base_central():
+    from charts_misc import build_growth_plot
+    fill = _yifeng_growth_fill()
+    fill["growth_plot"]["fcst"][0]["np_consensus"] = 13.73
+    html = build_growth_plot(fill)
+    assert "区间中点−一致预期" in html
+    assert "本文中枢−一致预期" not in html
+
+
 def test_growth_score_3a_mismatch_rejected_for_new_report():
     from validate_audit import _check_growth_consistency
     fill = _yifeng_growth_fill()
@@ -1520,6 +1712,53 @@ def test_growth_three_way_consistency_and_legacy_boundaries():
     warns = []
     _check_growth_consistency(nonpositive, warns)
     assert "3A 增速区间" not in "\n".join(warns)
+
+
+def test_final_dimensions_reuse_four_element_contract():
+    from validate_html import check_final_dimensions
+    fill = v2_fill(date="2026-11-01", cycle_html="<p>估值周期位置与可比时段分析。</p>")
+    html = render_v2_fill(fill)
+    sc = R.compute_scores(fill)
+    check_final_dimensions(html, fill, sc)
+
+    missing = re.sub(r"<p><strong>论据：</strong>.*?</p>", "", html, count=1, flags=re.S)
+    try:
+        check_final_dimensions(missing, fill, sc)
+    except ValueError as exc:
+        assert "4.1" in str(exc) and "论据" in str(exc)
+    else:
+        raise AssertionError("最终 HTML 缺独立论据段必须拒绝")
+
+    duplicated = html.replace("<p><strong>判词：", "<p><strong>判词：", 1)
+    first = duplicated.index("<p><strong>判词：")
+    end = duplicated.index("</p>", first) + 4
+    duplicated = duplicated[:end] + duplicated[first:end] + duplicated[end:]
+    try:
+        check_final_dimensions(duplicated, fill, sc)
+    except ValueError as exc:
+        assert "4.1" in str(exc) and "判词" in str(exc)
+    else:
+        raise AssertionError("最终 HTML 重复判词段必须拒绝")
+
+
+def test_final_review_chart_gap_uses_existing_reason_rules():
+    from validate_charts import check_final_review_charts
+    fill = _byd_growth_fill()
+    fill["date"] = "2026-11-04"
+    fill["prev"] = {"charts": {"price_history": True}}
+    fill["review_html"] = ""
+    try:
+        check_final_review_charts(fill)
+    except ValueError as exc:
+        assert "price_history" in str(exc) and "减配" in str(exc)
+    else:
+        raise AssertionError("新复盘旧图减少且无原因应拒绝")
+
+    fill["review_html"] = "<p>股价季K不生成：高速成长禁填且全历史区间失真，改用可比时段。</p>"
+    check_final_review_charts(fill)
+    fill["review_html"] = ""
+    fill["date"] = "2026-11-03"
+    check_final_review_charts(fill)
 
 
 def test_preflight_aggregates_independent_content_errors():

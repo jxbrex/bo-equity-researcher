@@ -15,7 +15,9 @@ from scoring import (
     _fmt,
     _plain_text,
     _quality_context,
-    _quality_version)
+    _quality_version,
+    _actual_profit_by_year,
+    _growth_currency_compatible)
 from charts_base import (
     _gap_dim_ok,
     _period_ratio,
@@ -641,26 +643,14 @@ def _check_consensus_np(fill: dict, warns: list) -> None:
 
 def _check_growth_consistency(fill: dict, warns: list) -> None:
     """growth_plot 与 fin_trend、E5 落盘及 valuation 的同源对账。"""
-    ft = fill.get("fin_trend") or {}
     gp = fill.get("growth_plot") or {}
-    raw_years = [str(y) for y in (ft.get("years") or [])]
 
     def _year(value):
         match = re.search(r"20\d{2}", str(value or ""))
         return match.group(0) if match else None
 
-    base_np = None
-    np_by_year = {}
-    for p in ft.get("panels") or []:
-        if not isinstance(p, dict):
-            continue
-        for b in p.get("bars") or []:
-            nm = str((b or {}).get("name") or "")
-            if "归母净利" in nm and "扣非" not in nm:
-                vals = [_num(x) for x in (b.get("values") or [])]
-                if vals and len(vals) == len(raw_years) and None not in vals:
-                    base_np = vals[-1]
-                    np_by_year = {_year(y): v for y, v in zip(raw_years, vals) if _year(y)}
+    raw_years, np_by_year = _actual_profit_by_year(fill)
+    base_np = np_by_year.get(_year(raw_years[-1])) if raw_years else None
 
     def _reject_or_warn(message):
         date = str(fill.get("date") or "")
@@ -744,12 +734,52 @@ def _check_growth_consistency(fill: dict, warns: list) -> None:
             conflicted_years.add(y)
         else:
             gap_ours[y] = ours
-    base_years = []
-    if base_profit is not None:
-        for year, ours in gap_ours.items():
-            if abs(ours - base_profit) <= max(0.1, abs(base_profit) * 0.02):
-                base_years.append(year)
-    base_year = base_years[0] if len(base_years) == 1 else None
+    explicit_year = _num((fill.get("valuation") or {}).get("profit_year"))
+    if explicit_year is not None and int(explicit_year) == explicit_year:
+        base_year = int(explicit_year)
+    else:
+        base_years = []
+        if base_profit is not None:
+            for year, ours in gap_ours.items():
+                if abs(ours - base_profit) <= max(0.1, abs(base_profit) * 0.02):
+                    base_years.append(year)
+        base_year = base_years[0] if len(base_years) == 1 else None
+    if (base_year is not None and base_year > last_year + 1 and base_np is not None and base_np > 0
+            and _growth_currency_compatible(fill)):
+        scenario_rates = []
+        for key in ("pess", "base", "opt"):
+            scenario = _scenario_by_key((fill.get("valuation") or {}).get("scenarios"), key)
+            profit = _num(scenario.get("profit")) if scenario else None
+            if profit is not None:
+                scenario_rates.append((profit / base_np - 1) * 100)
+        if len(scenario_rates) == 3:
+            cumulative_lo, cumulative_hi = min(scenario_rates), max(scenario_rates)
+            for row in fcst:
+                y_text = str(row.get("y") or "").strip()
+                merged = re.fullmatch(r"(20\d{2})\s*[-–~]\s*(\d{2}|\d{4})E", y_text)
+                if not merged:
+                    continue
+                start = int(merged.group(1))
+                end = int(merged.group(2))
+                if len(merged.group(2)) == 2:
+                    end = start // 100 * 100 + end
+                if start != last_year + 1 or end != base_year:
+                    continue
+                lo, hi = _num(row.get("np_lo")), _num(row.get("np_hi"))
+                if lo is None or hi is None:
+                    message = (f"growth_plot {y_text} 合并行须填 np_lo/np_hi 累计区间："
+                               "不得只写年份后静默缺省")
+                    if str(fill.get("date") or "") >= "2026-11-04":
+                        raise ValueError(message)
+                    warns.append(message)
+                    continue
+                if not (lo - 2 <= cumulative_lo and hi + 2 >= cumulative_hi):
+                    message = (f"growth_plot {y_text} 本文区间 [{lo:g}, {hi:g}] 未覆盖 valuation 三情景累计增速 "
+                               f"[{cumulative_lo:.1f}, {cumulative_hi:.1f}]（容差 ±2pct）："
+                               "合并年度只比较累计涨幅，不得当作单年增速")
+                    if str(fill.get("date") or "") >= "2026-11-04":
+                        raise ValueError(message)
+                    warns.append(message)
     forecast_years = {int(match.group(1)) for f in fcst
                       if (match := re.fullmatch(r"(20\d{2})E", str(f.get("y") or "").strip()))
                       and (_num(f.get("np_consensus")) is not None

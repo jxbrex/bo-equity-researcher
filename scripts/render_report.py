@@ -20,7 +20,7 @@ import os
 import re
 import shutil
 import sys
-from collections import namedtuple
+from collections import Counter, namedtuple
 from html import unescape as _html_unescape
 
 # Windows GBK 控制台打印 ⚠️/−/🔴 等字符会 UnicodeEncodeError，统一强制 UTF-8 + replace
@@ -39,7 +39,7 @@ from scoring import (
     build_score_summary, build_valuation_process_card, build_position_card,
     _quality_verdict, _valuation_verdict,
     compute_valuation, compute_valuation_score, build_dcf_cards, build_regime_note,
-    _edge_info, build_edge_upgrade_rows, _matrix_applies,
+    _edge_info, build_edge_upgrade_rows, _matrix_applies, normalize_growth_fill,
 )
 from quality_rules import F_ITEM_IDS, _liquidity_band, _f_hits_with_causal_groups, POLICY_ALIASES
 from charts_base import _fmt_px, _prev_track_rows, _SOURCE_BANNED_RE
@@ -64,7 +64,7 @@ from validate import validate_content
 
 # 渲染器版本：嵌入输出 HTML 尾部注释，事后可 grep 验证报告确由本脚本渲染
 # （防"render 报错后手写全文 HTML 绕行"，巨石 2026-08-23 实证）
-RENDERER_VERSION = "v0.13.0"
+RENDERER_VERSION = "v0.14.0"
 
 # Windows 文件名非法字符：\ / : * ? " < > | 及 ASCII 控制字符（\x00-\x1f）
 _WIN_ILLEGAL = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
@@ -705,7 +705,7 @@ def _build_repl_map(ctx: "RenderContext") -> dict:
     return repl
 
 
-def _fill_template(repl: dict) -> str:
+def _fill_template(repl: dict, used_keys=None) -> str:
     """读模板 → 条件块（<!--IF:-->）/占位符（{{...}}）替换 → 表格对齐自动修正 + table-scroll 可达性注入。"""
     tmpl_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "assets", "report-template.html")
     html = open(tmpl_path, encoding="utf-8").read()
@@ -737,7 +737,13 @@ def _fill_template(repl: dict) -> str:
 
     html = re.sub(r"<!--IF:([A-Z_]+)-->(.*?)<!--ENDIF-->", handle_conditional, html, flags=re.S)
 
-    html = re.sub(r"\{\{([A-Z_0-9]+)\}\}", lambda m: repl.get(m.group(1), m.group(0)), html)
+    def handle_replacement(match):
+        key = match.group(1)
+        if used_keys is not None:
+            used_keys.add(key)
+        return repl.get(key, match.group(0))
+
+    html = re.sub(r"\{\{([A-Z_0-9]+)\}\}", handle_replacement, html)
     # 嵌套条件块会让非贪婪正则错配（外层吞内层 ENDIF）、fill 片段也可能含字面条件块标记——
     # 替换后残留即结构非法，拒渲染（与 _check_leftover 同级）
     if "<!--IF:" in html or "<!--ENDIF-->" in html:
@@ -961,7 +967,7 @@ def _post_render_checks(repl: dict, fill: dict, out_path: str, quality: float, p
 
 def _preflight(fill_path: str):
     """解析、评分与校验只执行一次，并把正式渲染消费的片段一并返回。"""
-    fill = _load_fill(fill_path)
+    fill = normalize_growth_fill(_load_fill(fill_path))
     _check_required_scalars(fill)
     _check_l4_order(fill.get("l4_html", ""))
     calc = compute_valuation(fill)
@@ -999,26 +1005,31 @@ def _preflight(fill_path: str):
                            l1_html, l3_html, risk_register_html)
 
 
-def render(fill_path: str, out_path: str = None) -> str:
+CompleteRender = namedtuple("CompleteRender", [
+    "html", "repl", "fill", "sc", "valuation", "prev", "date", "target_range",
+])
+
+
+def _check_final_charts(html: str, repl: dict) -> None:
+    expected = Counter(svg for value in repl.values() if isinstance(value, str)
+                       for svg in re.findall(r"<svg\b.*?</svg>", value, flags=re.S))
+    actual = Counter(re.findall(r"<svg\b.*?</svg>", html, flags=re.S))
+    if expected != actual:
+        raise ValueError(
+            f"最终 HTML SVG 多重集合不一致：模板输入 {sum(expected.values())} 张，"
+            f"最终成品 {sum(actual.values())} 张；不得静默删除、重复或改写图表")
+
+
+def render_document(fill_path: str) -> CompleteRender:
+    """完成全部内存渲染与最终校验，不写报告、不归档。"""
     (fill, calc, sc, valuation, valuation_calc,
      l1_html, l3_html, risk_register_html) = _preflight(fill_path)
-    cur = str(fill.get("currency") or "元")  # 币种单位（默认「元」，港股 fill 填 currency="港元"）
-
-    # 图形组件（脚本生成 SVG；数据缺省时为空串 → 模板条件块整块删除）
+    cur = str(fill.get("currency") or "元")
     spectrum_html = build_scenario_spectrum(fill, calc)
     scenario_block_html = build_scenario_block(calc, cur)
     peers_plot_html = build_peers_plot(fill)
     peers_html = _clean_peers_matrix(fill, peers_plot_html)
-
-    layer_scores = sc["layer_scores"]
-    pre_risk = sc["pre_risk_quality"]
-    yellow_total = sc["yellow_total"]
-    quality = sc["quality"]
-    timing = sc["timing"]
-    red_flag = sc["red_flag"]
-
     prev, review_html = _check_backtest_flags(fill)
-
     date, subtitle, target_range = _build_context(fill, calc)
     l1_html = _inject_l1_charts(l1_html, fill)
     l3_html = _inject_l3_charts(l3_html, fill)
@@ -1029,34 +1040,40 @@ def render(fill_path: str, out_path: str = None) -> str:
                         scenario_block_html=scenario_block_html, peers_plot_html=peers_plot_html,
                         l1_html=l1_html, l3_html=l3_html, risk_register_html=risk_register_html)
     repl = _build_repl_map(ctx)
-
-    html = _fill_template(repl)
+    used_keys = set()
+    html = _fill_template(repl, used_keys)
     _check_leftover(html)
     _check_source_spans(html)
+    from validate_html import check_final_dimensions
+    from validate_charts import check_final_review_charts
+    check_final_dimensions(html, fill, sc)
+    check_final_review_charts(fill)
+    _check_final_charts(html, {key: value for key, value in repl.items() if key in used_keys})
+    return CompleteRender(html, repl, fill, sc, valuation, prev, date, target_range)
 
+
+def render(fill_path: str, out_path: str = None) -> str:
+    document = render_document(fill_path)
+    fill, sc, valuation, prev = document.fill, document.sc, document.valuation, document.prev
+    quality, timing, red_flag = sc["quality"], sc["timing"], sc["red_flag"]
     if not out_path:
-        out_path = _make_output_path(fill_path, fill, date, quality, valuation, prev)
-    _write_html(html, out_path)
-
-    _post_render_checks(repl, fill, out_path, quality, pre_risk, yellow_total,
-                        valuation, timing, red_flag, layer_scores)
-    _archive_artifacts(fill, fill_path, out_path, date, quality, valuation, timing,
-                       target_range, red_flag, backtest=bool(prev), sc=sc)
+        out_path = _make_output_path(fill_path, fill, document.date, quality, valuation, prev)
+    _write_html(document.html, out_path)
+    _post_render_checks(document.repl, fill, out_path, quality, sc["pre_risk_quality"],
+                        sc["yellow_total"], valuation, timing, red_flag, sc["layer_scores"])
+    _archive_artifacts(fill, fill_path, out_path, document.date, quality, valuation, timing,
+                       document.target_range, red_flag, backtest=bool(prev), sc=sc)
     return out_path
 
 
 def check_fill(fill_path: str) -> None:
-    """--check 模式：与 render 同一 _preflight 流水线（解析 + 评分/估值计算 + 内容校验），不渲染。
-    替代手写 python -c json.load 自检（Windows 控制台引号/编码/路径反斜杠坑，
-    中兴 2026-08-24 实证）。退出码：0=通过可渲染，2=存在拒渲染项。"""
+    """--check：执行与正式渲染相同的最终 HTML 校验，但不写盘、不归档。"""
     try:
-        preflight = _preflight(fill_path)
-        fill = preflight.fill
+        fill = render_document(fill_path).fill
     except (ValueError, TypeError) as e:
-        # v4.11.1（热核审计）：捕获面与 render 对称（TypeError 一并收编，估值边界缺陷兜底）
         print(f"✗ 预检未通过（渲染将被拒绝）：\n  {e}", file=sys.stderr)
         sys.exit(2)
-    print(f"OK JSON 可解析，共 {len(fill)} 个顶层键；内容预检通过，可执行渲染")
+    print(f"OK JSON 可解析，共 {len(fill)} 个顶层键；最终 HTML 预检通过，可执行渲染")
 
 
 if __name__ == "__main__":

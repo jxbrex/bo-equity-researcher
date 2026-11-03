@@ -5,6 +5,7 @@
 v5.8.2 自 test_render_gate.py 按域拆分（纯搬迁：断言逐字沿用，print 噪音已清）。
 """
 import os
+import re
 import sys
 import tempfile
 
@@ -935,7 +936,7 @@ def _risk_error(fill):
     raise AssertionError("风险登记应拒绝但未拒绝")
 
 
-def test_risk_register_four_impacts_and_unknown_is_not_pass():
+def test_risk_register_groups_cards_by_status_without_impact_or_trigger():
     fill = _with_red_flag(v2_fill(risk_items=[
         _risk_item(),
         _risk_item(name="估值过高", rule_id=None, home="valuation", status="watch", impact="valuation",
@@ -946,10 +947,25 @@ def test_risk_register_four_impacts_and_unknown_is_not_pass():
                    evidence="原料价格上涨", trigger="继续涨价", source="行业数据"),
     ]))
     html = R.build_risk_register(fill)
-    assert "质量" in html and "估值" in html and "时机" in html and "仅跟踪" in html
-    assert "未核实" in html
-    assert "通过" not in html
-    assert "风险事实" in html and "证据与当前值" in html and "影响去向" in html and "跟踪指标" in html
+    assert 'class="risk-group risk-group-hit"' in html
+    assert 'class="risk-group risk-group-watch"' in html
+    assert 'class="risk-group risk-group-unknown"' in html
+    assert re.search(r"当前命中\s*<span>1</span>", html)
+    assert re.search(r"持续观察\s*<span>2</span>", html)
+    assert re.search(r"尚未核实\s*<span>1</span>", html)
+    assert 'class="risk-card-list primary"' in html
+    assert 'data-rule-id="1D.RED.RECEIVABLES"' in html
+    assert "应收周转连续恶化" in html and "公司公告" in html
+    assert "未核实" in html and "通过" not in html
+    assert "PE继续上升" not in html and "继续涨价" not in html
+    assert "质量｜" not in html and "估值｜" not in html
+    assert "风险事实" not in html and "影响去向" not in html and "跟踪指标" not in html
+
+
+def test_risk_register_empty_state_has_no_cards():
+    html = R.build_risk_register(v2_fill())
+    assert "本期未登记风险；这不代表风险已经排除" in html
+    assert 'class="risk-card' not in html
 
 
 def test_risk_duplicate_rule_id_is_rejected():
@@ -1063,7 +1079,8 @@ def test_risk_register_error_is_caught_by_preflight():
 def test_v2_risk_register_render_preserves_hero_and_premortem(capsys):
     fill = _with_red_flag(v2_fill(risk_items=[_risk_item()]))
     html = render_v2_fill(fill)
-    assert "风险事实" in html and "证据与当前值" in html and "影响去向" in html
+    assert "risk-card-list primary" in html and "如何识别" in html
+    assert "风险事实" not in html and "影响去向" not in html and "周转天数继续上升" not in html
     assert "flag-hero-card" in html and "pm-grid" in html
     assert "黄灯扣分" not in html
     assert "公司公告" in html

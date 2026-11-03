@@ -249,6 +249,27 @@ td.cell-worst { color: var(--ink); font-weight: 700; }
 .pm-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 10px 0 14px; }
 .pm-card { background: var(--fail-bg); border-left: 3px solid var(--red); border-radius: 0 6px 6px 0; padding: 12px 14px; font-size: 13px; }
 .pm-head { font-size: 12px; font-weight: 700; color: var(--red); margin-bottom: 5px; }
+.risk-group + .risk-group { margin-top: 14px; }
+.risk-group-title { display: flex; align-items: center; gap: 7px; margin: 0 0 8px; color: var(--text-soft); font-size: 12px; font-weight: 700; }
+.risk-group-title span { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; border-radius: 10px; background: var(--sand-deep); font-size: 11px; }
+.risk-card-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: stretch; list-style: none; padding: 0; margin: 0; }
+.risk-card-list.primary { grid-template-columns: minmax(0, 1fr); }
+.risk-card { display: flex; flex-direction: column; min-width: 0; background: var(--paper); border: 1px solid var(--line); border-top: 3px solid var(--warn-line); border-radius: 8px; padding: 14px 16px; }
+.risk-card.hit { border-top-color: var(--red); background: var(--fail-bg); }
+.risk-card.unknown { border-top-color: var(--gray); }
+.risk-card-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.risk-card-head strong { font-size: 15px; color: var(--ink); }
+.risk-card-state { margin-left: auto; border-radius: 4px; padding: 2px 7px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+.risk-card-state.hit { color: var(--red); background: var(--paper); }
+.risk-card-state.watch { color: var(--white); background: var(--amber); }
+.risk-card-state.unknown { color: var(--white); background: var(--gray); }
+.risk-card-body { flex: 1; margin-top: 10px; }
+.risk-card-label { display: block; color: var(--accent); font-size: 11px; font-weight: 700; }
+.risk-card-body p { margin: 4px 0 0; font-size: 13px; line-height: 1.7; }
+.risk-note { display: block; color: var(--text-soft); font-size: 11px; line-height: 1.55; margin-top: 6px; }
+.risk-card-foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 10px; border-top: 1px solid var(--line-soft); padding-top: 8px; margin-top: 10px; color: var(--muted); font-size: 10.5px; line-height: 1.5; }
+.risk-card-foot .source { margin: 0; }
+.risk-empty { color: var(--muted); }
 .info-card { background: var(--sand-deep); border-left: 3px solid var(--accent); padding: 14px 18px; margin: 14px 0; border-radius: 0 6px 6px 0; }
 .deduction { color: var(--red); font-size: 13px; display: block; padding: 4px 0 4px 12px; border-left: 2px solid var(--fail-line); margin: 4px 0; }
 .deduction + br { display: none; }
@@ -386,6 +407,7 @@ td.rev, th.rev { padding: 8px 12px; }
   .section-body { padding: 14px 16px; }
   .concl-grid { grid-template-columns: 1fr; }
   .pm-grid { grid-template-columns: 1fr; }
+  .risk-card-list { grid-template-columns: 1fr; }
   .flag-hero { grid-template-columns: 1fr; }
   /* v4.9.1 补充修订四：trig-strip 单列（治理分块/触发条件条卡片纵向排列） */
   .trig-strip { grid-template-columns: 1fr; }

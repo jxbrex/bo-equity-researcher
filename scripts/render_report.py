@@ -64,7 +64,7 @@ from validate import validate_content
 
 # 渲染器版本：嵌入输出 HTML 尾部注释，事后可 grep 验证报告确由本脚本渲染
 # （防"render 报错后手写全文 HTML 绕行"，巨石 2026-08-23 实证）
-RENDERER_VERSION = "v0.12.8"
+RENDERER_VERSION = "v0.12.9"
 
 # Windows 文件名非法字符：\ / : * ? " < > | 及 ASCII 控制字符（\x00-\x1f）
 _WIN_ILLEGAL = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
@@ -395,7 +395,8 @@ def build_risk_register(fill: dict, sc: dict = None, warns: list = None) -> str:
     home_names.update(valuation="8 估值与安全边际", timing="12 仓位与时机", dashboard="14 跟踪仪表盘")
     impact_names = {"quality": "质量", "valuation": "估值", "timing": "时机", "monitor": "仅跟踪"}
     status_names = {"hit": "命中", "watch": "观察", "unknown": "未核实"}
-    active_ids, hits, rows = set(), [], []
+    active_ids, hits = set(), []
+    groups = {"hit": [], "watch": [], "unknown": []}
 
     def _migrate_or_raise(message):
         if str(fill.get("date") or "") >= "2026-11-01":
@@ -453,23 +454,34 @@ def build_risk_register(fill: dict, sc: dict = None, warns: list = None) -> str:
                      if impact == "quality" and status == "hit" and rule_id else "")
         evidence_html = _esc(item["evidence"].strip())
         if unscored_reason:
-            evidence_html += f'<br><span class="source">未计分原因：{_esc(unscored_reason)}</span>'
-        rows.append(
-            f'<tr{rule_attr}><td>{_esc(item["name"].strip())}</td>'
-            f'<td>{evidence_html}<br><span class="source">来源：{_esc(item["source"].strip())}</span></td>'
-            f'<td>{impact_names[impact]}｜{status_names[status]}</td>'
-            f'<td>{_esc(reference)}</td><td>{_esc(item["trigger"].strip())}</td></tr>')
+            evidence_html += f'<span class="risk-note">未计分原因：{_esc(unscored_reason)}</span>'
+        groups[status].append(
+            f'<li class="risk-card {status}"{rule_attr}><div class="risk-card-head">'
+            f'<strong>{_esc(item["name"].strip())}</strong>'
+            f'<span class="risk-card-state {status}">{status_names[status]}</span></div>'
+            f'<div class="risk-card-body"><span class="risk-card-label">如何识别</span>'
+            f'<p>{evidence_html}</p></div><div class="risk-card-foot">'
+            f'<span class="source">来源：{_esc(item["source"].strip())}</span>'
+            f'<span>对应位置：{_esc(reference)}</span></div></li>')
     red_review = str(fill.get("red_review") or "").strip()
     if len(hits) >= 4 and len({item["home"].strip() for item in hits}) >= 3 and not red_review:
         raise ValueError("风险命中 ≥4 项且覆盖 ≥3 个位置时必须填写 red_review；复核不自动升级红灯")
-    if not rows:
-        rows.append('<tr><td colspan="5">本期未登记风险；这不代表风险已经排除。</td></tr>')
+    group_html = []
+    for status, title in (("hit", "当前命中"), ("watch", "持续观察"), ("unknown", "尚未核实")):
+        cards = groups[status]
+        if not cards:
+            continue
+        primary = " primary" if status == "hit" else ""
+        group_html.append(
+            f'<div class="risk-group risk-group-{status}"><div class="risk-group-title">'
+            f'{title} <span>{len(cards)}</span></div>'
+            f'<ul class="risk-card-list{primary}" role="list">{"".join(cards)}</ul></div>')
+    content = ("".join(group_html) if group_html else
+               '<p class="risk-empty">本期未登记风险；这不代表风险已经排除。</p>')
     html = ('<div class="risk-register"><p>原黄灯（非致命风险）不在本章另行扣分；'
             '质量类命中只在第 4/5 章按对应维度规则反映，是否扣分以规则为准，汇总见第 7 章；'
             '估值、时机与仅跟踪项不扣质量分；多项命中只触发红灯复核，不自动升级红灯。</p>'
-            '<div class="table-scroll"><table><thead><tr><th>风险事实</th><th>证据与当前值</th>'
-            '<th>影响去向</th><th>对应位置</th><th>跟踪指标</th></tr></thead>'
-            f'<tbody>{"".join(rows)}</tbody></table></div></div>')
+            f'{content}</div>')
     if red_review:
         html += f'<div class="warning-card"><strong>红灯复核：</strong>{_esc(red_review)}</div>'
     return html

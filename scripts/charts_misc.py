@@ -19,7 +19,7 @@ def build_growth_plot(fill: dict) -> str:
         y = str(h.get("y") or "").strip()
         raw_np = h.get("np")
         npv = _num(raw_np)
-        np_label = str(raw_np).strip() if isinstance(raw_np, str) and str(raw_np).strip() in _YOY_TEXT else None
+        np_label = str(raw_np).strip() if isinstance(raw_np, str) and str(raw_np).strip() in _GROWTH_TEXT else None
         if not y or (npv is None and np_label is None):
             continue
         hist.append({"y": y, "rev": _num(h.get("rev")), "np": npv, "np_label": np_label})
@@ -114,7 +114,7 @@ def build_growth_plot(fill: dict) -> str:
                          f'font-weight="600" fill="{_C_INK}">{_esc(g["y"])}</text>')
     parts.append(_svg_close())
     source = "历史定期报告（同比）、本文预测区间" + ("、券商盈利预测汇总" if has_cons else "")
-    note = ('柱=历史增速（沙=收入、钢蓝=归母净利，取历史年报同比；扭亏等负基数年份只标文字），'
+    note = ('柱=历史增速（沙=收入、钢蓝=归母净利，取历史年报同比；扭亏等负基数或不可比年份只标文字，不画对应净利柱），'
             '区间竖条=本文净利增速预测区间')
     if has_cons:
         note += '，◆=卖方一致预期（券商研报汇总）'

@@ -122,6 +122,74 @@ def test_dcf_param_parse_warn():
 
 
 # ---------------- v5.0 第 3 章「最新报告期透视」校验与渲染 ----------------
+def test_period_track_restatement_allows_declared_prior_quarter_correction():
+    f = period_fill("q3")
+    pt = f["period_track"]
+    pt["sq_prev_rev"] = 120.0
+    pt["sq_rev_yoy"] = 40.4
+    pt["restatement"] = {"fields": ["sq_prev_rev", "sq_rev_yoy"],
+                         "reason": "同一控制下合并后按重述累计差分",
+                         "source": "公司2025年报与2026年三季报"}
+    with open(f["quote"]["source_file"], encoding="utf-8") as fp:
+        before = fp.read()
+    R.validate_content(f, R.compute_valuation(f))
+    with open(f["quote"]["source_file"], encoding="utf-8") as fp:
+        assert fp.read() == before, "校验不得把人工校正值写回 quote"
+    from charts_period import build_period_sqplot
+    caption = build_period_sqplot(pt)
+    assert pt["restatement"]["reason"] in caption and pt["restatement"]["source"] in caption
+
+
+def test_period_track_restatement_requires_yoy_arithmetic():
+    f = period_fill("q3")
+    f["period_track"]["sq_prev_rev"] = 120.0
+    f["period_track"]["restatement"] = {"fields": ["sq_prev_rev"], "reason": "重述", "source": "公司年报"}
+    expect_valueerror(f, "金额改了但同比漏改应拒", kw="同比算术")
+    f = period_fill("q3")
+    f["period_track"].update(sq_prev_rev=120.0, sq_rev_yoy=40.0)
+    f["period_track"]["restatement"] = {"fields": ["sq_prev_rev", "sq_rev_yoy"],
+                                        "reason": "重述", "source": "公司年报"}
+    expect_valueerror(f, "同比误差超过 0.2pct 应拒", kw="同比算术")
+    f = period_fill("q3")
+    f["period_track"]["sq_np_yoy"] = "增亏"
+    f["period_track"]["restatement"] = {"fields": ["sq_np_yoy"], "reason": "重述", "source": "公司年报"}
+    expect_valueerror(f, "数字同比不得无算术依据翻成文字", kw="同比算术")
+
+
+def test_period_track_restatement_rejects_unlisted_or_empty_declaration():
+    f = period_fill("q3")
+    f["period_track"]["sq_prev_rev"] = 120.0
+    expect_valueerror(f, "无重述声明仍须拒", kw="sq_prev_rev")
+    for field in ("rev", "sq_rev"):
+        f = period_fill("q3")
+        f["period_track"][field] += 100.0
+        f["period_track"]["restatement"] = {"fields": [field], "reason": "重述", "source": "公司年报"}
+        expect_valueerror(f, "本期字段不得走重述通道", kw="重述白名单")
+    f = period_fill("q3")
+    f["period_track"]["sq_prev_rev"] = 120.0
+    f["period_track"]["restatement"] = {"fields": ["sq_prev_rev"], "reason": "", "source": "公司年报"}
+    expect_valueerror(f, "缺理由应拒", kw="reason")
+    f = period_fill("q3")
+    f["period_track"]["restatement"] = {"fields": ["sq_prev_rev"], "reason": "重述", "source": "公司年报"}
+    expect_valueerror(f, "无差异声明应拒", kw="无差异")
+    f = period_fill("q3")
+    f["period_track"].update(sq_prev_rev=120.0, sq_prev_np=25.0)
+    f["period_track"]["restatement"] = {"fields": ["sq_prev_rev"], "reason": "重述", "source": "公司年报"}
+    expect_valueerror(f, "第二个未声明字段不得漏过", kw="sq_prev_np")
+
+
+def test_growth_plot_supports_non_comparable_year_without_fake_bar():
+    from charts_misc import build_growth_plot
+    f = minimal_fill(growth_plot={
+        "hist": [{"y": "2023", "np": "不可比"}, {"y": "2024", "np": 63.8},
+                 {"y": "2025", "np": 86.0}],
+        "fcst": [{"y": "2026E", "np_lo": 5, "np_hi": 10}]})
+    svg = build_growth_plot(f)
+    assert ">不可比</text>" in svg and ">2023</text>" in svg
+    assert "+1620.7%" not in svg
+    R.validate_content(f, R.compute_valuation(f))
+
+
 def test_period_track_cross_check():
     """v5.0 period_track 落盘交叉校验（quote 防伪同款纪律）：一致过 / 数值偏差>1% 拒 /
     照抄字段夹带文字拒 / 落盘无 period_track 键拒 / 文字同比完全一致 / fill 有值落盘 None

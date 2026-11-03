@@ -382,11 +382,14 @@ def build_period_sqplot(pt: dict) -> str:
         parts.append(f'<text x="{(PL + PR) / 2:.1f}" y="{H - B + 56}" text-anchor="middle" '
                      f'font-size="12" font-weight="700" fill="{_C_LABEL}">{ptitle}</text>')
     parts.append(_svg_close())
-    parts.append(_chart_source(
-        "单季并肩双柱双联图", "公司定期报告（单季拆分口径）",
-        '左联=收入与经营现金流（规模与收现含金量）、右联=归母与扣非'
-        '（柱差≈非经常损益影响）；两联独立定标、联内共享零轴，柱高只在联内可比；'
-        '沙柱=上年同季、钢蓝柱=最新单季，柱顶=单季金额（亿元），最新柱上方=单季同比'
-        '（扭亏/转亏等文字原样）；扣非与经营现金流单季=累计差分（Q2=中报−Q1，Q3=前三季−中报）；'
-        'Q1 期累计即单季，退化为单柱；经营现金流单季受回款节奏影响波动大，仅作方向参考'))
+    note = ('左联=收入与经营现金流（规模与收现含金量）、右联=归母与扣非'
+            '（柱差≈非经常损益影响）；两联独立定标、联内共享零轴，柱高只在联内可比；'
+            '沙柱=上年同季、钢蓝柱=最新单季，柱顶=单季金额（亿元），最新柱上方=单季同比'
+            '（扭亏/转亏等文字原样）；扣非与经营现金流单季=累计差分（Q2=中报−Q1，Q3=前三季−中报）；'
+            'Q1 期累计即单季，退化为单柱；经营现金流单季受回款节奏影响波动大，仅作方向参考')
+    restatement = pt.get("restatement") or {}
+    if restatement:
+        note += (f'；重述校正：{restatement.get("reason", "")}'
+                 f'（来源：{restatement.get("source", "")}）')
+    parts.append(_chart_source("单季并肩双柱双联图", "公司定期报告（单季拆分口径）", note))
     return "".join(parts)

@@ -140,7 +140,8 @@ def test_golden_visual_b_fill():
 def test_golden_v2_quality_markers():
     html = _render_v2_norm(v2_fill())
     assert 'data-quality-version="2"' in html
-    assert "风险事实" in html and "评分依据" in html
+    assert '<div class="risk-register">' in html and "评分依据" in html
+    assert "风险事实" not in html and "影响去向" not in html
     assert "评分 v2" not in html
 
 

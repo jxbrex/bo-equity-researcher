@@ -295,6 +295,56 @@ def test_calib_history_distortion_fallback_is_allowed():
     assert "未标注校准锚（calib）" not in validate_stderr(f)
 
 
+def test_cycle_stage_window_recon_covers_non_calib_price_and_pe():
+    series = [
+        {"m": "2021-01", "open": 16.98, "high": 18.74, "low": 15.19, "close": 15.33, "pe": 151.6},
+        {"m": "2021-02", "open": 15.31, "high": 15.66, "low": 13.34, "close": 14.89, "pe": 147.3},
+        {"m": "2021-09", "open": 23.40, "high": 29.78, "low": 23.07, "close": 24.12, "pe": 260.0},
+        {"m": "2022-03", "open": 21.17, "high": 21.43, "low": 16.51, "close": 16.61, "pe": 139.6},
+        {"m": "2022-08", "open": 22.64, "high": 27.19, "low": 21.05, "close": 24.09, "pe": 747.8},
+        {"m": "2022-09", "open": 24.16, "high": 27.60, "low": 21.36, "close": 21.79, "pe": 676.4},
+    ]
+    other = [{"name": "盈利修复期", "period": "2022/10–2024/03"},
+             {"name": "整合释放期", "period": "2026/01–至今", "current": True}]
+
+    def make(stage, points=series):
+        return minimal_fill(cycle_html="<p>周期分析。</p>",
+                            price_history={"label": "近5年", "series": points},
+                            cycle_stages=[stage] + other)
+
+    bad = {"name": "低价交付期", "period": "2021/01–2022/09",
+           "pe": "78.7–747.8x", "price": "14.09–27.60"}
+    out = validate_stderr(make(bad))
+    assert "低价交付期] 阶段 PE" in out and "下限 78.7x vs 实测最低 139.6x" in out
+    assert "低价交付期] 阶段价格" in out
+    assert "下限 14.09 vs 实测最低 13.34" in out and "上限 27.6 vs 实测最高 29.78" in out
+    good = dict(bad, pe="139.6–747.8x", price="13.34–29.78")
+    out_good = validate_stderr(make(good))
+    assert "低价交付期] 阶段" not in out_good, f"正确端点不应告警：{out_good}"
+    outwin = dict(good, period="2020/01–2020/12")
+    out_outwin = validate_stderr(make(outwin))
+    assert "低价交付期] 阶段" not in out_outwin, "窗口外不得伪造实测对账"
+    no_price = [{k: v for k, v in row.items() if k not in ("low", "high")} for row in series]
+    out_missing = validate_stderr(make(good, no_price))
+    assert "低价交付期] 阶段价格" not in out_missing, "缺 low/high 时应跳过价格核对"
+    near = dict(good, price="13.33–29.79")
+    out_near = validate_stderr(make(near))
+    assert "低价交付期] 阶段价格" not in out_near, "2% 内的展示舍入不应误报"
+    scaled = [dict(row, low=row["low"] * 100, high=row["high"] * 100) for row in series]
+    thousand = dict(good, price="1,334–2,978")
+    out_thousand = validate_stderr(make(thousand, scaled))
+    assert "低价交付期] 阶段价格" not in out_thousand, "千分位不得拆成两个端点"
+    partial = dict(bad, period="2020/12–2022/09")
+    out_partial = validate_stderr(make(partial))
+    assert "低价交付期] 阶段" not in out_partial, "阶段起点早于序列时不得冒充完整窗口实测"
+    slash = [dict(row, m=row["m"].replace("-", "/")) for row in series]
+    try:
+        out_slash = validate_stderr(make(good, slash))
+    except KeyError as exc:
+        raise AssertionError(f"YYYY/MM 合法月份不得触发 KeyError: {exc}")
+    assert "低价交付期] 阶段" not in out_slash
+
+
 def test_calib_window_recon_warn():
     """v5.4.0 校准锚③：calib 时段落在 price_history 窗口内 → 声明区间与窗口实测 PE 极值
     端点偏差 >25% 告警（上限方向同）；恰 25% 边界放行；未写 pe 键/窗口外 → 跳过；

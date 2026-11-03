@@ -19,7 +19,7 @@ from charts_base import (
     _sensitivity_items,
     _var_key,
     _gap_dim_ok,
-    _YOY_TEXT,
+    _GROWTH_TEXT,
     parse_stage_period)
 from charts_cycle import _pe_band_ok, _price_history_points
 from validate_common import (
@@ -100,14 +100,14 @@ def _check_chart_fields(fill: dict) -> None:
                              '——历史取 E3 同比；无卖方覆盖时 np_consensus 省略')
         hist_ok = [h for h in gp.get("hist") or []
                    if h.get("y") and (_num(h.get("np")) is not None
-                                      or str(h.get("np") or "").strip() in _YOY_TEXT)]
+                                      or str(h.get("np") or "").strip() in _GROWTH_TEXT)]
         fcst_ok = [f for f in gp.get("fcst") or []
                    if f.get("y") and ((_num(f.get("np_lo")) is not None
                                        and _num(f.get("np_hi")) is not None
                                        and _num(f.get("np_hi")) >= _num(f.get("np_lo")))
                                       or _num(f.get("np_consensus")) is not None)]
         if len(hist_ok) < 3:
-            raise ValueError(f"growth_plot.hist 有效年 {len(hist_ok)} < 3（需 y + 数字增速或扭亏等文字；rev 可省）")
+            raise ValueError(f"growth_plot.hist 有效年 {len(hist_ok)} < 3（需 y + 数字增速、扭亏或不可比等文字；rev 可省）")
         if not fcst_ok:
             raise ValueError("growth_plot.fcst 无有效年（需 y + np_lo ≤ np_hi；仅共识年可只填 np_consensus）")
         if not any(_num(f.get("np_lo")) is not None and _num(f.get("np_hi")) is not None
@@ -665,10 +665,10 @@ def _check_sensitivity_coverage(fill: dict, warns: list) -> None:
 
 
 def _parse_pe_range(text):
-    """cycle_stages.pe 声明区间解析：「60–216x」/「10-16」/「12x」→ (低, 高)（容 en dash/
-    连字符/波浪号）；单值 → (v, v)；无数字 → None。先剔除四位年份——「2021 年 60x」
-    的 2021 不是区间端点（热核审计 P2）。"""
-    text = re.sub(r"(?:19|20)\d{2}", " ", str(text or ""))
+    """cycle_stages.pe/price 声明区间解析：「60–216x」/「10-16」/「12x」→ (低, 高)
+    （容 en dash/连字符/波浪号与千分位）；单值 → (v, v)；无数字 → None。先剔除四位年份。"""
+    text = re.sub(r"(?<=\d),(?=\d{3}\b)", "", str(text or ""))
+    text = re.sub(r"(?:19|20)\d{2}", " ", text)
     vals = [float(x) for x in re.findall(r"\d+(?:\.\d+)?", text)[:2]]
     if not vals:
         return None
@@ -702,8 +702,8 @@ def _check_cycle_stages(fill: dict, warns: list) -> None:
     v5.4.0：校准锚（calib）三校验（全部软告警）——①calib:true 项须含 similarity/discount；
     ②分型属四型（周期/稳定价值/困境反转/成长·中速层）时 calib 项须 ≥2（v5.4.1 起含 0 个：
     0 个走「未标注校准锚（calib）」专用文案，非四型不告警）；
-    ③窗口内对账：calib 时段落在 price_history 月份窗口内 → 窗口实测 PE 极值与声明区间
-    端点比对（相对偏差 >25% 告警），窗口外/序列无 pe 跳过，全部未核验 → 汇总告警一条。"""
+    ③窗口内对账扩到所有可解析阶段：PE 极值相对偏差 >25% 告警；价格与同窗口 low/high
+    极值偏差 >2% 告警，支持千分位。窗口未完整覆盖或相应序列缺失跳过；calib 全部未核验仍汇总。"""
     stages = [s for s in fill.get("cycle_stages") or [] if isinstance(s, dict)]
     hand_table = re.search(r"<th[^>]*>\s*阶段\s*</th>", fill.get("cycle_html") or "")
     if not stages:
@@ -767,22 +767,30 @@ def _check_cycle_stages(fill: dict, warns: list) -> None:
             warns.append("cycle_stages 未标注校准锚（calib）：本分型（估值带依赖历史 PE 时段锚）"
                          "的估值带须有 ≥2 个校准时段——在对应阶段加 \"calib\":true 并写 "
                          "similarity/discount（渲染「校准锚」角标；首版软约束，观察一轮后升拒渲染）")
-    if calibs:
-        pts = _series_month_pe((fill.get("price_history") or {}).get("series"))
-        verified = 0
-        for s in calibs:
-            span = parse_stage_period(str(s.get("period") or "").strip())
-            if span is None or not pts:
-                continue   # period 解析失败已单独告警；无序列无从对账
-            (y0, m0), (y1, m1) = span
-            if (y1, m1) == (9999, 12):   # 「至今」开口 → 夹取到序列末月（与渲染同源规则）
-                y1, m1 = max((y, m) for y, m, _pe in pts)
-            inwin = [pe for y, m, pe in pts if (y0, m0) <= (y, m) <= (y1, m1)]
-            pes = [pe for pe in inwin if pe is not None]
-            dec = _parse_pe_range(s.get("pe"))
-            if not inwin or not pes or dec is None:
-                continue   # 窗口外 / 序列无 pe / 未写 PE 区间 → 跳过（不计入已核验）
-            verified += 1
+    series = (fill.get("price_history") or {}).get("series")
+    pts = _series_month_pe(series)
+    raw_by_month = {str(p.get("m") or "").replace("/", "-")[:7]: p
+                    for p in series or [] if isinstance(p, dict)}
+    first_month = min((y, m) for y, m, _pe in pts) if pts else None
+    last_month = max((y, m) for y, m, _pe in pts) if pts else None
+    verified = 0
+    for s in valid:
+        span = parse_stage_period(str(s.get("period") or "").strip())
+        if span is None or not pts:
+            continue
+        (y0, m0), (y1, m1) = span
+        if (y1, m1) == (9999, 12):
+            y1, m1 = last_month
+        if (y0, m0) < first_month or (y1, m1) > last_month:
+            continue
+        month_rows = [(y, m, pe) for y, m, pe in pts if (y0, m0) <= (y, m) <= (y1, m1)]
+        pes = [pe for _y, _m, pe in month_rows if pe is not None]
+        dec = _parse_pe_range(s.get("pe"))
+        tag = _plain_text(str(s.get("name") or "")).strip() or "?"
+        short = tag[:6] + ("…" if len(tag) > 6 else "")
+        if month_rows and pes and dec is not None:
+            if s.get("calib"):
+                verified += 1
             lo, hi = dec
             bad = []
             if lo and abs(min(pes) - lo) / lo > 0.25:
@@ -790,14 +798,31 @@ def _check_cycle_stages(fill: dict, warns: list) -> None:
             if hi and abs(max(pes) - hi) / hi > 0.25:
                 bad.append(f"上限 {hi:g}x vs 实测最高 {max(pes):g}x")
             if bad:
-                tag = _plain_text(str(s.get("name") or "")).strip() or "?"
-                short = tag[:6] + ("…" if len(tag) > 6 else "")
-                warns.append(f"cycle_stages[{short}] calib 时段 PE 声明与 price_history 同窗口实测"
-                             f"端点偏差 >25%（{'；'.join(bad)}）：校准时段声明须与取数窗口同源"
-                             f"（E2 月线月末 PE）——请核对阶段 pe 或校准时段划段")
-        if not verified:
-            warns.append("cycle_stages 的 calib 时段均在取数窗口外（或窗口内无 PE 序列/未写 PE 区间）："
-                         "校准声明未核验——请核对 price_history.series 的月份覆盖与阶段 pe 声明")
+                kind = "calib 时段 PE" if s.get("calib") else "阶段 PE"
+                warns.append(f"cycle_stages[{short}] {kind} 声明与 price_history 同窗口实测"
+                             f"端点偏差 >25%（{'；'.join(bad)}）：阶段声明须与取数窗口同源"
+                             f"（E2 月线月末 PE）——请核对阶段 pe 或划段")
+        price_dec = _parse_pe_range(s.get("price"))
+        rows = [raw_by_month.get(f"{y}-{m:02d}") for y, m, _pe in month_rows]
+        rows = [p for p in rows if p is not None]
+        lows = [_num(p.get("low")) for p in rows]
+        highs = [_num(p.get("high")) for p in rows]
+        lows = [v for v in lows if v is not None]
+        highs = [v for v in highs if v is not None]
+        if price_dec is not None and lows and highs:
+            lo, hi = price_dec
+            bad = []
+            if lo and abs(min(lows) - lo) / abs(lo) > 0.02:
+                bad.append(f"下限 {lo:g} vs 实测最低 {min(lows):g}")
+            if hi and abs(max(highs) - hi) / abs(hi) > 0.02:
+                bad.append(f"上限 {hi:g} vs 实测最高 {max(highs):g}")
+            if bad:
+                warns.append(f"cycle_stages[{short}] 阶段价格声明与 price_history 同窗口实测端点偏差 >2%"
+                             f"（{'；'.join(bad)}）：价格取月线 low 最小值/high 最大值，"
+                             "请核对阶段 price 或划段")
+    if calibs and not verified:
+        warns.append("cycle_stages 的 calib 时段均在取数窗口外（或窗口内无 PE 序列/未写 PE 区间）："
+                     "校准声明未核验——请核对 price_history.series 的月份覆盖与阶段 pe 声明")
 
 
 def _check_cycle_position(fill: dict, warns: list) -> None:

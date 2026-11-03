@@ -27,6 +27,7 @@ from validate_common import (
     _scenario_by_key)
 from quality_rules import PROFILE_KIND, PROFILE_FLAGS, F_ITEM_IDS
 from org_tier import norm_org
+from em_core import _yoy
 
 
 def _check_price_date(fill: dict) -> None:
@@ -868,7 +869,8 @@ def _check_period_track(fill: dict, warns: list) -> None:
     period_track 永不落盘，真实出路是删除 fill 字段而非重跑 em_fetch；拒渲染本身不变）；
     照抄字段与落盘不一致（标签/文字同比完全一致，
     数值偏差 >1%；fill 有值而落盘 None=手估嫌疑）；consensus_np 与落盘 np_avg 失配；
-    verdict_* 非四选一；goal_* 非正数。
+    verdict_* 非四选一；goal_* 非正数。唯一例外是 restatement 显式声明的上年同季及其同比字段：
+    fields 受白名单限制、reason/source 必填、无实际差异也拒，quote 原文件不改写。
     软告警：落盘有 period_track 而 fill 未回填（第 3 章缺席）；quote 缺失/落盘读不到
     （主键门禁 _check_quote_consistency/_check_quote_present 已管，不重复硬拒）；
     fill None 而落盘有值（漏抄，章内容缩水）；判词缺失（渲染兜底「无法判定」）；
@@ -880,6 +882,29 @@ def _check_period_track(fill: dict, warns: list) -> None:
         raise ValueError(f"period_track 字段需为对象，实际: {type(pt).__name__}")
     ref = _quote_ref(fill)   # 落盘读不到：_check_quote_consistency 已硬拒，这里降级跳过比对
     ref_pt = (ref or {}).get("period_track")
+    restatement = pt.get("restatement") if isinstance(pt, dict) else None
+    restated_fields = set()
+    if restatement is not None:
+        if not isinstance(restatement, dict):
+            raise ValueError("period_track.restatement 必须是对象")
+        if set(restatement) - {"fields", "reason", "source"}:
+            raise ValueError("period_track.restatement 只允许 fields/reason/source 三键")
+        fields = restatement.get("fields")
+        if not isinstance(fields, list) or not fields or not all(isinstance(x, str) for x in fields):
+            raise ValueError("period_track.restatement.fields 必须是非空字符串数组")
+        allowed = {"sq_prev_rev", "sq_prev_np", "sq_prev_dedt", "sq_prev_ocf",
+                   "sq_rev_yoy", "sq_np_yoy", "sq_dedt_yoy", "sq_ocf_yoy"}
+        unknown = set(fields) - allowed
+        if unknown:
+            raise ValueError(f"period_track.restatement 重述白名单不含 {sorted(unknown)}；"
+                             "本期实际值与非单季上年同期字段禁止人工覆盖")
+        if len(set(fields)) != len(fields):
+            raise ValueError("period_track.restatement.fields 不得重复")
+        for key in ("reason", "source"):
+            if not isinstance(restatement.get(key), str) or not restatement[key].strip():
+                raise ValueError(f"period_track.restatement.{key} 必填且必须是非空字符串")
+        restated_fields = set(fields)
+    declared_restatements = set()
     if pt and ref is None:
         warns.append("period_track 已填但 quote.source_file 缺失或读不到：第 3 章数据无法交叉校验"
                      "（quote 门禁已管主键，本条不重复硬拒）——请重跑 em_fetch --out 落盘并回填 quote 后重渲")
@@ -944,7 +969,10 @@ def _check_period_track(fill: dict, warns: list) -> None:
                 raise ValueError(f"period_track.{key} 落盘无值而 fill 填了 {fv:g}："
                                  f"落盘没有的数据禁止手估填入——以 em_fetch --out 落盘为准修正后重渲")
             if not _close(fv, rv):
-                _mismatch(key, fv, rv, f"（偏差 {abs(fv - rv) / abs(rv) * 100:.1f}% > 1%）")
+                if key in restated_fields:
+                    declared_restatements.add(key)
+                else:
+                    _mismatch(key, fv, rv, f"（偏差 {abs(fv - rv) / abs(rv) * 100:.1f}% > 1%）")
         for key in _PERIOD_YOY_KEYS:
             raw, rv_raw = pt.get(key), ref_pt.get(key)
             fv, rv = _strict_num(raw), _strict_num(rv_raw)
@@ -958,10 +986,15 @@ def _check_period_track(fill: dict, warns: list) -> None:
                                  f"落盘没有的数据禁止手估填入——以 em_fetch --out 落盘为准修正后重渲")
             if fv is not None and rv is not None:
                 if not _close(fv, rv, pct=True):
-                    _mismatch(key, fv, rv, f"（偏差 {abs(fv - rv):.2f}pct > 容差）")
+                    if key in restated_fields:
+                        declared_restatements.add(key)
+                    else:
+                        _mismatch(key, fv, rv, f"（偏差 {abs(fv - rv):.2f}pct > 容差）")
             elif str(raw).strip() != str(rv_raw).strip():
-                # 文字同比（扭亏/转亏/减亏/增亏）要求完全一致
-                _mismatch(key, raw, rv_raw, "（文字同比要求完全一致）")
+                if key in restated_fields:
+                    declared_restatements.add(key)
+                else:
+                    _mismatch(key, raw, rv_raw, "（文字同比要求完全一致）")
         for key in _PERIOD_BAND_KEYS:
             fb, rb = pt.get(key), ref_pt.get(key)
             if fb is None and rb is None:
@@ -997,6 +1030,29 @@ def _check_period_track(fill: dict, warns: list) -> None:
                     same_years = False
             if not same_years:
                 _mismatch("band_years", fy, ry)
+        unused = restated_fields - declared_restatements
+        if unused:
+            raise ValueError(f"period_track.restatement 无差异或未实际用于 {sorted(unused)}："
+                             "只允许声明与 quote 原始值不同的重述校正字段")
+        if restatement is not None:
+            for cur_key, prev_key, yoy_key in (
+                    ("sq_rev", "sq_prev_rev", "sq_rev_yoy"),
+                    ("sq_np", "sq_prev_np", "sq_np_yoy"),
+                    ("sq_dedt", "sq_prev_dedt", "sq_dedt_yoy"),
+                    ("sq_ocf", "sq_prev_ocf", "sq_ocf_yoy")):
+                expected = _yoy(_num(pt.get(cur_key)), _num(pt.get(prev_key)))
+                actual = pt.get(yoy_key)
+                if expected is None or actual is None:
+                    continue
+                if isinstance(expected, str):
+                    consistent = str(actual).strip() == expected
+                else:
+                    actual_num = _strict_num(actual)
+                    consistent = actual_num is not None and abs(actual_num - expected) <= 0.2
+                if not consistent:
+                    raise ValueError(f"period_track.restatement 同比算术不一致：{yoy_key}={actual!r}，"
+                                     f"按 {cur_key} 与 {prev_key} 反算应为 {expected!r}（数值容差 0.2pct）；"
+                                     "金额与同比必须同步校正，数字不得无依据翻成文字")
         # consensus_np：fill 照抄的是落盘 consensus_np.np_avg（E5 当年净利均值）
         raw_c = pt.get("consensus_np")
         fc = _strict_num(raw_c)

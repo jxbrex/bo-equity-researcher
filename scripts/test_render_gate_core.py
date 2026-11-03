@@ -1302,6 +1302,35 @@ def test_risk_register_hides_internal_rule_id_from_readers():
     assert 'data-rule-id="1D.RED.RECEIVABLES"' in html
 
 
+def test_risk_card_small_text_has_aa_contrast():
+    import re
+    from pathlib import Path
+    css = (Path(__file__).parent.parent / "assets" / "report-template.html").read_text(encoding="utf-8")
+    variables = dict(re.findall(r"(--[\w-]+)\s*:\s*(#(?:[0-9a-fA-F]{3}){1,2})", css))
+
+    def block(selector):
+        return re.search(re.escape(selector) + r"\s*\{([^}]*)\}", css).group(1)
+
+    def color(selector, prop):
+        raw = re.search(rf"\b{prop}\s*:\s*([^;]+)", block(selector)).group(1).strip()
+        return variables.get(raw.removeprefix("var(").removesuffix(")"), raw)
+
+    def ratio(a, b):
+        def lum(hex_color):
+            if len(hex_color) == 4:
+                hex_color = "#" + "".join(c * 2 for c in hex_color[1:])
+            channels = [int(hex_color[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+            linear = [v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4 for v in channels]
+            return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+        la, lb = lum(a), lum(b)
+        return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
+
+    for selector, bg in ((".risk-card-state.watch", "background"),
+                         (".risk-card-state.unknown", "background")):
+        assert ratio(color(selector, "color"), color(selector, bg)) >= 4.5
+    assert ratio(color(".risk-note", "color"), color(".risk-card.hit", "background")) >= 4.5
+
+
 def test_v2_render_computes_scores_once():
     fill = v2_fill()
     calls = []
@@ -1317,7 +1346,7 @@ def test_v2_render_computes_scores_once():
     finally:
         R.compute_scores = real_compute
     assert len(calls) == 1
-    assert "风险事实" in html and "评分依据" in html
+    assert '<div class="risk-register">' in html and "评分依据" in html
 
 
 def test_chart_injection_stays_out_of_preflight():

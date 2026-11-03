@@ -298,9 +298,9 @@ def full_fill(**over):
         cycle_stages=[
             {"name": "景气顶", "period": "2021/01–2021/12", "pe": "30–47x", "price": "9–13",
              "driver": "商品价格见顶", "current": False},
-            {"name": "双杀出清", "period": "2022/01–2024/01", "pe": "10–30x", "price": "6–12",
+            {"name": "双杀出清", "period": "2022/01–2024/01", "pe": "12.3–15.6x", "price": "9.7–12.4",
              "driver": "价格暴跌+估值先杀", "current": False},
-            {"name": "修复重估", "period": "2024/02–2026/08", "pe": "10–16x", "price": "8–11",
+            {"name": "修复重估", "period": "2024/02–2026/08", "pe": "12.6–15.6x", "price": "11.8–15.5",
              "driver": "业绩兑现重估", "current": True}],
         # v5.2.0：盈利波动性角标 + 当前周期位置刻度条进 golden（罩住两处新渲染路径；
         # sigma=1.4 与 minimal_fill 扣非柱 [75,79,83,86,88] 复算一致，不触发比对告警）

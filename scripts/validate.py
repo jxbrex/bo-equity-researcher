@@ -117,11 +117,21 @@ def _validate_content_impl(fill: dict, calc: dict, warns: list, sc: dict = None)
     _check_peers_plot_target(fill, warns)
     _check_peers_selection(fill, warns)   # v5.4.0：表图一致（硬）+ 尺子一致/peer≥3/rationale/PE 交叉
     _check_hero_cross(fill, warns)        # v5.1.2：Hero 与估值结构化字段互查
-    _check_growth_consistency(fill, warns)  # v5.1.2：growth_plot 换算对账
+    content_errors = []
+
+    def _collect_content_error(check):
+        try:
+            check()
+        except ValueError as exc:
+            content_errors.append(str(exc))
+
+    _collect_content_error(lambda: _check_growth_consistency(fill, warns))
     _check_timing_table_cells(fill, warns)
-    _check_research_actions(fill, warns)
-    _check_v2_counter_evidence(fill, sc)
-    _check_dim_blocks(fill, warns, sc)
+    _collect_content_error(lambda: _check_research_actions(fill, warns))
+    _collect_content_error(lambda: _check_v2_counter_evidence(fill, sc))
+    _collect_content_error(lambda: _check_dim_blocks(fill, warns, sc))
+    if content_errors:
+        raise ValueError("\n".join(content_errors))
     _check_internal_codes(fill, warns)
     _check_ch11_binding(fill, warns)      # v5.8.2 表驱动：pe_history/price_history/cycle_stages 挂第 11 章
     _check_writing_discipline(fill, warns)

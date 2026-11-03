@@ -1452,6 +1452,97 @@ def test_growth_score_3a_accepts_string_quality_version():
     assert "3A 增速区间" in "\n".join(warns)
 
 
+def _yifeng_growth_fill():
+    fill = minimal_fill(
+        date="2026-11-03", quality_version=2,
+        fin_trend={"years": ["2023", "2024", "2025"], "panels": [
+            {"title": "盈利", "bars": [{"name": "归母净利", "unit": "亿",
+                                      "values": [14.1, 15.3, 16.78]}]}]},
+        growth_plot={"hist": [{"y": "2023", "np": 13.59}, {"y": "2024", "np": 8.3},
+                              {"y": "2025", "np": 9.8}],
+                     "fcst": [{"y": "2026E", "np_lo": 4.3, "np_hi": 16.8}]},
+        gap_plot={"dims": [{"name": "2026E归母净利（亿元）", "ours": 18.9, "consensus": 19.09}]},
+        score_inputs={"3A": {"growth_lo": 4.3, "growth_hi": 16.8}})
+    for scenario, profit in zip(fill["valuation"]["scenarios"], (17.5, 18.9, 19.6)):
+        scenario["profit"] = profit
+    return fill
+
+
+def test_growth_score_3a_mismatch_rejected_for_new_report():
+    from validate_audit import _check_growth_consistency
+    fill = _yifeng_growth_fill()
+    fill["score_inputs"]["3A"].update(growth_lo=10, growth_hi=14)
+    try:
+        _check_growth_consistency(fill, [])
+    except ValueError as exc:
+        assert "3A 增速区间" in str(exc)
+    else:
+        raise AssertionError("新报告的3A与增长图不一致不得只告警")
+
+
+def test_growth_plot_cannot_narrow_to_match_score():
+    from validate_audit import _check_growth_consistency
+    fill = _yifeng_growth_fill()
+    fill["growth_plot"]["fcst"][0].update(np_lo=10, np_hi=14)
+    fill["score_inputs"]["3A"].update(growth_lo=10, growth_hi=14)
+    try:
+        _check_growth_consistency(fill, [])
+    except ValueError as exc:
+        assert "三情景" in str(exc) and "收窄" in str(exc)
+    else:
+        raise AssertionError("不得通过收窄增长图来迎合3A评分区间")
+
+
+def test_growth_three_way_consistency_and_legacy_boundaries():
+    from validate_audit import _check_growth_consistency
+    warns = []
+    _check_growth_consistency(_yifeng_growth_fill(), warns)
+    out = "\n".join(warns)
+    assert "3A 增速区间" not in out and "三情景" not in out
+
+    legacy = _yifeng_growth_fill()
+    legacy["date"] = "2026-11-02"
+    legacy["score_inputs"]["3A"].update(growth_lo=10, growth_hi=14)
+    warns = []
+    _check_growth_consistency(legacy, warns)
+    assert "3A 增速区间" in "\n".join(warns)
+
+    unknown_year = _yifeng_growth_fill()
+    unknown_year["gap_plot"] = None
+    unknown_year["score_inputs"]["3A"].update(growth_lo=10, growth_hi=14)
+    warns = []
+    _check_growth_consistency(unknown_year, warns)
+    assert "3A 增速区间" not in "\n".join(warns)
+
+    nonpositive = _yifeng_growth_fill()
+    nonpositive["fin_trend"]["panels"][0]["bars"][0]["values"][-1] = 0
+    nonpositive["growth_plot"]["fcst"] = []
+    warns = []
+    _check_growth_consistency(nonpositive, warns)
+    assert "3A 增速区间" not in "\n".join(warns)
+
+
+def test_preflight_aggregates_independent_content_errors():
+    fill = v2_fill(date="2026-11-02")
+    fill["position_html"] += "<p>建议加仓。</p>"
+    fill["score_inputs"]["1F"].pop("counter_evidence")
+    comparison = "<p><strong>对比：</strong>公司波动高于同业 10% 的基准，反方证据仍需保留。</p>"
+    head, found, tail = fill["l3_html"].rpartition(comparison)
+    assert found
+    fill["l3_html"] = head + tail
+    with tempfile.TemporaryDirectory() as d:
+        path = write_fill(prepare_v2_quote(fill, d), d)
+        try:
+            R._preflight(path)
+        except ValueError as exc:
+            message = str(exc)
+            assert "position_html 含交易节奏" in message
+            assert "1F 得分" in message and "反方证据" in message
+            assert "5.3 催化剂" in message and "对比基准" in message
+        else:
+            raise AssertionError("组合正文错误必须拒绝并一次报全")
+
+
 def _growth_profit_fill(profit):
     fill = minimal_fill(
         fin_trend={"years": ["2023", "2024", "2025"], "panels": [

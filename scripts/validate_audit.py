@@ -804,6 +804,11 @@ def _check_growth_consistency(fill: dict, warns: list) -> None:
     score_lo, score_hi = _num(growth_inputs.get("growth_lo")), _num(growth_inputs.get("growth_hi"))
     if (fill.get("quality_version") is not None and _quality_version(fill) == 2
             and base_year is not None and score_lo is not None and score_hi is not None):
+        def _reject_score_or_warn(message):
+            if str(fill.get("date") or "") >= "2026-11-03":
+                raise ValueError(message)
+            warns.append(message)
+
         base_rows = []
         for f in fcst:
             if str(f.get("y") or "").strip() != f"{base_year}E":
@@ -812,12 +817,28 @@ def _check_growth_consistency(fill: dict, warns: list) -> None:
             if lo is not None and hi is not None and hi >= lo:
                 base_rows.append((lo, hi))
         if not base_rows:
-            warns.append(f"3A 增速区间 [{score_lo:g}, {score_hi:g}] 缺 growth_plot {base_year}E "
-                         "单年本文预测行：合并行不得替代估值基础年份的单年口径")
-        elif not any(abs(score_lo - lo) <= 2 and abs(score_hi - hi) <= 2 for lo, hi in base_rows):
-            ranges = "、".join(f"[{lo:g}, {hi:g}]" for lo, hi in base_rows)
-            warns.append(f"3A 增速区间 [{score_lo:g}, {score_hi:g}] 与 growth_plot {base_year}E "
-                         f"本文区间 {ranges} 不一致（容差 ±2pct）")
+            _reject_score_or_warn(f"3A 增速区间 [{score_lo:g}, {score_hi:g}] 缺 growth_plot {base_year}E "
+                                  "单年本文预测行：合并行不得替代估值基础年份的单年口径")
+        else:
+            if base_year == last_year + 1:
+                scenario_rates = []
+                scenarios = (fill.get("valuation") or {}).get("scenarios") or []
+                for key in ("pess", "base", "opt"):
+                    scenario = _scenario_by_key(scenarios, key)
+                    profit = _num(scenario.get("profit")) if scenario else None
+                    if profit is not None:
+                        scenario_rates.append((profit / base_np - 1) * 100)
+                if len(scenario_rates) == 3:
+                    scenario_lo, scenario_hi = min(scenario_rates), max(scenario_rates)
+                    if not any(lo - 2 <= scenario_lo and hi + 2 >= scenario_hi for lo, hi in base_rows):
+                        _reject_score_or_warn(
+                            f"growth_plot {base_year}E 本文区间未覆盖 valuation 三情景利润换算增速 "
+                            f"[{scenario_lo:.1f}, {scenario_hi:.1f}]（容差 ±2pct）：不得为消 3A 告警收窄图区间，"
+                            "请回查 valuation 利润与 score_inputs")
+            if not any(abs(score_lo - lo) <= 2 and abs(score_hi - hi) <= 2 for lo, hi in base_rows):
+                ranges = "、".join(f"[{lo:g}, {hi:g}]" for lo, hi in base_rows)
+                _reject_score_or_warn(f"3A 增速区间 [{score_lo:g}, {score_hi:g}] 与 growth_plot {base_year}E "
+                                      f"本文区间 {ranges} 不一致（容差 ±2pct）")
 
 
 def _check_quote_present(fill: dict, warns: list) -> None:

@@ -167,6 +167,74 @@ def _turnover(raw):
     return revenue / assets if revenue is not None and assets else None
 
 
+def _fmt_value(value, digits=1):
+    return "未获取" if _num(value) is None else f"{_num(value):,.{digits}f}"
+
+
+def _change_text(current, previous, unit="", digits=1, relative=False):
+    if current is None and previous is None:
+        return "未获取"
+    previous_text = _fmt_value(previous, digits) + ("%" if unit == "%" and previous is not None else "")
+    text = f"{previous_text} → {_fmt_value(current, digits)}{unit}"
+    if current is None or previous is None:
+        return text
+    delta = ((current / previous - 1) * 100 if relative and previous
+             else current - previous if not relative else None)
+    if delta is None:
+        return text
+    delta_unit = "%" if relative else "pct" if unit == "%" else unit
+    delta_digits = 2 if unit in ("%", " 倍", "亿股") else 1
+    delta_text = f"{delta:+.{delta_digits}f}" if delta else f"{delta:.{delta_digits}f}"
+    return f"{text}（{delta_text}{delta_unit}）"
+
+
+def _f_item_evidence(rows, current, previous, current_raw, previous_raw, shares):
+    if not current:
+        return {"period": "", "items": {}}
+    current_year = current["END_DATE"][:4]
+    previous_year = previous["END_DATE"][:4] if previous else None
+    period = f"{previous_year}→{current_year}年报" if previous_year else f"{current_year}年报"
+    long_current = _debt(current_raw)[1] / 1e8 if current_raw and _debt(current_raw)[1] is not None else None
+    long_previous = _debt(previous_raw)[1] / 1e8 if previous_raw and _debt(previous_raw)[1] is not None else None
+    cover_current = _debt(current_raw)[3] if current_raw else None
+    cover_previous = _debt(previous_raw)[3] if previous_raw else None
+    share_current = _share_before(shares, current["END_DATE"])
+    share_previous = _share_before(shares, previous["END_DATE"]) if previous else None
+    share_current = share_current / 10000 if share_current is not None else None
+    share_previous = share_previous / 10000 if share_previous is not None else None
+    cash_values = [r["NCO_NETPROFIT"] for r in rows if r.get("NCO_NETPROFIT") is not None]
+    if cover_current == 1e9 and cover_previous == 1e9:
+        cover_text = "无短债"
+    elif cover_current == 1e9 or cover_previous == 1e9:
+        previous_text = ("无短债" if cover_previous == 1e9 else "未获取" if cover_previous is None
+                         else _fmt_value(cover_previous, 2) + " 倍")
+        current_text = ("无短债" if cover_current == 1e9 else "未获取" if cover_current is None
+                        else _fmt_value(cover_current, 2) + " 倍")
+        cover_text = f"{previous_text} → {current_text}"
+    else:
+        cover_text = _change_text(cover_current, cover_previous, " 倍", 2)
+    items = {
+        "profit_positive": (f"{_fmt_value(current.get('KCFJCXSYJLR') / 1e8)}亿元"
+                            if current.get("KCFJCXSYJLR") is not None else "未获取"),
+        "ocf_positive": (f"净额{_fmt_value(current.get('NETCASH_OPERATE_PK') / 1e8)}亿元"
+                         if current.get("NETCASH_OPERATE_PK") is not None else "未获取"),
+        "roa_improving": _change_text(_roa(current_raw) * 100 if current_raw and _roa(current_raw) is not None else None,
+                                      _roa(previous_raw) * 100 if previous_raw and _roa(previous_raw) is not None else None,
+                                      "%", 2),
+        "cash_quality_ok": (f"{len(cash_values)}个有效年度最低 {min(cash_values):.2f} 倍（仅净利润为正年度）"
+                            if cash_values else "未获取"),
+        "long_debt_down": _change_text(long_current, long_previous, "亿元", 1, relative=True),
+        "short_cover_improving": cover_text,
+        "no_dilution": _change_text(share_current, share_previous, "亿股", 2, relative=True),
+        "gross_margin_improving": _change_text(current.get("XSMLL"),
+                                               previous.get("XSMLL") if previous else None, "%", 1),
+        "asset_turnover_improving": _change_text(_turnover(current_raw) if current_raw else None,
+                                                  _turnover(previous_raw) if previous_raw else None,
+                                                  " 次", 3, relative=True),
+    }
+    return {"period": period, "items": items}
+
+
 def _cash_runway(rows, raw, latest_raw=None):
     if not rows or not raw:
         return None
@@ -256,6 +324,7 @@ def fetch_quality_inputs(code: str, secucode: str, as_of: str, profile: dict) ->
         "asset_turnover_improving": (_improve(_turnover(current_raw), _turnover(previous_raw))
                                      if current_raw and previous_raw else None),
     }
+    f_item_evidence = _f_item_evidence(rows, current, previous, current_raw, previous_raw, shares)
     for name in F_ITEM_IDS:
         _coverage_value(result["coverage"], f"1D.f_items.{name}", f_items[name], not rows)
     st, lt, money, cover = _debt(liquidity_raw) if liquidity_raw else (None, None, None, None)
@@ -295,7 +364,7 @@ def fetch_quality_inputs(code: str, secucode: str, as_of: str, profile: dict) ->
     else:
         roic_months = int(roic_end[4:6]) if roic_end and roic_end[4:6].isdigit() else None
         roic_basis = "latest"
-    result["1D"] = {"kind": "generic_f", "f_items": f_items,
+    result["1D"] = {"kind": "generic_f", "f_items": f_items, "f_item_evidence": f_item_evidence,
                     "liquidity": liquidity, "red_flags": red_flags}
     result["1F"] = {"roic": roic, "wacc": 0.08, "incremental_roic": None,
                     "roic_period_months": roic_months, "roic_basis": roic_basis,

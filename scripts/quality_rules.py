@@ -700,12 +700,16 @@ def _eval_survival_checklist(spec, profile):
 
 
 def _eval_1d(spec, context):
-    for name in ("f_items", "liquidity", "red_flags", "industry_checks",
+    for name in ("f_items", "f_item_evidence", "liquidity", "red_flags", "industry_checks",
                  "red_flag_materiality", "red_flag_materiality_evidence",
                  "f_causal_groups", "f_causal_evidence", "industry_check_evidence", "g_checks"):
         value = spec.get(name)
         if value is not None and not isinstance(value, dict):
             raise ValueError(f"1D.{name} 必须为对象")
+    f_evidence = spec.get("f_item_evidence")
+    if f_evidence is not None and (not isinstance(f_evidence.get("period"), str)
+                                   or not isinstance(f_evidence.get("items"), dict)):
+        raise ValueError("1D.f_item_evidence.period 必须为字符串，f_item_evidence.items 必须为对象")
     profile = context.get("industry_profile") or "generic"
     if profile not in PROFILE_KIND:
         return _missing("1D", f"未登记行业profile: {profile}")

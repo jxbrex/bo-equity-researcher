@@ -1066,6 +1066,37 @@ def test_score_detail_shows_deduction_and_formats_financial_checks():
     assert 'data-rule-id="1D.RED.RECEIVABLES"' in html
 
 
+def test_score_detail_renders_f_item_evidence_as_compact_table():
+    items = {name: True for name in (
+        "profit_positive", "ocf_positive", "roa_improving", "cash_quality_ok",
+        "long_debt_down", "short_cover_improving", "no_dilution",
+        "gross_margin_improving", "asset_turnover_improving")}
+    items["no_dilution"] = False
+    items["asset_turnover_improving"] = False
+    facts = {
+        "profit_positive": "645.1亿元", "ocf_positive": "净额1,332亿元",
+        "roa_improving": "6.87% → 7.88%（+1.01pct）", "cash_quality_ok": "近五年最低 1.73 倍",
+        "long_debt_down": "931.6 → 816.7亿元（-12.3%）",
+        "short_cover_improving": "7.13 → 9.48 倍（+2.35 倍）",
+        "no_dilution": "44.03 → 45.64亿股（+3.66%）",
+        "gross_margin_improving": "24.4% → 26.3%（+1.9pct）",
+        "asset_turnover_improving": "0.460 → 0.435 次（-5.5%）",
+    }
+    spec = {"f_items": items,
+            "f_item_evidence": {"period": "2024→2025年报", "items": facts}}
+    result = {"base": 7.0, "cap": None, "final": 7.0, "rule_steps": [
+        {"id": "1D.F.HITS", "evidence": "命中7/9", "delta": 0}]}
+    html = R._build_score_detail("1D", result, spec)
+    assert "九项数据明细" in html and "2024→2025年报" in html
+    assert html.count('scope="row"') == 9
+    assert html.count('class="status pass"') == 7
+    assert html.count('class="status fail"') == 2
+    assert "44.03 → 45.64亿股（+3.66%）" in html
+    assert "0.460 → 0.435 次（-5.5%）" in html
+    assert "上限" not in html and "需要上升" not in html
+    assert "<caption>" in html and 'scope="col"' in html
+
+
 def test_score_detail_formats_cash_runway_to_two_decimals():
     result = {"base": 9.0, "cap": None, "final": 9.0,
               "rule_steps": [{"id": "1D.CASH_RUNWAY", "evidence": "59.52249294240183个月", "delta": 0}]}
@@ -1475,6 +1506,14 @@ def test_fixed_web_guidance_contract():
     for selector, size in (("h4", "13px"), ("p", "14px"), ("li", "14px")):
         assert re.search(rf"\.score-group {selector}\s*\{{[^}}]*font-size:\s*{size}", template), \
             f"评分依据 {selector} 字号应统一为 {size}"
+    assert re.search(r"\.score-groups\s*\{[^}]*align-items:\s*start", template)
+    assert ".score-group.evidence" in template
+    assert re.search(r"\.score-group li strong\s*\{[^}]*border-radius", template)
+    for token in ("--pass-text", "--fail-text", "--unknown-text"):
+        assert token in template
+    for selector in (".f-item-table .status.pass", ".f-item-table .status.fail",
+                     ".f-item-table .status.unknown"):
+        assert re.search(rf"{re.escape(selector)}\s*\{{[^}}]*--(pass|fail|unknown)-text", template)
     html = render_fill(minimal_fill())
     assert ('<div class="table-scroll" tabindex="0" role="region" '
             'aria-label="数据表格（可横向滚动）">') in html

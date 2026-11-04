@@ -1201,7 +1201,7 @@ def _check_quality_profile_contract(fill: dict, warns: list) -> None:
     spec = (fill.get("score_inputs") or {}).get("1D") or {}
     common = {"counter_evidence", "custom", "manual_evidence", "kind", "note"}
     by_kind = {
-        "generic_f": {"f_items", "liquidity", "red_flags", "red_flag_materiality",
+        "generic_f": {"f_items", "f_item_evidence", "liquidity", "red_flags", "red_flag_materiality",
                       "red_flag_materiality_evidence", "f_causal_groups", "f_causal_evidence", "g_checks"},
         "industry_checklist": {"industry_checks", "industry_check_evidence"},
         "survival_checklist": {"industry_checks", "industry_check_evidence",
@@ -1274,7 +1274,7 @@ def _check_quality_inputs(fill: dict, warns: list) -> None:
             raise ValueError(f"fill 与落盘 quality_inputs.profile.{key} 不一致："
                              f"{actual.get(key)!r} vs {profile.get(key)!r}")
     score_inputs = fill.get("score_inputs") or {}
-    fields = {"1D": ("f_items", "liquidity", "red_flags", "cash_runway_months"),
+    fields = {"1D": ("f_items", "f_item_evidence", "liquidity", "red_flags", "cash_runway_months"),
               "1F": ("roic", "wacc", "incremental_roic", "roic_period_months",
                      "roic_basis", "cash_runway_months")}
 
@@ -1285,7 +1285,8 @@ def _check_quality_inputs(fill: dict, warns: list) -> None:
             evidence_map = (score_inputs.get(dim) or {}).get("manual_evidence") or {}
             relative_path = path.split(".", 1)[1]
             evidence = evidence_map.get(relative_path) if isinstance(evidence_map, dict) else None
-            documented = (isinstance(evidence, dict)
+            documented = (not path.startswith("1D.f_item_evidence.")
+                          and isinstance(evidence, dict)
                           and bool(str(evidence.get("source") or "").strip())
                           and bool(str(evidence.get("note") or "").strip()))
             if not documented:

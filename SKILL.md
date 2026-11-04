@@ -168,7 +168,9 @@ sensitivity 的 name）或写**带数字的排除理由**（`excluded`，如「A
 第 10 章同业差异说明，不生成 1D 红旗、扣分或限档；委派 peers 可提前并行预热缓存，但 `--no-e5`
 仍不得与 quality-v2 同用。
 缺 profile 只会得到 `profile_missing`，不得默认套通用 F。摘要会完整打印 quality_inputs JSON，
-落盘同名子键供双向对账；旧命令不加开关时输出不变。机械字段只覆盖 1D/1F，其他维度仍须查证。
+落盘同名子键供双向对账；旧命令不加开关时输出不变。通用 1D 的 `f_item_evidence` 与九项布尔结果同源生成并照抄，
+用于评分依据九行数据表：变化型显示两年、正负型只列当年值，禁止手工补另一套数字；机械字段只覆盖 1D/1F，
+其他维度仍须查证。
 A 股 tushare E5 的完整逐机构 `detail/aim_detail` 随 quote 的 `gap_plot` 子键落盘，按预测年与
 `norm_org` 合并别名、取最新一份并保留原始展示名，供第 9 章 street 照抄对账。
 **v5.0 新增输出**：em_fetch 摘要新增「报告期进度」照抄行（最新报告期四累计值+同比/单季拆分/近三年同期占比带/完成度分母说明），落盘 JSON 新增 `period_track`/`consensus_np` 键——fill 的 `period_track` 照抄键与 `valuation_inputs.consensus_np` 一律照抄该行/落盘回填，禁手估（v4.11.0 holders/price_history 同款照抄纪律；契约见 fill-schema.md）。**v5.0.1 扩充**：单季拆分照抄键新增扣非与经营现金流（`sq_dedt`/`sq_ocf` 及 prev/yoy 四键，累计差分口径）。**v5.1.0 补源**：E5 走东财降级源（tushare report_rc 空/失败）时，当年 EPS 均值按 ×总股本（总市值/现价）换算落盘 `consensus_np`（落盘 `src` 键标记换算口径）——此前该分支不落盘，恒瑞 2026-09 实证致第 3 章进度条与预期差拆解口径分裂。**v5.5.1 港股补源**：E5 对港股无逐机构明细（tushare `report_rc` 不覆盖港股），第 9 章 `gap_plot` 的 `street` 无照抄行——填报方把调研（卖方研报/电话调研）得到的逐机构预测**先落盘**为 `_street_{code}_{date}.json`（含机构名/数值/日期/来源四要素）再照抄填 `gap_plot.street`，并在 `gap_plot` 加 `source_file` 指向该文件（契约见 fill-schema.md「gap_plot」节；无 `source_file` 的港股 street 会被软校验判为手填嫌疑）。

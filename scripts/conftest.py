@@ -430,7 +430,7 @@ def render_fill(fill, name="_fill_t.json"):
 
 
 def prepare_v2_quote(fill, d):
-    fields = {"1D": ("f_items", "liquidity", "red_flags", "cash_runway_months"),
+    fields = {"1D": ("f_items", "f_item_evidence", "liquidity", "red_flags", "cash_runway_months"),
               "1F": ("roic", "wacc", "incremental_roic", "roic_period_months",
                      "roic_basis", "cash_runway_months")}
     score_inputs = fill.get("score_inputs") or {}

@@ -328,3 +328,61 @@ def test_peer_gross_margin_mean_is_not_a_scoring_input(monkeypatch):
     assert result["profile"]["peer_gross_margin_mean"] == 0.0
     assert set(result["1D"]["red_flags"]) == {"receivables", "inventory"}
     assert "1D.red_flags.gross_margin_anomaly" not in result["coverage"]
+
+
+def test_f_item_evidence_preserves_values_and_period(monkeypatch):
+    rows = _bundle(_rows(2023, "20240320", profit=80, revenue=800, assets=900, share=10000),
+                   _rows(2024, "20250320", profit=90, revenue=900, assets=1000, share=10000),
+                   _rows(2025, "20260320", profit=100, revenue=1100, assets=1100, share=10000))
+    ratio_keys = {"roe", "grossprofit_margin", "netprofit_margin", "debt_to_assets", "roic",
+                  "ar_turn", "turn_days"}
+    for api in ("income", "fina_indicator", "cashflow", "balancesheet"):
+        for row in rows[api]:
+            for key, value in list(row.items()):
+                if isinstance(value, (int, float)) and key not in ratio_keys:
+                    row[key] = value * 1e8
+    _install(monkeypatch, rows)
+    result = qi.fetch_quality_inputs("600000", None, "2026-04-01", PROFILE)
+    evidence = result["1D"]["f_item_evidence"]
+    assert evidence["period"] == "2024→2025年报"
+    assert set(evidence["items"]) == set(qi.F_ITEM_IDS)
+    assert evidence["items"]["profit_positive"] == "90.0亿元"
+    assert evidence["items"]["ocf_positive"] == "净额120.0亿元"
+    assert evidence["items"]["roa_improving"] == "9.00% → 9.09%（+0.09pct）"
+    assert evidence["items"]["cash_quality_ok"] == "3个有效年度最低 1.20 倍（仅净利润为正年度）"
+    assert evidence["items"]["no_dilution"] == "1.00 → 1.00亿股（0.00%）"
+    assert evidence["items"]["asset_turnover_improving"] == "0.900 → 1.000 次（+11.1%）"
+
+
+def test_f_item_evidence_does_not_display_no_short_debt_sentinel(monkeypatch):
+    rows = _bundle(_rows(2024, "20250320"), _rows(2025, "20260320"))
+    for row in rows["balancesheet"]:
+        row["st_borr"] = 0
+        row["non_cur_liab_due_1y"] = 0
+    _install(monkeypatch, rows)
+    result = qi.fetch_quality_inputs("600000", None, "2026-04-01", PROFILE)
+    text = result["1D"]["f_item_evidence"]["items"]["short_cover_improving"]
+    assert text == "无短债"
+    assert "1000000000" not in text
+
+
+def test_f_item_evidence_counts_valid_years_not_continuous_calendar(monkeypatch):
+    rows = _bundle(_rows(2023, "20240320", profit=80),
+                   _rows(2024, "20250320", profit=0),
+                   _rows(2025, "20260320", profit=100))
+    _install(monkeypatch, rows)
+    result = qi.fetch_quality_inputs("600000", None, "2026-04-01", PROFILE)
+    text = result["1D"]["f_item_evidence"]["items"]["cash_quality_ok"]
+    assert text == "2个有效年度最低 1.20 倍（仅净利润为正年度）"
+
+
+def test_f_item_evidence_missing_side_does_not_get_ratio_unit(monkeypatch):
+    rows = _bundle(_rows(2024, "20250320"), _rows(2025, "20260320"))
+    rows["balancesheet"][0] = {}
+    rows["balancesheet"][1]["st_borr"] = 0
+    rows["balancesheet"][1]["non_cur_liab_due_1y"] = 0
+    _install(monkeypatch, rows)
+    result = qi.fetch_quality_inputs("600000", None, "2026-04-01", PROFILE)
+    text = result["1D"]["f_item_evidence"]["items"]["short_cover_improving"]
+    assert text == "未获取 → 无短债"
+    assert "未获取 倍" not in text

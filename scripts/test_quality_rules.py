@@ -536,6 +536,13 @@ def test_retired_gross_margin_custom_rule_id_is_rejected(custom):
         qr.evaluate_dimension("1D", spec, dict(CTX, report_date="2026-11-04"))
 
 
+def test_f_item_evidence_items_must_be_an_object():
+    spec = _financial_spec(red_flags={"receivables": False, "inventory": False})
+    spec["f_item_evidence"] = {"period": "2025年报", "items": ["bad"]}
+    with pytest.raises(ValueError, match="f_item_evidence.items"):
+        qr.evaluate_dimension("1D", spec, CTX)
+
+
 def test_string_numbers_are_normalized():
     growth = {"growth_lo": "15-30%", "growth_hi": "30%", "driver_status": "部分兑现", "custom": _custom()}
     result = qr.evaluate_dimension("3A", growth, CTX)

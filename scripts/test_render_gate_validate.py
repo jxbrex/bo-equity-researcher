@@ -1099,7 +1099,7 @@ def test_v2_risk_register_render_preserves_hero_and_premortem(capsys):
 
 def _quality_payload(fill):
     import copy
-    fields = {"1D": ("f_items", "liquidity", "red_flags", "cash_runway_months"),
+    fields = {"1D": ("f_items", "f_item_evidence", "liquidity", "red_flags", "cash_runway_months"),
               "1F": ("roic", "wacc", "incremental_roic", "roic_period_months",
                      "roic_basis", "cash_runway_months")}
     score_inputs = fill["score_inputs"]
@@ -1192,6 +1192,35 @@ def test_retired_gross_margin_watch_remains_compatible_before_change_date():
     fill["risk_items"] = [_risk_item(name="毛利率高于同业",
                                      rule_id="1D.RED.GROSS_MARGIN_ANOMALY", status="watch")]
     assert "毛利率高于同业" in R.build_risk_register(fill)
+
+
+def test_f_item_evidence_is_allowed_and_copied_from_quote():
+    fill = v2_fill()
+    fill["score_inputs"]["1D"]["f_item_evidence"] = {
+        "period": "2024→2025年报",
+        "items": {"profit_positive": "645.1亿元"},
+    }
+    with tempfile.TemporaryDirectory() as d:
+        fill = _prepare_quality_quote(fill, d)
+        out = validate_stderr(fill)
+    assert "f_item_evidence" not in out
+
+
+def test_f_item_evidence_cannot_use_parent_manual_evidence_to_skip_copy_check():
+    fill = v2_fill()
+    spec = fill["score_inputs"]["1D"]
+    spec["f_item_evidence"] = {"period": "2024→2025年报",
+                               "items": {"profit_positive": "645.1亿元"}}
+    spec["manual_evidence"] = {
+        "f_item_evidence.period": {"source": "公司年报", "note": "手工补期间"},
+        "f_item_evidence.items": {"source": "公司年报", "note": "手工补整组数字"},
+    }
+    with tempfile.TemporaryDirectory() as d:
+        payload = _quality_payload(fill)
+        payload["1D"].pop("f_item_evidence")
+        fill = _prepare_quality_quote(fill, d, payload)
+        out = validate_stderr(fill)
+    assert "f_item_evidence" in out and "落盘缺失" in out
 
 
 def test_quality_inputs_manual_evidence_only_covers_missing_leaf_values():

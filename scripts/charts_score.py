@@ -10,9 +10,9 @@ from charts_base import *
 
 
 _F_LABELS = {
-    "profit_positive": "利润为正", "ocf_positive": "经营现金流为正", "roa_improving": "ROA 改善",
+    "profit_positive": "扣非净利为正", "ocf_positive": "经营现金流为正", "roa_improving": "ROA 改善",
     "cash_quality_ok": "现金含量合格", "long_debt_down": "长期有息负债下降",
-    "short_cover_improving": "短债覆盖改善", "no_dilution": "无股本稀释",
+    "short_cover_improving": "短债覆盖改善", "no_dilution": "股本未稀释",
     "gross_margin_improving": "毛利率改善", "asset_turnover_improving": "资产周转改善",
 }
 _F_MISS = {
@@ -125,6 +125,40 @@ def _score_group(key, step):
     return "规则明细"
 
 
+def _f_evidence_table(spec):
+    evidence = spec.get("f_item_evidence") or {}
+    facts = evidence.get("items") or {}
+    items = spec.get("f_items") or {}
+    if not facts or not items:
+        return ""
+    rows = []
+    for name in F_ITEM_IDS:
+        value = items.get(name)
+        status = "通过" if value is True else "未通过" if value is False else "未核实"
+        css = "pass" if value is True else "fail" if value is False else "unknown"
+        rows.append(
+            f'<tr data-rule-id="{_esc(F_ITEM_IDS[name])}"><th scope="row">{_esc(_F_LABELS[name])}</th>'
+            f'<td>{_esc(str(facts.get(name) or "未获取"))}</td>'
+            f'<td><span class="status {css}">{status}</span></td></tr>')
+    passed = sum(items.get(name) is True for name in F_ITEM_IDS)
+    failed = sum(items.get(name) is False for name in F_ITEM_IDS)
+    unknown = len(F_ITEM_IDS) - passed - failed
+    count = f"{passed} 项通过 · {failed} 项未通过"
+    if unknown:
+        count += f" · {unknown} 项未核实"
+    period = str(evidence.get("period") or "最新年报")
+    return (
+        '<section class="score-group evidence">'
+        f'<div class="evidence-head"><h4>九项数据明细</h4><span class="evidence-count">{count}</span></div>'
+        '<div class="table-scroll f-item-table" tabindex="0" role="region" aria-label="九项财务检查数据明细">'
+        '<table><caption>九项财务检查数据明细</caption>'
+        '<colgroup><col class="check"><col class="fact"><col class="result"></colgroup>'
+        '<thead><tr><th scope="col">检查项</th><th scope="col">数据依据</th><th scope="col">判定</th></tr></thead>'
+        f'<tbody>{"".join(rows)}</tbody></table></div>'
+        f'<p class="table-note">口径：{_esc(period)}；ROA 与资产周转率按期末总资产计算。'
+        '数据来源：公司定期报告、Tushare 与东方财富 F10。</p></section>')
+
+
 def _build_score_detail(key, result, spec):
     steps = result.get("rule_steps") or []
     custom = result.get("custom") or {}
@@ -188,10 +222,14 @@ def _build_score_detail(key, result, spec):
         explanation_body = "".join(
             f'<section class="score-group"><h4>{title}</h4><p>{_esc(text)}</p></section>'
             for title, text in (("评分逻辑", logic), ("定档依据", basis)) if text)
+    f_table = _f_evidence_table(spec) if key == "1D" else ""
     groups = {"加减分": [], "规则明细": [], "数据缺口与限制": [], "补充观察": []}
     for step in steps:
         rule_id = str(step.get("id") or "")
         if rule_id in F_ITEM_IDS.values() or rule_id == "1E.POSITIVE_CAP":
+            continue
+        if f_table and rule_id.startswith("1D.G.") and not rule_id.endswith(
+                ("RD_INTENSITY_EVIDENCE", "CAPEX_INTENSITY_EVIDENCE")):
             continue
         text = _score_text(key, step, spec)
         label = _score_label(step)
@@ -202,8 +240,9 @@ def _build_score_detail(key, result, spec):
         item = (f'<li data-rule-id="{_esc(rule_id)}"><span>{_esc(prefix + text)}</span>'
                 f'{delta_html}</li>')
         groups[_score_group(key, step)].append(item)
-    body = "".join(f'<section class="score-group"><h4>{title}</h4><ul>{"".join(items)}</ul></section>'
-                   for title, items in groups.items() if items)
+    body = f_table + "".join(
+        f'<section class="score-group"><h4>{title}</h4><ul>{"".join(items)}</ul></section>'
+        for title, items in groups.items() if items)
     return (f'<details class="score-detail"><summary><span class="score-final">{_esc(summary)}</span>'
             f'<span class="score-detail-toggle">查看评分依据</span></summary>'
             f'<div class="score-groups">{explanation_body}{body}</div></details>')

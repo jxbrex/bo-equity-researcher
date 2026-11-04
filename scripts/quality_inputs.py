@@ -274,14 +274,6 @@ def fetch_quality_inputs(code: str, secucode: str, as_of: str, profile: dict) ->
         values = [r.get(field) for r in rows if r.get(field) is not None]
         red_flags[key] = values[0] > values[-1] * 1.3 if len(values) >= 3 else None
         _coverage_value(result["coverage"], f"1D.red_flags.{key}", red_flags[key], not rows)
-    peer_mean = profile.get("peer_gross_margin_mean")
-    if peer_mean is not None and current and current.get("XSMLL") is not None:
-        red_flags["gross_margin_anomaly"] = (current["XSMLL"] > peer_mean * 1.5
-                                             and not profile.get("gross_margin_explained", False))
-    else:
-        red_flags["gross_margin_anomaly"] = None
-    _coverage_value(result["coverage"], "1D.red_flags.gross_margin_anomaly",
-                    red_flags["gross_margin_anomaly"], not rows)
     roic = (liquidity_raw or {}).get("fina_indicator", {}).get("roic")
     roic_end = (liquidity_raw or {}).get("end_date") if roic is not None else None
     if roic is None and current:

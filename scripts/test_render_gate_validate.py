@@ -9,6 +9,8 @@ import re
 import sys
 import tempfile
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import render_report as R
 from conftest import (
@@ -1144,6 +1146,52 @@ def test_quality_inputs_two_way_copy_checks():
         fill = _prepare_quality_quote(fill, d, payload)
         out = validate_stderr(fill)
         assert "不一致" in out and "short_cover" in out and "roic_basis" in out
+
+
+def test_quality_inputs_skips_retired_gross_margin_only_for_new_reports():
+    from validate_audit import _check_quality_inputs
+
+    with tempfile.TemporaryDirectory() as d:
+        fill = v2_fill(date="2026-11-04")
+        fill["score_inputs"]["1D"]["red_flags"].pop("gross_margin_anomaly")
+        payload = _quality_payload(fill)
+        payload["1D"]["red_flags"]["gross_margin_anomaly"] = True
+        fill = _prepare_quality_quote(fill, d, payload)
+        warns = []
+        _check_quality_inputs(fill, warns)
+        assert not any("gross_margin_anomaly" in warning for warning in warns)
+
+    with tempfile.TemporaryDirectory() as d:
+        fill = v2_fill()
+        payload = _quality_payload(fill)
+        payload["1D"]["red_flags"]["gross_margin_anomaly"] = True
+        fill = _prepare_quality_quote(fill, d, payload)
+        warns = []
+        _check_quality_inputs(fill, warns)
+        assert any("gross_margin_anomaly" in warning and "不一致" in warning
+                   for warning in warns)
+
+
+@pytest.mark.parametrize("status,impact", [("watch", "quality"), ("hit", "monitor")])
+def test_retired_gross_margin_risk_rule_is_rejected_for_any_status(status, impact):
+    fill = v2_fill()
+    sc = R.compute_scores(fill)
+    fill["date"] = "2026-11-04"
+    fill["score_inputs"]["1D"]["red_flags"].pop("gross_margin_anomaly")
+    item = _risk_item(name="毛利率高于同业", rule_id="1D.RED.GROSS_MARGIN_ANOMALY",
+                      status=status, impact=impact)
+    if impact == "monitor":
+        item["unscored_reason"] = "试图以仅跟踪名义保留退役规则"
+    fill["risk_items"] = [item]
+    with pytest.raises(ValueError, match="毛利率异常规则已退役"):
+        R.build_risk_register(fill, sc)
+
+
+def test_retired_gross_margin_watch_remains_compatible_before_change_date():
+    fill = v2_fill()
+    fill["risk_items"] = [_risk_item(name="毛利率高于同业",
+                                     rule_id="1D.RED.GROSS_MARGIN_ANOMALY", status="watch")]
+    assert "毛利率高于同业" in R.build_risk_register(fill)
 
 
 def test_quality_inputs_manual_evidence_only_covers_missing_leaf_values():

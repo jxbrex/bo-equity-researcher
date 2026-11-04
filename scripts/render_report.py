@@ -41,7 +41,9 @@ from scoring import (
     compute_valuation, compute_valuation_score, build_dcf_cards, build_regime_note,
     _edge_info, build_edge_upgrade_rows, _matrix_applies, normalize_growth_fill,
 )
-from quality_rules import F_ITEM_IDS, _liquidity_band, _f_hits_with_causal_groups, POLICY_ALIASES
+from quality_rules import (
+    F_ITEM_IDS, _liquidity_band, _f_hits_with_causal_groups, POLICY_ALIASES,
+    GROSS_MARGIN_RULE_CHANGE_DATE)
 from charts_base import _fmt_px, _prev_track_rows, _SOURCE_BANNED_RE
 from charts_scenario import (
     build_scenario_spectrum, build_scenario_block, build_peers_plot,
@@ -64,7 +66,7 @@ from validate import validate_content
 
 # 渲染器版本：嵌入输出 HTML 尾部注释，事后可 grep 验证报告确由本脚本渲染
 # （防"render 报错后手写全文 HTML 绕行"，巨石 2026-08-23 实证）
-RENDERER_VERSION = "v0.14.0"
+RENDERER_VERSION = "v0.14.1"
 
 # Windows 文件名非法字符：\ / : * ? " < > | 及 ASCII 控制字符（\x00-\x1f）
 _WIN_ILLEGAL = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
@@ -423,6 +425,9 @@ def build_risk_register(fill: dict, sc: dict = None, warns: list = None) -> str:
         if raw_rule_id is not None and not isinstance(raw_rule_id, str):
             raise ValueError(f"{prefix}.rule_id 必须是字符串或 null")
         rule_id = (raw_rule_id or "").strip()
+        if rule_id == "1D.RED.GROSS_MARGIN_ANOMALY" \
+                and str(fill.get("date") or "") >= GROSS_MARGIN_RULE_CHANGE_DATE:
+            raise ValueError(f"{prefix}.rule_id 毛利率异常规则已退役，不得再进入风险登记")
         if impact == "quality" and status == "hit":
             if not rule_id:
                 raise ValueError(f"{prefix} 质量类命中必须填写 rule_id")

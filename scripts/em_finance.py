@@ -675,7 +675,7 @@ def fetch_debt(code: str):
         return None
 
 
-# ---------------- 盈利质量红旗（red_flags 四项 + forensic：7 年三表 + 审计意见） ----------------
+# ---------------- 盈利质量红旗（red_flags 三项 + forensic：7 年三表 + 审计意见） ----------------
 def _nco_bad(ratios: list, min_bad: int) -> bool:
     """利润现金含量（经营现金流/净利润）恶化判定（red_flags 与 forensic 共用，v5.1.5 收编）：
     ratios（新→旧的有效年份比率序列）中 <0.7 的年数 ≥ min_bad 即判恶化。
@@ -685,7 +685,7 @@ def _nco_bad(ratios: list, min_bad: int) -> bool:
 
 
 def red_flags(annual: list) -> list:
-    """盈利质量红旗四项检查（现金含量/应收/存货/毛利率；审计意见已挪出，单独一行输出）。
+    """盈利质量红旗三项检查（现金含量/应收/存货；审计意见已挪出，单独一行输出）。
     annual: 年报列表（新→旧，东财键名同构）。
     三态输出：✓=真通过（有数据且未恶化）/ ✗=真恶化 / △=数据不足——数据缺失显示△，
     绝不显示✓（"✓ API未触发"是虚假通过，芯原股份实证）。
@@ -716,12 +716,6 @@ def red_flags(annual: list) -> list:
         return f"△ {name} 数据不足({len(vals)}期有效)"
     flags.append(worsening("YSZKZZTS", "应收账款周转"))
     flags.append(worsening("CHZZTS", "存货周转"))
-
-    # 4. 毛利率异常（需同业对照，此处仅列数值）
-    if annual and annual[0].get("XSMLL") is not None:
-        flags.append(f"△ 毛利率 {pct(annual[0].get('XSMLL'))}（待与同业对照）")
-    else:
-        flags.append("△ 毛利率 数据不足")
 
     return flags
 

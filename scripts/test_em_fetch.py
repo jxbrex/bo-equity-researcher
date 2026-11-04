@@ -1804,6 +1804,8 @@ def test_38b_red_flags_turnover_uses_full_five_year_window():
     cash_rows = [dict(row, NCO_NETPROFIT=value)
                  for row, value in zip(rows, (1.0, 1.0, 1.0, 0.5, 0.5))]
     assert em.red_flags(cash_rows)[0].startswith("✓")
+    assert len(flags) == 3
+    assert not any("毛利率" in item for item in flags)
 
 
 def test_39_no_e5_rejects_target_evidence_flags(monkeypatch, capsys):

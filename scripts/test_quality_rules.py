@@ -495,6 +495,47 @@ def test_gross_margin_unknown_is_capped_not_unscorable():
     assert any(step["id"] == "1D.GROSS_MARGIN_PEER.UNKNOWN" for step in result["rule_steps"])
 
 
+def test_gross_margin_anomaly_not_scored_from_2026_11_04():
+    spec = _financial_spec(red_flags={"receivables": False, "inventory": False})
+    context = dict(CTX, report_date="2026-11-04")
+    result = qr.evaluate_dimension("1D", spec, context)
+    assert result["status"] == "ok"
+    assert result["final"] == 9
+    assert result["cap"] is None
+    assert not any("GROSS_MARGIN_ANOMALY" in step["id"]
+                   or step["id"] == "1D.GROSS_MARGIN_PEER.UNKNOWN"
+                   for step in result["rule_steps"])
+
+
+def test_gross_margin_anomaly_is_rejected_from_2026_11_04():
+    spec = _financial_spec(red_flags={"receivables": False, "inventory": False,
+                                     "gross_margin_anomaly": True})
+    with pytest.raises(ValueError, match="未登记的1D红旗项"):
+        qr.evaluate_dimension("1D", spec, dict(CTX, report_date="2026-11-04"))
+
+
+def test_gross_margin_anomaly_still_deducts_before_change_date():
+    spec = _financial_spec(red_flags={"receivables": False, "inventory": False,
+                                     "gross_margin_anomaly": True})
+    result = qr.evaluate_dimension("1D", spec, CTX)
+    assert result["final"] == 8
+    assert any(step["id"] == "1D.RED.GROSS_MARGIN_ANOMALY" and step["delta"] == -1
+               for step in result["rule_steps"])
+
+
+@pytest.mark.parametrize("custom", [
+    {"id": "1D.RED.GROSS_MARGIN_ANOMALY", "points": -1,
+     "reason": "试图恢复退役扣分", "evidence": "测试反例"},
+    [{"id": "CUSTOM.TEST", "points": 0, "reason": "占位", "evidence": "测试"},
+     {"id": "1D.RED.GROSS_MARGIN_ANOMALY", "points": -1,
+      "reason": "复合调整中恢复退役扣分", "evidence": "测试反例"}],
+])
+def test_retired_gross_margin_custom_rule_id_is_rejected(custom):
+    spec = _financial_spec(red_flags={"receivables": False, "inventory": False}, custom=custom)
+    with pytest.raises(ValueError, match="毛利率异常规则已退役"):
+        qr.evaluate_dimension("1D", spec, dict(CTX, report_date="2026-11-04"))
+
+
 def test_string_numbers_are_normalized():
     growth = {"growth_lo": "15-30%", "growth_hi": "30%", "driver_status": "部分兑现", "custom": _custom()}
     result = qr.evaluate_dimension("3A", growth, CTX)

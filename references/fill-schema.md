@@ -192,8 +192,7 @@ JSON 原样回填，禁止手估、手算、凭记忆补**。各字段的直填�
 | `liquidity.debt_ratio` | ratio，有息负债÷总资产 | 必填 |
 | `liquidity.short_cover` | number，货币资金÷短期有息负债 | 必填 |
 | `liquidity.ocf_short_cover` | number，最近完整年度经营现金流÷短期有息负债 | 可选；short_cover<1 且本项 >2 时流动性上调 |
-| `red_flags` | object，键集合见行业矩阵 | 通用 profile 允许项除 gross_margin_anomaly 外均必填 bool；不得添加集合外键 |
-| `red_flags.gross_margin_anomaly` | bool/null | 可选；缺失或 null 封顶 7.9 |
+| `red_flags` | object，键集合见行业矩阵 | 2026-11-04 起通用 profile 的 `receivables/inventory` 均为必填 bool，不得添加集合外键；`gross_margin_anomaly` 已退出评分，仅供更早报告按历史算法重渲 |
 | `red_flag_materiality` | `{flag: bool}`；false=声明不重大 | 可选；须配下一项证据才免扣 |
 | `red_flag_materiality_evidence` | `{flag:{"scale":"含数字的规模","source":"来源"}}` | 条件必填 |
 | `f_causal_groups` | `{组名:[9 个 f_items 键之一,…]}` | 可选；组间不得重复，不得把全部九项合成一组，每组必须配证据；2026-11-01 起硬拒，旧 fill 迁移告警 |
@@ -290,7 +289,7 @@ fill 与 quote 落盘 `quality_inputs.profile` 的 `stock_type/industry_profile/
 
 | profile | 1B 形状 | 1D 形状与 flag 键 | 1F 口径 |
 |---|---|---|---|
-| `generic` | 价值链 | 通用 F：`receivables/inventory/gross_margin_anomaly` | ROIC |
+| `generic` | 价值链 | 通用 F：`receivables/inventory`（2026-11-04 起） | ROIC |
 | `pharma_device` | 价值链 | 通用 F，同 generic | ROIC |
 | `pharma_cxo` | 两轴 | 通用 F，另加 `order_cancellation/price_war` | ROIC |
 | `resources_upstream` | 价值链 | 通用 F，同 generic | ROIC，强制 normalized |
@@ -306,8 +305,8 @@ fill 与 quote 落盘 `quality_inputs.profile` 的 `stock_type/industry_profile/
 金融与开发地产的落盘机械字段仍可能位于 `quality_inputs.1D.red_flags`，fill 评分输入须按
 上表写入 `industry_checks`，不要混用容器。`internet_platform` 的 fill 仍用通用 F，但机械落盘
 只提供 `review_only` 与专项 flag，不自动提供 f_items/liquidity/ROIC；这些缺项须用公告人工核实并
-逐叶写 manual_evidence，不得冒充机械照抄。其 1D 当前也会因无 gross_margin_anomaly 键封顶 7.9，
-这是代码现状，不擅自当成设计意图改规则。
+逐叶写 manual_evidence，不得冒充机械照抄。2026-11-04 起其 1D 不再因缺少同业毛利率对照封顶 7.9；
+更早报告重渲仍按历史算法处理。
 
 #### manual_evidence 叶级路径白名单
 
@@ -327,7 +326,7 @@ fill 与 quote 落盘 `quality_inputs.profile` 的 `stock_type/industry_profile/
     "1A": {"stage":"growth","growth":18,"tam":1200,"penetration":20,"policy":"tailwind","substitution_low":true,"counter_evidence":"占位反方证据：行业增速可能回落"},
     "1B": {"cost_quartile":1,"price_transmission":true,"bargaining_status":"正常","customer_concentration":0.2,"supplier_concentration":0.3,"upstream_self_supply":0.6,"counter_evidence":"占位反方证据：原料自给优势可能减弱"},
     "1C": {"moats":[{"verified":true,"rhetoric":false,"type":"technology","replication":"占位复制周期与成本","evidence":"占位公开来源","trend":"stable"}],"pressure":"扛得住","counter_evidence":"占位反方证据：竞争者可能复制"},
-    "1D": {"f_items":{"profit_positive":true,"ocf_positive":true,"roa_improving":true,"cash_quality_ok":true,"long_debt_down":true,"short_cover_improving":true,"no_dilution":true,"gross_margin_improving":true,"asset_turnover_improving":true},"liquidity":{"debt_ratio":0.1,"short_cover":3.0,"ocf_short_cover":2.5},"red_flags":{"receivables":false,"inventory":false,"gross_margin_anomaly":false},"counter_evidence":"占位反方证据：现金流改善尚未跨周期"},
+    "1D": {"f_items":{"profit_positive":true,"ocf_positive":true,"roa_improving":true,"cash_quality_ok":true,"long_debt_down":true,"short_cover_improving":true,"no_dilution":true,"gross_margin_improving":true,"asset_turnover_improving":true},"liquidity":{"debt_ratio":0.1,"short_cover":3.0,"ocf_short_cover":2.5},"red_flags":{"receivables":false,"inventory":false},"counter_evidence":"占位反方证据：现金流改善尚未跨周期"},
     "1E": {"pledge_pct":0.0,"reduction_pct":0.0,"penalties":false,"age":50,"succession_plan":true,"dividend":{"payout_streak":5,"growth_streak":3},"buyback":{"cancel":true},"long_record":{"dividend_growth":true},"counter_evidence":"占位反方证据：资本配置记录可能变化"},
     "1F": {"roic":0.18,"wacc":0.08,"incremental_roic":0.15,"roic_basis":"latest","roic_period_months":12,"dupont_driver":"净利率","counter_evidence":"占位反方证据：高回报可能均值回归"},
     "3A": {"growth_lo":25,"growth_hi":35,"driver_status":"已验证","counter_evidence":"占位反方证据：订单增速不等于利润增速"},
@@ -391,7 +390,7 @@ fill 与 quote 落盘 `quality_inputs.profile` 的 `stock_type/industry_profile/
 不靠拆段或重复内容凑数。**迁移口径：报告日期 ≥2026-11-01 缺项或内容空泛拒渲染，
 旧 fill 只告警，重渲历史报告前按本契约补写即可，不回改历史正文要求。**
 
-质量层评分正文片段：`l1_html` 含六维（**报告内 `dim-name` 显示编号用 4.1-4.6**：4.1 赛道与宏观/4.2 产业链位置/4.3 商业模式与护城河/4.4 财务健康/4.5 治理与资本配置/4.6 资本回报质量；4.4 含红旗四项三态表（现金含量/应收/存货/毛利率；审计意见已挪 L4 红灯 a）+**fin_trend 财务趋势图墙**（v4.9 起必填字段、脚本生成，**禁止再手写 5 年年表**——图替代表；锚点 `<!--FIN_TREND-->` 写 4.4 块内）+**em_fetch 财报可信度初评等级与依据**；
+质量层评分正文片段：`l1_html` 含六维（**报告内 `dim-name` 显示编号用 4.1-4.6**：4.1 赛道与宏观/4.2 产业链位置/4.3 商业模式与护城河/4.4 财务健康/4.5 治理与资本配置/4.6 资本回报质量；4.4 含红旗三项三态表（现金含量/应收/存货；审计意见已挪 L4 红灯 a）+**fin_trend 财务趋势图墙**（v4.9 起必填字段、脚本生成，**禁止再手写 5 年年表**——图替代表；锚点 `<!--FIN_TREND-->` 写 4.4 块内）+**em_fetch 财报可信度初评等级与依据**；
 
 **4.3 商业模式与护城河用清单列示**（补充修订四：复用同一 `.trig-strip` 类族，2-4 条护城河——cond=护城河名称、mt=一句论据（数据+判语，多数据点用分号）、status=护城河评级三态：hit 绿=宽阔 / pending 灰=中等 / miss 红=狭窄（评价语义，与涨跌红绿无关）；每块=单个 `.trig`、禁另起 `<p>` 正文、整块 `<p>` 恰为 4=判词/论据/对比/评分四段（评分末拍含依据链）、mt 内 `<strong>` 至多 1 处——规则与 4.5 全同）；**论据标准（v4.10.1，判据全文唯一权威在 scoring.md 1C，此处不复述）**：mt 按论据类型满足对应判据——定价权类带分域可观测判据至少 1 条（禁跨域套用）；边际改善类（毛利率回升/不良下降/份额提升）带同步性检验 α/β 结论一句；周期行业毛利率论据须先归因三方向。评分末拍段在依据链后强制**竞争压力测试槽位**：`压力测试：{最大威胁场景} → 扛得住/警惕/扛不住（{5-10 年先例一句}）；侵蚀观测：{信号} {阈值}，已挂 14 章`——给了阈值的 14 章 triggers/dash 表必须有对应行，否则删阈值句**（v5.1.2 起脚本告警执行）**；
 

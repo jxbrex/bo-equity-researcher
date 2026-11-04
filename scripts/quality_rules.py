@@ -110,6 +110,7 @@ RULE_LABELS = {
     "1E.PLEDGE": "质押", "1E.REDUCTION": "减持", "1E.SUCCESSION": "继任风险",
     "1E.PENALTIES": "监管处罚", "1F.INCREMENTAL_ROIC": "增量 ROIC",
 }
+GROSS_MARGIN_RULE_CHANGE_DATE = "2026-11-04"
 GENERIC_RED_FLAGS = {"receivables", "inventory", "gross_margin_anomaly"}
 PROFILE_FLAGS = {
     "generic": GENERIC_RED_FLAGS,
@@ -537,7 +538,15 @@ def _eval_generic_f(spec, profile, context=None):
     if not liquidity or liquidity.get("debt_ratio") is None or liquidity.get("short_cover") is None:
         return _missing("1D", "缺少绝对流动性")
     flags = spec.get("red_flags") or {}
-    allowed = PROFILE_FLAGS[profile]
+    legacy_gross_margin = str((context or {}).get("report_date") or "") < GROSS_MARGIN_RULE_CHANGE_DATE
+    if not legacy_gross_margin:
+        custom = spec.get("custom") or {}
+        custom_items = custom if isinstance(custom, list) else [custom]
+        if any(isinstance(item, dict) and item.get("id") == "1D.RED.GROSS_MARGIN_ANOMALY"
+               for item in custom_items):
+            raise ValueError("毛利率异常规则已退役，不得通过自定义调整恢复")
+    allowed = (PROFILE_FLAGS[profile] if legacy_gross_margin
+               else PROFILE_FLAGS[profile] - {"gross_margin_anomaly"})
     unknown = set(flags) - allowed
     if "cash_quality" in unknown:
         raise ValueError("现金含量已并入F项，禁止重复扣分")
@@ -547,10 +556,12 @@ def _eval_generic_f(spec, profile, context=None):
                      and not isinstance(flags.get(name), bool)]
     if missing_flags:
         return _missing("1D", "红旗项缺失或未知: " + ", ".join(sorted(missing_flags)))
-    if "gross_margin_anomaly" in flags and flags["gross_margin_anomaly"] is not None \
+    if legacy_gross_margin and "gross_margin_anomaly" in flags \
+            and flags["gross_margin_anomaly"] is not None \
             and not isinstance(flags["gross_margin_anomaly"], bool):
         return _missing("1D", "毛利率异常红旗须为布尔值或 null")
-    gross_unknown = "gross_margin_anomaly" not in flags or flags["gross_margin_anomaly"] is None
+    gross_unknown = legacy_gross_margin and (
+        "gross_margin_anomaly" not in flags or flags["gross_margin_anomaly"] is None)
     raw_hits = sum(items[name] for name in F_ITEM_IDS)
     hits = raw_hits
     misses = {name for name in F_ITEM_IDS if not items[name]}

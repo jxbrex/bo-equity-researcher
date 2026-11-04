@@ -35,7 +35,7 @@ tushare 不可用时自动回落东财野生端点（curl 传输，防 TLS 指�
 输出: 紧凑 Markdown 摘要到 stdout（实测约 3.5KB/股），原始 JSON 不落盘不进上下文。
        --quality-v2 时追加完整 quality_inputs JSON；缺 profile 返回 profile_missing，不套通用 F。
 覆盖: E1 行情估值 / E2 月线 / E3 F10 主要指标 / E4 股东户数 / E5 一致预期 / E6 主营构成
-      / 盈利质量红旗四项 / 审计意见（tushare fina_audit，独立行，供 L4 红灯 a 项判定）
+      / 盈利质量红旗三项 / 审计意见（tushare fina_audit，独立行，供 L4 红灯 a 项判定）
       / 有息负债（tushare balancesheet）
 """
 import json
@@ -304,7 +304,8 @@ def _sec_e3_hk(pure: str) -> list:
             out.append(f"{r['期']} | {r['营收亿']} | {r['归母净利亿']} | "
                        f"{r['ROE%']} | {r['毛利率%']} | {r['净利率%']}")
         out.append("\n## 盈利质量红旗\n[港股：现金含量/应收/存货周转天数港股接口不提供，按缺失处理；"
-                   "毛利率用上表对照同业；审计意见走必查项手工查证]\n")
+                   "审计意见走必查项手工查证]\n"
+                   "同业毛利率差异仅在第10章说明，不进入1D红旗。\n")
         out.append("有息负债: [港股分支跳过（tushare balancesheet 不覆盖港股），"
                    "请降级：东财F10资产负债表]\n")
         # 报告期进度（v5.0 第 3 章，港股降级口径）：hk_income 中报可查则给累计营收/净利+同比+

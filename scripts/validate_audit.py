@@ -27,7 +27,8 @@ from validate_common import (
     _is_hk_code,
     _quote_ref,
     _scenario_by_key)
-from quality_rules import PROFILE_KIND, PROFILE_FLAGS, F_ITEM_IDS
+from quality_rules import (
+    PROFILE_KIND, PROFILE_FLAGS, F_ITEM_IDS, GROSS_MARGIN_RULE_CHANGE_DATE)
 from org_tier import norm_org
 from em_core import _yoy
 
@@ -1306,6 +1307,9 @@ def _check_quality_inputs(fill: dict, warns: list) -> None:
             rv = (package.get(dim) or {}).get(key)
             if isinstance(fv, dict) or isinstance(rv, dict):
                 for child in sorted(set((fv or {}).keys()) | set((rv or {}).keys())):
+                    if dim == "1D" and key == "red_flags" and child == "gross_margin_anomaly" \
+                            and str(fill.get("date") or "") >= GROSS_MARGIN_RULE_CHANGE_DATE:
+                        continue
                     _compare(dim, f"{dim}.{key}.{child}", (fv or {}).get(child), (rv or {}).get(child))
             else:
                 _compare(dim, f"{dim}.{key}", fv, rv)

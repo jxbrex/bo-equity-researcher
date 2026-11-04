@@ -320,10 +320,11 @@ def test_incomplete_balance_sheet_is_unknown_not_zero_debt(monkeypatch):
     assert result["coverage"]["1D.liquidity.debt_ratio"] == "missing"
 
 
-def test_zero_peer_gross_margin_mean_is_data_not_missing(monkeypatch):
+def test_peer_gross_margin_mean_is_not_a_scoring_input(monkeypatch):
     rows = _bundle(_rows(2025, "20260320"))
     _install(monkeypatch, rows)
     profile = dict(PROFILE, peer_gross_margin_mean=0.0, gross_margin_explained=False)
     result = qi.fetch_quality_inputs("600000", None, "2026-04-01", profile)
-    assert result["1D"]["red_flags"]["gross_margin_anomaly"] is True
-    assert result["coverage"]["1D.red_flags.gross_margin_anomaly"] == "ok"
+    assert result["profile"]["peer_gross_margin_mean"] == 0.0
+    assert set(result["1D"]["red_flags"]) == {"receivables", "inventory"}
+    assert "1D.red_flags.gross_margin_anomaly" not in result["coverage"]

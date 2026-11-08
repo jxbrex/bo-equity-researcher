@@ -269,6 +269,9 @@ def fetch_kline_monthly(secid: str, years: int, is_hk: bool = False) -> list:
             raise RuntimeError("adj_factor 空返回，无法前复权，兜底东财")
         fmap = {f["trade_date"]: float(f["adj_factor"]) for f in fac if f.get("adj_factor")}
         latest_f = fmap[max(fmap)]
+        missing_f = [r.get("trade_date") for r in rows if r.get("trade_date") not in fmap]
+        if missing_f:
+            raise RuntimeError(f"monthly 缺复权因子（{missing_f}），兜底东财")
         out = []
         for r in sorted(rows, key=lambda x: x["trade_date"]):
             c = float(r["close"])

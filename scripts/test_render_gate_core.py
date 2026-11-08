@@ -767,6 +767,13 @@ def test_negative_weights_rejected():
     expect_valueerror(f, "负 layer_share 应拒", kw="layer_share 含负值")
 
 
+def test_timing_weights_must_be_nonnegative_and_finite():
+    for weights in ({"筹码面": 120, "技术面": -20},
+                    {"筹码面": float("nan"), "技术面": 100}):
+        for fill in (minimal_fill(timing_weights=weights), v2_fill(timing_weights=weights)):
+            expect_valueerror(fill, "非法时机权重应拒", kw="时机权重必须为非负有限数")
+
+
 def test_zero_crossing_pe_band_friendly_reject():
     """#5: 合理带跨 0（[-5,5]，中点为 0）→ _map_warranted 的 pe_ttm÷中点 除零——
     与 _dev_vs_hist 口径对齐视为无效带（None），render 层转友好 ValueError，不得裸崩。"""
@@ -843,7 +850,12 @@ def test_archive_copy_failure_preserves_sources_and_index(monkeypatch, tmp_path)
 
     fill, fill_path, quote_path, timing_path, out_path = _archive_case(str(tmp_path))
     monkeypatch.setattr(shutil, "copy2", lambda *_args: (_ for _ in ()).throw(OSError("mock copy")))
-    _call_archive(fill, fill_path, out_path)
+    try:
+        _call_archive(fill, fill_path, out_path)
+    except OSError as exc:
+        assert "mock copy" in str(exc)
+    else:
+        raise AssertionError("归档复制失败必须向调用方报错")
     assert os.path.exists(fill_path) and os.path.exists(quote_path) and os.path.exists(timing_path)
     assert not os.path.exists(os.path.join(str(tmp_path), "_archive", "_index.jsonl"))
 
@@ -858,7 +870,12 @@ def test_archive_index_failure_preserves_sources_for_retry(monkeypatch, tmp_path
         return real_replace(src, dst)
 
     monkeypatch.setattr(R.os, "replace", fail_on_index)
-    _call_archive(fill, fill_path, out_path)
+    try:
+        _call_archive(fill, fill_path, out_path)
+    except OSError as exc:
+        assert "mock index" in str(exc)
+    else:
+        raise AssertionError("索引替换失败必须向调用方报错")
     assert os.path.exists(fill_path) and os.path.exists(quote_path) and os.path.exists(timing_path)
     monkeypatch.undo()
     _call_archive(fill, fill_path, out_path)
@@ -877,7 +894,12 @@ def test_archive_partial_tmp_is_cleaned_after_copy_failure(monkeypatch, tmp_path
         raise OSError("mock write")
 
     monkeypatch.setattr(shutil, "copy2", fail_after_partial_write)
-    _call_archive(fill, fill_path, out_path)
+    try:
+        _call_archive(fill, fill_path, out_path)
+    except OSError as exc:
+        assert "mock write" in str(exc)
+    else:
+        raise AssertionError("归档写入失败必须向调用方报错")
     assert os.path.exists(fill_path) and os.path.exists(quote_path) and os.path.exists(timing_path)
     leftovers = [name for name in os.listdir(os.path.join(str(tmp_path), "_archive")) if name.endswith(".tmp")]
     assert not leftovers, f"复制失败后临时文件未清理: {leftovers}"

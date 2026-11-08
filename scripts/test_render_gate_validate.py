@@ -1791,6 +1791,27 @@ def test_growth_three_way_consistency_and_legacy_boundaries():
     assert "3A 增速区间" not in "\n".join(warns)
 
 
+@pytest.mark.parametrize("fragment, tag", [
+    ("<p>质押比例<strong>1.72%</strong%；实控人</p>", "strong"),
+    ("<p><strong>未闭合</p>", "strong"),
+    ("<p><strong>甲<em>乙</strong></em></p>", "em"),
+])
+def test_inline_html_balance_rejects_malformed_tags(fragment, tag):
+    fill = minimal_fill(p0_html=fragment)
+    with pytest.raises(ValueError) as exc:
+        R.validate_content(fill, R.compute_valuation(fill))
+    message = str(exc.value)
+    assert "p0_html" in message and "行内 HTML" in message
+    assert tag in message
+
+
+def test_inline_html_balance_accepts_closed_nested_and_void_tags():
+    fill = minimal_fill(
+        p0_html="<p>质押比例<strong>1.72%</strong>%；"
+                "<span>正常<em>嵌套</em></span><br>后文</p>")
+    R.validate_content(fill, R.compute_valuation(fill))
+
+
 def test_final_dimensions_reuse_four_element_contract():
     from validate_html import check_final_dimensions
     fill = v2_fill(date="2026-11-01", cycle_html="<p>估值周期位置与可比时段分析。</p>")

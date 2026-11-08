@@ -26,10 +26,10 @@ from em_core import (to_ts_code, yi, pct, memo, _yoy, _ts_quiet, _ttm_cutoff,
 def _growth_sigma(vals):
     """扣非净利同比增速的波动 σ（v5.2.0 盈利波动性软锚，MSCI 增速波动口径——
     增速的标准差而非利润水平波动）。vals = 扣非序列（旧→新，可含 None）。
-    返回 (sigma_pct 或 None, 增速点数, 跳过对数)：相邻对基数 ≤0（亏损/零）该增速
+    返回 (sigma_pct 或 None, 增速点数, 跳过对数)：相邻对缺值或基数 ≤0（亏损/零）该增速
     无定义 → 跳过；有效增速点 <3 → sigma=None（输出层降级标注，禁编造）。
     本函数是 scoring.growth_sigma 的数据层同口径副本（取数块不 import 渲染层）——
-    归一路径有意不同（本侧严格 float 遇脏值即弃；渲染层 _num 容忍字符串/千分位），
+    归一路径有意不同（本侧严格 float，脏值记为空位；渲染层 _num 容忍字符串/千分位），
     数值/None/亏损基数路径两副本等价且由 test_em_fetch 的 parity 用例钉住，
     其余改动须两处同步。
     debt: 近零正基数（如 0.01 亿）不跳过，单年万级增速可引爆 σ——MSCI 原口径
@@ -40,9 +40,9 @@ def _growth_sigma(vals):
             f = float(v) if v is not None else None
         except (TypeError, ValueError):
             f = None
-        if f is not None:
-            xs.append(f)
-    gs = [(v / p - 1) * 100 for p, v in zip(xs, xs[1:]) if p > 0]
+        xs.append(f)
+    gs = [(v / p - 1) * 100 for p, v in zip(xs, xs[1:])
+          if p is not None and v is not None and p > 0]
     dropped = max(len(xs) - 1, 0) - len(gs)
     if len(gs) < 3:
         return None, len(gs), dropped
@@ -196,8 +196,8 @@ def _ts_annual_rows(code: str, n_years: int = 5, secucode: str = None) -> list:
                     _ts_stmt(code, "cashflow", annual=True))
     if not inc:
         raise RuntimeError("tushare income 无年报数据")
-    ind_map = {r["end_date"]: r for r in ind}
-    cf_map = {r["end_date"]: r for r in cf}
+    ind_map = _merge_by_period(ind)
+    cf_map = _merge_by_period(cf)
     em_map = _ts_annual_em_map(secucode, n_years)
     rows = [_compose_annual_row(r, ind_map.get(r["end_date"]) or {},
                                 cf_map.get(r["end_date"]) or {}, em_map.get(r["end_date"][:4]) or {})

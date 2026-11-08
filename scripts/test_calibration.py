@@ -205,6 +205,25 @@ def test_hk_nominal_close_join(monkeypatch):
     assert sum("fqt=1" in url for url in calls) == 1
 
 
+def test_daily_adj_rows_reject_missing_adj_factor():
+    real = sc._ts
+    def fake_ts(api_name, _params):
+        if api_name == "daily":
+            return [{"trade_date": "20260102", "close": 100},
+                    {"trade_date": "20260105", "close": 110}]
+        return [{"trade_date": "20260102", "adj_factor": 2}]
+    sc._ts = fake_ts
+    try:
+        try:
+            sc._daily_adj_rows("600000", "20260101", "20260131", False)
+        except RuntimeError as exc:
+            assert "复权因子" in str(exc)
+        else:
+            raise AssertionError("缺退出日复权因子时必须停止，不得按 1.0 计算")
+    finally:
+        sc._ts = real
+
+
 def test_fetch_return_previous_month_cross_year(monkeypatch):
     seen = {}
     rows = [{"trade_date": "20251231", "close": 100.0, "adj_close": 100.0},

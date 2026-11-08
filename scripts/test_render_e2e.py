@@ -193,6 +193,50 @@ def test_archive_same_report_rerender_is_idempotent():
     assert row["html"] == "out.html" and row["price"] == "11", "索引应保留最新一次渲染内容"
 
 
+def test_archive_replace_failure_restores_previous_files():
+    with tempfile.TemporaryDirectory() as d:
+        fill = minimal_fill()
+        fill_path = write_fill(fill, d)
+        quote_path = write_fill({"price": 10}, d, name="_em_600000_quote.json")
+        timing_path = write_fill({"date": fill["date"]}, d, name="_timing_600000_test.json")
+        fill["quote"] = {"source_file": quote_path}
+        fill["timing_facts"] = {"source_file": timing_path}
+        fill_path = write_fill(fill, d)
+        out_path = os.path.join(d, "out.html")
+        with open(out_path, "w", encoding="utf-8") as handle:
+            handle.write("report")
+        arch = os.path.join(d, "_archive")
+        os.makedirs(arch)
+        archived = [
+            os.path.join(arch, "fill_测试股份_600000_2026-08-27.json"),
+            os.path.join(arch, "em_600000_quote_2026-08-27.json"),
+            os.path.join(arch, "timing_600000_2026-08-27.json"),
+            os.path.join(arch, "_index.jsonl"),
+        ]
+        for path in archived:
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write("old-" + os.path.basename(path))
+        real_replace = R.os.replace
+        def fail_quote_replace(src, dst):
+            if dst == archived[1]:
+                raise OSError("模拟 quote 替换失败")
+            return real_replace(src, dst)
+        R.os.replace = fail_quote_replace
+        try:
+            try:
+                R._archive_artifacts(fill, fill_path, out_path, fill["date"], 7, 6, 5,
+                                     "10-12", "", False)
+            except OSError as exc:
+                assert "模拟 quote" in str(exc)
+            else:
+                raise AssertionError("归档替换失败必须让调用方失败")
+        finally:
+            R.os.replace = real_replace
+        for path in archived:
+            assert open(path, encoding="utf-8").read() == "old-" + os.path.basename(path)
+        assert os.path.exists(fill_path) and os.path.exists(quote_path) and os.path.exists(timing_path)
+
+
 def test_archive_index_preserves_legacy_rows():
     with tempfile.TemporaryDirectory() as d:
         arch = os.path.join(d, "_archive")

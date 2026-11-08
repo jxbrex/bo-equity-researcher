@@ -674,15 +674,16 @@ def _sec_e6(secucode: str, is_hk: bool) -> list:
         items_all = (typed.get("2") or typed.get("1") or [])
         if items_all:
             latest_date = items_all[0].get("REPORT_DATE")
-            items = [r for r in items_all if r.get("REPORT_DATE") == latest_date][:8]
+            items_latest = [r for r in items_all if r.get("REPORT_DATE") == latest_date]
+            items = items_latest[:8]
             latest = (items_all[0].get("REPORT_NAME") or "")
             # 毛利占比分母（v4.8 业务构成图用；分部净利无公开数据，口径=毛利）：合计行口径
             # 优先（fetch_mainop 剔除合计行时带出 _TOTAL_GP——层级 payload 下父级小计+子级
             # 明细并存，sum(明细毛利) 会重复计数，工商银行型各行占比合计可达 366%，审计 #3）；
-            # 无合计行（东财兜底等）退回各分部毛利额合计
+            # 无合计行（东财兜底等）退回完整最新期清单的毛利额合计，展示截断不改变分母
             gp_meta = getattr(mo, "_TOTAL_GP", None)
             gp_total = gp_meta if gp_meta is not None else (
-                sum(float(r["GROSS_PROFIT"]) for r in items if r.get("GROSS_PROFIT")) or None)
+                sum(float(r["GROSS_PROFIT"]) for r in items_latest if r.get("GROSS_PROFIT")) or None)
             out.append(f"## E6 主营构成（{latest}，按{'产品' if typed.get('2') else '行业/地区'}）")
             for r in items:
                 ratio = r.get("MBI_RATIO")

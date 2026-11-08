@@ -132,8 +132,12 @@ def _daily_adj_rows(code: str, start: str, end: str, is_hk: bool) -> list:
     adj = {r["trade_date"]: float(r["adj_factor"]) for r in
            _ts("adj_factor", {"ts_code": ts, "start_date": start, "end_date": end})
            if r.get("adj_factor") is not None}
+    missing = [r["trade_date"] for r in rows
+               if r.get("close") is not None and r["trade_date"] not in adj]
+    if missing:
+        raise RuntimeError(f"日线缺复权因子，拒绝按 1.0 混算: {missing}")
     return [{"trade_date": r["trade_date"], "close": float(r["close"]),
-             "adj_close": float(r["close"]) * adj.get(r["trade_date"], 1.0)}
+             "adj_close": float(r["close"]) * adj[r["trade_date"]]}
             for r in rows if r.get("close") is not None]
 
 

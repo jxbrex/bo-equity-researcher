@@ -9,6 +9,7 @@ thesis 价格标注与信息量、L4 形态、中文占位符、内部代号泄�
 契约：raise = 硬拒渲染；warns.append = 软告警。
 """
 import re
+from html.parser import HTMLParser
 from scoring import (
     DIMS,
     _num,
@@ -50,6 +51,52 @@ def _split_dim_blocks(frag: str) -> list:
 def _dim_body_text(blk: str) -> str:
     """dim-block 正文体纯文本（剥标题行与评分末拍）——B5 数字义务判定的取数口径。"""
     return _plain_text(_SCORE_BEAT_RE.sub("", _DIM_HEADER_RE.sub("", blk or "")))
+
+
+class _InlineHTMLBalanceParser(HTMLParser):
+    _TAGS = frozenset({"a", "abbr", "b", "code", "em", "i", "mark", "s", "small",
+                       "span", "strong", "sub", "sup", "u"})
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.stack = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag in self._TAGS:
+            self.stack.append((tag, self.getpos()))
+
+    def handle_startendtag(self, tag, attrs):
+        if tag in self._TAGS:
+            self.stack.append((tag, self.getpos()))
+
+    def handle_endtag(self, tag):
+        if tag not in self._TAGS:
+            return
+        line, col = self.getpos()
+        if not self.stack:
+            raise ValueError(f"第 {line} 行第 {col + 1} 列 </{tag}> 没有对应的开始标签")
+        opened, (open_line, open_col) = self.stack[-1]
+        if opened != tag:
+            raise ValueError(f"第 {line} 行第 {col + 1} 列 </{tag}> 与第 {open_line} 行"
+                             f"第 {open_col + 1} 列 <{opened}> 的闭合顺序不符")
+        self.stack.pop()
+
+
+def _check_inline_html_balance(fill: dict) -> None:
+    """手写片段的行内样式/链接标签必须正确配对，防止样式外泄到后续章节。"""
+    for name, frag in fill.items():
+        if not name.endswith("_html") or not isinstance(frag, str) or not frag:
+            continue
+        parser = _InlineHTMLBalanceParser()
+        try:
+            parser.feed(frag)
+            parser.close()
+        except ValueError as exc:
+            raise ValueError(f"{name} 行内 HTML 标签配对错误：{exc}") from exc
+        if parser.stack:
+            tag, (line, col) = parser.stack[-1]
+            raise ValueError(f"{name} 行内 HTML 标签配对错误：第 {line} 行第 {col + 1} 列 "
+                             f"<{tag}> 未闭合")
 
 
 def _check_red_flag_breaker(fill: dict) -> None:

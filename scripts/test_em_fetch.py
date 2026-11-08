@@ -284,6 +284,40 @@ def test_07_disk_cache():
 
 
 
+def test_mainop_keeps_distinct_names_with_same_amounts(monkeypatch):
+    import em_owner
+    rows = [
+        {"end_date": "20251231", "bz_item": "甲", "bz_sales": 100, "bz_cost": 80, "bz_profit": 20},
+        {"end_date": "20251231", "bz_item": "乙", "bz_sales": 100, "bz_cost": 80, "bz_profit": 20},
+        {"end_date": "20251231", "bz_item": "产品", "bz_sales": 200, "bz_cost": 160, "bz_profit": 40},
+    ]
+    monkeypatch.setattr(em_core, "ts_call", lambda api, params=None, fields="": rows
+                        if api == "fina_mainbz" else [])
+    result = em_owner.fetch_mainop("600000.SH")
+    assert [r["ITEM_NAME"] for r in result] == ["甲", "乙"]
+    em_rows = [{"ITEM_NAME": name, "MAIN_BUSINESS_INCOME": 100, "GROSS_RPOFIT_RATIO": 0.2}
+               for name in ("甲", "乙")]
+    assert len(em_owner._mainop_norm_em(em_rows)) == 2
+
+
+def test_e6_gp_denominator_includes_undisplayed_rows(monkeypatch):
+    import re
+    rows = [{"REPORT_DATE": "2025-12-31", "REPORT_NAME": "2025年报", "MAINOP_TYPE": "2",
+             "ITEM_NAME": f"业务{i}", "MAIN_BUSINESS_INCOME": 100, "MBI_RATIO": 1 / 9,
+             "GROSS_RPOFIT_RATIO": 0.2, "GROSS_PROFIT": 20} for i in range(9)]
+    monkeypatch.setattr(em, "fetch_mainop", lambda *_args: rows)
+    text = "\n".join(em._sec_e6("600000.SH", False))
+    values = [float(x) for x in re.findall(r"毛利占比([\d.]+)%", text)]
+    assert len(values) == 8 and values == [11.1] * 8
+
+
+def test_mainop_rate_limit_passthrough(monkeypatch):
+    import em_owner
+    monkeypatch.setattr(em_owner, "_em_dc", lambda *args, **kwargs: (_ for _ in ()).throw(
+        em_core.RateLimitError("HTTP 429 mock")))
+    _expect_rate_limit(lambda: em_owner._em_mainop("600000.SH"))
+
+
 def test_08_mainbz_gross_profit():
     """8. E6 毛利额回填 + 维度合计行剔除（无网络，mock ts_call）"""
     # v4.8：fetch_mainop 各分部带 GROSS_PROFIT——tushare 取 bz_profit，缺则 收入−成本。
@@ -806,6 +840,43 @@ def test_18b_period_track_dup_merge():
     finally:
         em_core.ts_call = _orig
     print("18b. 同报告期重复行字段级合并 通过")
+
+
+def test_annual_rows_merge_duplicate_period_fields(monkeypatch):
+    import em_finance
+    inc = [{"end_date": "20251231", "ann_date": "20260301", "report_type": "1",
+            "total_revenue": 1000, "n_income_attr_p": 100, "n_income": 110}]
+    ind = [{"end_date": "20251231", "ann_date": "20260301", "profit_dedt": 90},
+           {"end_date": "20251231", "ann_date": "20260201", "profit_dedt": None}]
+    cf = [{"end_date": "20251231", "ann_date": "20260301", "n_cashflow_act": 80},
+          {"end_date": "20251231", "ann_date": "20260201", "n_cashflow_act": None}]
+    monkeypatch.setattr(em_core, "ts_call", lambda api, params=None, fields="": {
+        "income": inc, "fina_indicator": ind, "cashflow": cf}.get(api, []))
+    monkeypatch.setattr(em_finance, "_em_f10", lambda *args, **kwargs: [])
+    rows = em_finance._ts_annual_rows("600000", secucode="600000.SH")
+    assert rows[0]["KCFJCXSYJLR"] == 90
+    assert rows[0]["NETCASH_OPERATE_PK"] == 80
+
+
+def test_growth_sigma_does_not_bridge_missing_years():
+    from scoring import growth_sigma
+    from em_finance import _growth_sigma
+    for fn in (growth_sigma, _growth_sigma):
+        assert fn([100, 110, None, 130, 140]) == (None, 2, 2)
+        assert fn([None, 100, 110, 121, 133])[1:] == (3, 1)
+
+
+def test_monthly_missing_adj_factor_falls_back_to_em(monkeypatch):
+    import em_market
+    monthly = [{"trade_date": "20260131", "close": 100},
+               {"trade_date": "20260228", "close": 120}]
+    monkeypatch.setattr(em_core, "ts_call", lambda api, params=None, fields="": {
+        "monthly": monthly,
+        "adj_factor": [{"trade_date": "20260131", "adj_factor": 2}],
+    }.get(api, []))
+    fallback = [{"date": "2026-02-28", "close": 120.0}]
+    monkeypatch.setattr(em_market, "_em_kline_monthly", lambda *args: fallback)
+    assert em_market.fetch_kline_monthly("1.600000", 1, False) is fallback
 
 
 def test_19_growth_sigma_parity():

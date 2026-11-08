@@ -66,7 +66,7 @@ from validate import validate_content
 
 # 渲染器版本：嵌入输出 HTML 尾部注释，事后可 grep 验证报告确由本脚本渲染
 # （防"render 报错后手写全文 HTML 绕行"，巨石 2026-08-23 实证）
-RENDERER_VERSION = "v0.14.2"
+RENDERER_VERSION = "v0.15.0"
 
 # Windows 文件名非法字符：\ / : * ? " < > | 及 ASCII 控制字符（\x00-\x1f）
 _WIN_ILLEGAL = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
@@ -857,6 +857,7 @@ def _archive_artifacts(fill: dict, fill_path: str, out_path: str, date: str,
                        red_flag: str, backtest: bool, sc: dict = None) -> None:
     """渲染成功后归档：先复制到临时文件，归档与索引提交成功后才删除源文件。"""
     pending, tmp_paths = [], []
+    backups, applied = [], []
     try:
         arch_dir = os.path.join(os.path.dirname(os.path.abspath(out_path)), "_archive")
         os.makedirs(arch_dir, exist_ok=True)
@@ -915,11 +916,23 @@ def _archive_artifacts(fill: dict, fill_path: str, out_path: str, date: str,
             f.write("\n".join(lines) + "\n")
         destinations = [dst for _src, dst in pending] + [idx_path]
         for tmp, dst in zip(tmp_paths, destinations):
+            backup = f"{dst}.{os.getpid()}.rollback"
+            had_old = os.path.exists(dst)
+            if had_old:
+                shutil.copy2(dst, backup)
+            backups.append((dst, backup, had_old))
             os.replace(tmp, dst)
+            applied.append((dst, backup, had_old))
         moved = [os.path.basename(dst) for _src, dst in pending]
         print(f"归档 → {arch_dir}" + (f"（{'、'.join(moved)} + _index.jsonl）" if moved else "（_index.jsonl）"))
     except OSError as e:
-        print(f"⚠️ 归档未完成（报告本身已完成；源文件保留，可重跑恢复）: {e}", file=sys.stderr)
+        for dst, backup, had_old in reversed(applied):
+            if had_old:
+                os.replace(backup, dst)
+            elif os.path.exists(dst):
+                os.remove(dst)
+        print(f"⚠️ 归档替换失败，已回滚已替换文件；源文件保留: {e}", file=sys.stderr)
+        raise
     else:
         for src, _dst in pending:
             try:
@@ -927,10 +940,10 @@ def _archive_artifacts(fill: dict, fill_path: str, out_path: str, date: str,
             except OSError as e:
                 print(f"⚠️ 归档已完成，但源文件清理失败: {src}: {e}", file=sys.stderr)
     finally:
-        for tmp in tmp_paths:
-            if os.path.exists(tmp):
+        for path in tmp_paths + [backup for _dst, backup, _had_old in backups]:
+            if os.path.exists(path):
                 try:
-                    os.remove(tmp)
+                    os.remove(path)
                 except OSError:
                     pass
 

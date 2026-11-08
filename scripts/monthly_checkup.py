@@ -150,7 +150,7 @@ def main():
     if "--cal" in flags:
         print("\n■ 评分校准复跑（score_calibration.py）")
         cal = os.path.join(os.path.dirname(os.path.abspath(__file__)), "score_calibration.py")
-        subprocess.run([sys.executable, cal, directory], check=False)
+        subprocess.run([sys.executable, cal, directory], check=True)
     else:
         print("\n提示：加 --cal 复跑评分校准（每月一次积累样本）；加 --disclosure 查到期标的披露计划")
 

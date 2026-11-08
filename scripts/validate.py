@@ -37,6 +37,7 @@ from validate_valuation import (
     _check_hero_band_claims,
     _check_dcf)
 from validate_html import (
+    _check_inline_html_balance,
     _check_red_flag_breaker,
     _check_content_floor,
     _check_thesis_price_tags,
@@ -85,6 +86,7 @@ def _validate_content_impl(fill: dict, calc: dict, warns: list, sc: dict = None)
     _check_price_date(fill)
     _check_quote_consistency(fill, warns)
     _check_score_ranges(fill)
+    _check_inline_html_balance(fill)
     _check_timing_facts(fill, warns)
 
     _check_valuation_inputs(fill)

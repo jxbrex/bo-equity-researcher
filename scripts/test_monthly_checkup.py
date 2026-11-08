@@ -102,7 +102,28 @@ def test_scan_reports_walks_subdirs():
     assert rows["600309"]["next_review"] == "2026-09-01"
 
 
+def test_calibration_failure_propagates():
+    real_run, argv = mc.subprocess.run, sys.argv
+    def failed_run(*args, **kwargs):
+        if kwargs.get("check"):
+            raise mc.subprocess.CalledProcessError(1, args[0])
+        return None
+    mc.subprocess.run = failed_run
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            sys.argv = ["monthly_checkup.py", d, "--cal"]
+            try:
+                mc.main()
+            except mc.subprocess.CalledProcessError as exc:
+                assert exc.returncode == 1
+            else:
+                raise AssertionError("校准子进程失败必须让月度任务失败")
+    finally:
+        mc.subprocess.run, sys.argv = real_run, argv
+
+
 if __name__ == "__main__":
+    test_calibration_failure_propagates()
     test_scan_reports_merged_caliber()
     test_scan_reports_anchor_beyond_8kb_tail()
     test_scan_reports_walks_subdirs()

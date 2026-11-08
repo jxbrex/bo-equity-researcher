@@ -711,6 +711,24 @@ def test_unknown_growth_driver_is_missing():
     assert result["final"] is None
 
 
+def test_inverted_growth_range_is_missing():
+    spec = {"growth_lo": 30, "growth_hi": 10, "driver_status": "已验证", "custom": _custom()}
+    result = qr.evaluate_dimension("3A", spec, CTX)
+    assert result["status"] == "missing"
+    assert result["final"] is None
+
+
+@pytest.mark.parametrize("profile", ["generic", "financial_bank"])
+def test_invalid_concentration_is_missing(profile):
+    spec = {"cost_quartile": 1, "price_transmission": True, "bargaining_status": "正常",
+            "cost_strength": "strong", "pricing_strength": "strong",
+            "customer_concentration": "无法解析", "supplier_concentration": 0.1,
+            "custom": _custom()}
+    result = qr.evaluate_dimension("1B", spec, dict(CTX, industry_profile=profile))
+    assert result["status"] == "missing"
+    assert "集中度" in result["missing_reason"]
+
+
 def test_negative_growth_is_D_even_when_driver_unverified():
     spec = {"growth_lo": -5, "growth_hi": -1, "driver_status": "未验证", "custom": _custom()}
     result = qr.evaluate_dimension("3A", spec, CTX)

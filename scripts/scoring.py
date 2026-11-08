@@ -148,17 +148,18 @@ def growth_sigma(vals):
     增速的标准差而非利润水平波动，稳定增长公司不被误伤）。
     vals = 扣非序列（旧→新，可含 None/脏值，内部经 _num 归一）。
     返回 (sigma_pct 或 None, 增速点数, 跳过对数)：
-    相邻对基数 ≤0（亏损/零）时该增速无定义 → 跳过并计入「跳过对数」；
+    相邻对缺值（含脏值）或基数 ≤0（亏损/零）时该增速无定义 → 跳过并计入「跳过对数」；
     有效增速点 <3 → sigma=None（调用方按「数据不足/不适用」降级标注，禁编造）。
     σ 用样本标准差（statistics.stdev，n-1：5 年 4 点是抽样而非总体）。
     数据层 em_finance._growth_sigma 是同口径副本——归一路径有意不同
-    （数据层严格 float 遇脏值即弃；本侧 _num 容忍字符串/逗号/千分位），
+    （数据层严格 float，脏值记为空位；本侧 _num 容忍字符串/逗号/千分位），
     数值/None/亏损基数路径两副本等价且由 test_em_fetch 的 parity 用例钉住，
     其余改动须两处同步。
     debt: 近零正基数（如 0.01 亿）不跳过，单年万级增速可引爆 σ——MSCI 原口径
     亦不处理；若判词被此类异常带偏的实例增多，再加基数下限或 winsorize ±300%。"""
-    xs = [v for v in (_num(v) for v in (vals or [])) if v is not None]
-    gs = [(v / p - 1) * 100 for p, v in zip(xs, xs[1:]) if p > 0]
+    xs = [_num(v) for v in (vals or [])]
+    gs = [(v / p - 1) * 100 for p, v in zip(xs, xs[1:])
+          if p is not None and v is not None and p > 0]
     dropped = max(len(xs) - 1, 0) - len(gs)
     if len(gs) < 3:
         return None, len(gs), dropped
@@ -653,6 +654,8 @@ def _compute_scores_v2(fill):
         if not isinstance(tw_raw, dict):
             raise ValueError("timing_weights 需为对象")
         t_weights = {k: float(tw_raw.get(k, dw)) for k, _n, dw in TIMING_DIMS}
+        if any(not math.isfinite(value) or value < 0 for value in t_weights.values()):
+            raise ValueError("时机权重必须为非负有限数")
         if abs(sum(t_weights.values()) - 100.0) > 0.01:
             raise ValueError("时机层权重总和必须为 100")
         timing = (None if any(t_scores.get(k) is None for k, _n, _w in TIMING_DIMS)
@@ -792,6 +795,8 @@ def compute_scores(fill: dict):
         if not isinstance(tw_raw, dict):
             raise ValueError(f"timing_weights 需为对象（{{\"筹码面\": 权重, \"技术面\": 权重}}），实际: {type(tw_raw).__name__}")
         t_weights = {k: float(tw_raw.get(k, dw)) for k, _n, dw in TIMING_DIMS}
+        if any(not math.isfinite(value) or value < 0 for value in t_weights.values()):
+            raise ValueError("时机权重必须为非负有限数")
         if abs(sum(t_weights.values()) - 100.0) > 0.01:
             raise ValueError("时机层权重总和必须为 100")
         timing = (None if any(t_scores.get(k) is None for k, _n, _w in TIMING_DIMS)

@@ -18,6 +18,8 @@ JSON 原样回填，禁止手估、手算、凭记忆补**。各字段的直填�
 - fragment 内嵌 HTML 的属性引号：`class="..."` 需 `\"` 转义，写单引号 `class='...'` 也可以——
   渲染器入库时自动把 class 单引号归一为双引号（v4.4 起自动归一），
   不影响校验与输出；报错/告警文案里一律以双引号显示。
+- 所有 `*_html` 片段的行内样式/链接标签（如 `<strong>`、`<span>`、`<em>`、`<a>`）必须正确
+  闭合与嵌套；`</strong%`、漏写闭合标签或交叉闭合会被预检与正式渲染直接拒绝，不自动修补。
 - **【…】 只允许黄灯类别标注**（如【b 行业与政策环境】，以单个 a-d 字母开头）；
   其他用途一律用（）或「」——其余【…】会被渲染器判为未替换占位符而拒渲染。
 - 修补已写盘的 fill：**先 Read 再 Edit**（脚本/外部过程改过的文件直接 Edit 会被
@@ -26,7 +28,7 @@ JSON 原样回填，禁止手估、手算、凭记忆补**。各字段的直填�
   锚点跨转义引号极易失配；也不要从 python repr 输出反推原文，repr 会把反斜杠加倍）。
   大段返工不要逐点 Edit——用 Write 重写该字段更快更稳。
 - 渲染成功后 fill 与 E1 落盘由 render 自动归档到报告目录 `_archive/`（v4.10 起，不再是删除）——
-  修补已归档的旧 fill 请从 `_archive/` 取回原件再改。
+  修补已归档的旧 fill 请从 `_archive/` 取回原件再改。任一归档替换失败会回滚已替换文件、保留源文件并向调用方报错。
 - 写完后的自检**只有一条合法命令**：`python "<技能目录>/scripts/render_report.py" "_fill_[代码].json" --check`
   （JSON 解析 + 评分计算 + 内容地板全预检，退出码 0 才能渲染）。**禁止手写 `python -c` 内联自检**
   （Windows 控制台引号/编码坑；本环境 shell 是 Git Bash，路径一律用正斜杠，
@@ -51,7 +53,7 @@ JSON 原样回填，禁止手估、手算、凭记忆补**。各字段的直填�
 | `layer_share` | 可选；非默认层占比条件必填 | 层占比覆盖：`{"L1":85,"L3":15}`，只接受 `L1/L3` 两键且之和=100。未知键不得静默忽略；2026-11-01 起拒渲染，旧 fill 迁移告警。85:15、80:20、75:25、60:40 等非默认映射缺失即拒，70:30 默认可省略 |
 | `timing_scores` | ✓（可显式 null） | **时机层**得分对象：`{"筹码面":2.5,"技术面":6.0}`（键名只认筹码面/技术面，旧键名 2B/2C 已移除）。两维可评分时各自**中性 5 分起始 + 清单信号加减**（评分锚见 `scoring.md` 时机分一节），禁止凭感觉给分；**任一子维无可计算信号时给 null 或省略该子维，整个时机总分为 null，显示「数据不足」；不得按 0 或中性 5 分合成，也不重归一权重。整体无信号时 `timing_scores: null`；空对象与非法值仍拒渲染。缺分不改变研究仓位；小表缺哪个子维，该行与合计行都写「数据不足」，新报写数值分拒渲染，旧 fill 仅兼容告警** |
 | `timing_facts` | 可选；有事实时建议必填 | **技术/筹码/资金三组事实卡**（不是指标大表）：`{"source_file":"_timing_600989_2026-10-26.json","technical":{...},"consensus_levels":{...},"chips":{...},"capital":{...}}`。`technical` 照抄 quote 落盘 `timing.technical`：`rsi14/atr14_pct/macd{dif,dea,hist}/volume_ratio_20/ma60_slope_20d_pct/ma120_slope_20d_pct/position_52w_pct`，另有 `as_of/sample_days`；MACD 柱=2×(DIF−DEA)，20 日量比=当日量÷此前 20 日均量，斜率=当前均线相对 20 个交易日前。`consensus_levels` 照抄同源月线近三年 `close_high/close_low/intraday_high/intraday_low` 与期间/月数，**收盘与盘中是两种口径，历史价位不是券商目标价**。`chips` 支持 `average_cost/profit_ratio`，`capital` 支持 `main_net_inflow/southbound/margin`；每项按市场可得性填 `{"value":数值,"unit":"元/%/亿元等","date":"YYYY-MM-DD","source":"真实来源","query":"原始查询"}`，**未获取为 null，不得伪造记录或用中性值代替**；两融以融资余额为 `value`，融券余额及单位另写 `note`。独立证据文件与 fill 的 code/date 相同，筹码/资金逐项照抄并保留原查询；`--out` 对未自动覆盖项生成 null 占位并允许后续 Write 补证；同日重取刷新自动技术/月线/资金项，旧人工记录只补当前仍为 null 的项，筹码与北向/南向等未自动覆盖项保留。技术字段与 quote 对账、筹码/资金与 source_file 对账；声明文件读不到或 code/date 不符拒渲染，改数/改来源/已有证据改空告警。`technical`、`consensus_levels`、`technical.macd` 及非空筹码/资金单项记录必须为对象或 null，非法容器类型直接拒渲染。缺时机总分仍可展示本卡。渲染分技术/筹码/资金三张 `<article>`：RSI/52 周位置/三年区间用尺度图，单日资金只给数值与日期，不画伪趋势；缺项按组汇总，A 股对应字段显示北向/陆股通，原查询与本地路径不进正文；逐项状态判词由脚本按现有数值生成，不新增字段、不参与评分；时机证据渲染成功后自动归档 |
-| `timing_weights` | 可选 | 时机层权重覆盖，默认 `{"筹码面":67,"技术面":33}`，和必须=100 |
+| `timing_weights` | 可选 | 时机层权重覆盖，默认 `{"筹码面":67,"技术面":33}`；每项必须为非负有限数，且总和=100 |
 | `yellow_deductions` | v1 必填；v2 禁填 | 旧版黄灯扣分数组，仅供 v1 重渲。v2 非空即拒渲染，非致命风险改填 `risk_items`，不在第 6 章单独扣分；质量类命中仍只在第 4/5 章按对应维度规则反映，是否扣分以规则为准，汇总见第 7 章 |
 | `red_deductions` | v1 可选；v2 禁填 | 旧版 1D 红旗扣分数组，仅供 v1 重渲。v2 非空即拒渲染，改填 `score_inputs["1D"]["red_flags"]`。通用盈利质量多项命中时 conclusion 首卡须含「利润真实性存疑」；金融/地产/生存清单多项财务风险改为「财务风险多项命中」（旧字面兼容）。已证不重大的免扣项保留展示，但不计入结论级多项警示 |
 | `risk_items` | v2 可选，缺省为 [] | **统一风险登记**：`[{"name":"应收恶化","status":"hit","evidence":"周转天数连续上升","impact":"quality","home":"1D","trigger":"周转天数继续上升","source":"公司公告","rule_id":"1D.RED.RECEIVABLES"}, ...]`。`status=hit/watch/unknown`，`impact=quality/valuation/timing/monitor`，`home=九维/valuation/timing/dashboard`。质量类 hit 的 rule_id 必须与本维实际得分链一致、对应当前真实负面条件且不得重复；UNKNOWN、NOT_APPLICABLE、信息性步骤和正向 custom 不得冒充 hit，2026-11-01 起新增活性检查拒渲染，旧 fill 迁移告警。`impact=monitor,status=hit` 必须另填 `unscored_reason` 说明为何不计分并随证据展示。watch/unknown 不计分、不计复核命中；未核实不得写通过。第 6 章按状态生成主次分层卡，只展示名称、状态、证据、来源和对应位置；`impact` 仅作内部校验，`trigger` 仅供第 14 章跟踪表核对，两者都不在第 6 章重复展示。空数组只表示未登记，不表示风险排除。**第 6 章 `hit` 只表示当前风险证据已存在；第 14 章同名阈值可表示进一步升级复核线，不要求当前已触及。两种口径并存时必须在 `evidence` 或 `dash_html` 中明示，不得只在交付对话中解释** |
@@ -155,7 +157,7 @@ JSON 原样回填，禁止手估、手算、凭记忆补**。各字段的直填�
 | `cost_quartile` | int `1/2/3/4`，或 `第一/第二/第三/第四（四分位）` | 必填；数值 1 或“第一”均算成本强 |
 | `price_transmission` | bool | 必填 |
 | `bargaining_status` | string；`实质丧失` 为特殊判定 | 必填 |
-| `customer_concentration` | ratio 或 `%` 字符串 | 可选；与供应商项任一缺失封顶 7.9 |
+| `customer_concentration` | ratio 或 `%` 字符串 | 可选；与供应商项任一缺失封顶 7.9；非空但无法解析拒渲染 |
 | `supplier_concentration` | ratio 或 `%` 字符串 | 同上 |
 | `upstream_self_supply` | ratio 或 `%` 字符串 | 可选；>0.5 为成本强证据 |
 
@@ -166,7 +168,7 @@ JSON 原样回填，禁止手估、手算、凭记忆补**。各字段的直填�
 | `cost_strength` | `strong/neutral/weak` | 必填 |
 | `pricing_strength` | `strong/neutral/weak` | 必填 |
 | `bargaining_status` | string；`实质丧失` 为特殊判定 | 必填 |
-| `customer_concentration` / `supplier_concentration` | ratio 或 `%` 字符串 | 任一缺失封顶 7.9 |
+| `customer_concentration` / `supplier_concentration` | ratio 或 `%` 字符串 | 任一缺失封顶 7.9；非空但无法解析拒渲染 |
 
 #### 1C 商业模式与护城河
 
@@ -245,7 +247,7 @@ JSON 原样回填，禁止手估、手算、凭记忆补**。各字段的直填�
 | 字段 | 类型 / 合法值 | 必填与缺失后果 |
 |---|---|---|
 | `growth_lo` | number，% | 次年单年增速可由统一利润假设计算时禁填；其余情形必填，是唯一定档增速输入 |
-| `growth_hi` | number 或含数字字符串 | 可派生时禁填；其余情形必填并参与解析校验，但不参与定档 |
+| `growth_hi` | number 或含数字字符串 | 可派生时禁填；其余情形必填，且不得小于 `growth_lo`；只参与区间合法性校验，不直接参与定档 |
 | `driver_status` | `已验证/部分兑现/未验证` | 必填 |
 
 #### 3B 项目确定性

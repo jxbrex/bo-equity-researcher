@@ -732,6 +732,7 @@ def test_final_html_source_gate_evasion():
     """v5.7.3 复核修复②③+追加：门禁绕过八连——空来源壳 / class 单引号 / CLASS 大写 /
     class 无引号（HTML5 合法写法）/ 嵌套 span 尾巴藏黑话 / HTML 实体（em&#95;fetch）/
     大小写（EM_FETCH）/ .source span 未闭合（fail-closed，不静默扫余量）——渲染一律拒；
+    未闭合由行内 HTML 配对门禁提前拒绝，其余仍由来源注门禁拒绝。
     Shareholders 类正常词（holders 词边界）与 HTML 注释内黑话（对读者不可见）不误伤。"""
     base = '<p>关键驱动分析。</p>'
     for tag, frag in (
@@ -747,7 +748,10 @@ def test_final_html_source_gate_evasion():
         try:
             render_fill(minimal_fill(p0_html=base + frag), name="_fill_evasion.json")
         except ValueError as e:
-            assert "来源注" in str(e) or "数据来源：" in str(e), f"{tag} 报错文案: {e}"
+            if tag == "未闭合":
+                assert "行内 HTML" in str(e) and "<span>" in str(e), f"{tag} 报错文案: {e}"
+            else:
+                assert "来源注" in str(e) or "数据来源：" in str(e), f"{tag} 报错文案: {e}"
         else:
             raise AssertionError(f"{tag} 绕过未被拒：{frag}")
     ok = minimal_fill(p0_html=base + '<span class="source">Shareholders 户数披露数据</span>')

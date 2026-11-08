@@ -359,6 +359,9 @@ def _eval_industry_1b(spec, context):
                              or spec.get("supplier_concentration") is None)
     customer = _ratio(spec.get("customer_concentration"))
     supplier = _ratio(spec.get("supplier_concentration"))
+    if ((spec.get("customer_concentration") is not None and customer is None)
+            or (spec.get("supplier_concentration") is not None and supplier is None)):
+        return _missing("1B", "客户或供应商集中度格式无法解析")
     concentrated = any(value is not None and value > 0.5 for value in (customer, supplier))
     if concentrated and spec["bargaining_status"] == "实质丧失":
         band = "D"
@@ -396,6 +399,9 @@ def _eval_1b(spec, context):
                              or spec.get("supplier_concentration") is None)
     customer = _ratio(spec.get("customer_concentration"))
     supplier = _ratio(spec.get("supplier_concentration"))
+    if ((spec.get("customer_concentration") is not None and customer is None)
+            or (spec.get("supplier_concentration") is not None and supplier is None)):
+        return _missing("1B", "客户或供应商集中度格式无法解析")
     concentrated = any(value is not None and value > 0.5 for value in (customer, supplier))
     cost_quartile = spec["cost_quartile"]
     if isinstance(cost_quartile, str):
@@ -898,6 +904,8 @@ def _eval_3a(spec, context):
     lo, hi, driver = _num(spec["growth_lo"]), _num_last(spec["growth_hi"]), spec["driver_status"]
     if lo is None or hi is None:
         return _missing("3A", "增速区间格式无法解析")
+    if lo > hi:
+        return _missing("3A", "增速区间下限不能大于上限")
     if driver not in ("已验证", "部分兑现", "未验证"):
         return _missing("3A", "未知驱动兑现状态")
     if lo > threshold and driver == "已验证":

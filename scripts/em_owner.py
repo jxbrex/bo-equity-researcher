@@ -342,9 +342,16 @@ class _MainopRows(list):
     合计行口径；无合计行（含东财兜底路径）时属性不存在，消费方退回 sum(GROSS_PROFIT)。"""
 
 
+def _mainop_name(value) -> str:
+    name = str(value or "").strip()
+    return name[:-2] if name.endswith("产品") else name
+
+
 def _em_mainop(secucode: str) -> list:
     try:
         return _em_dc("RPT_F10_FN_MAINOP", f'(SECUCODE="{secucode}")', 20, "REPORT_DATE")
+    except RateLimitError:
+        raise
     except Exception:
         return []
 
@@ -352,11 +359,12 @@ def _em_mainop(secucode: str) -> list:
 def _mainop_norm_em(rows: list) -> list:
     """东财 E6 原始行补 GROSS_PROFIT（毛利额，元）：优先原始字段 MAIN_BUSINESS_RPOFIT，
     缺失用 收入×毛利率 折算（GROSS_RPOFIT_RATIO 为小数口径，见 data-sources.md E6 节）。
-    同收入同毛利率的重复条目（同源改名残留）一并去重，留先发行。"""
+    仅对名称归一后相同且收入、毛利率相同的条目去重，不同名称不得凭金额猜测重复。"""
     seen = set()
     deduped = []
     for r in rows:
-        sig = (r.get("MAIN_BUSINESS_INCOME"), r.get("GROSS_RPOFIT_RATIO"))
+        sig = (_mainop_name(r.get("ITEM_NAME")),
+               r.get("MAIN_BUSINESS_INCOME"), r.get("GROSS_RPOFIT_RATIO"))
         if sig in seen:
             continue
         seen.add(sig)
@@ -401,11 +409,11 @@ def fetch_mainop(secucode: str) -> list:
             raise RuntimeError("fina_mainbz 空返回")
         latest_ed = max(r.get("end_date") or "" for r in rows)
         items = [r for r in rows if r.get("end_date") == latest_ed]
-        # 源头重复条目去重（2026-09-02 宝丰实证：fina_mainbz 会同时返回「烯烃产品」与「烯烃」两行，
-        # 收入/成本完全一致——同源改名跟踪残留。签名=（收入,成本）全等即同一条业务线，留先发行）
+        # 源头重复条目去重（2026-09-02 宝丰实证：fina_mainbz 会同时返回「烯烃产品」与「烯烃」两行；
+        # 名称先去已知「产品」后缀，再要求收入/成本一致。不同名称不得仅凭金额相同删除）
         seen_sig, deduped = set(), []
         for r in items:
-            sig = (r.get("bz_sales"), r.get("bz_cost"))
+            sig = (_mainop_name(r.get("bz_item")), r.get("bz_sales"), r.get("bz_cost"))
             if sig in seen_sig:
                 continue
             seen_sig.add(sig)

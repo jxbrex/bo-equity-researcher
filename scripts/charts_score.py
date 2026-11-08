@@ -129,6 +129,8 @@ def _f_evidence_table(spec):
     evidence = spec.get("f_item_evidence") or {}
     facts = evidence.get("items") or {}
     items = spec.get("f_items") or {}
+    manual = spec.get("manual_evidence") or {}
+    periods = evidence.get("periods") or {}
     if not facts or not items:
         return ""
     rows = []
@@ -136,9 +138,19 @@ def _f_evidence_table(spec):
         value = items.get(name)
         status = "通过" if value is True else "未通过" if value is False else "未核实"
         css = "pass" if value is True else "fail" if value is False else "unknown"
+        fact = str(facts.get(name) or "").strip()
+        entry = manual.get(f"f_item_evidence.items.{name}") if isinstance(manual, dict) else None
+        if isinstance(entry, dict):
+            source = str(entry.get("source") or "").strip()
+            note = str(entry.get("note") or "").strip()
+            if source and note:
+                fact = f"{fact}（人工补证：{source}）" if fact and fact != "未获取" else f"人工补证：{note}"
+        item_period = str(periods.get(name) or "").strip()
+        if item_period:
+            fact = f"{fact}（{item_period}）" if fact else item_period
         rows.append(
             f'<tr data-rule-id="{_esc(F_ITEM_IDS[name])}"><th scope="row">{_esc(_F_LABELS[name])}</th>'
-            f'<td>{_esc(str(facts.get(name) or "未获取"))}</td>'
+            f'<td>{_esc(fact or "未获取")}</td>'
             f'<td><span class="status {css}">{status}</span></td></tr>')
     passed = sum(items.get(name) is True for name in F_ITEM_IDS)
     failed = sum(items.get(name) is False for name in F_ITEM_IDS)
@@ -147,6 +159,8 @@ def _f_evidence_table(spec):
     if unknown:
         count += f" · {unknown} 项未核实"
     period = str(evidence.get("period") or "最新年报")
+    ttm_note = ("；标注 TTM 的项为滚动四季口径（平均总资产），其余项按上述期间"
+                if periods else "；ROA 与资产周转率按期末总资产计算")
     return (
         '<section class="score-group evidence">'
         f'<div class="evidence-head"><h4>九项数据明细</h4><span class="evidence-count">{count}</span></div>'
@@ -155,7 +169,7 @@ def _f_evidence_table(spec):
         '<colgroup><col class="check"><col class="fact"><col class="result"></colgroup>'
         '<thead><tr><th scope="col">检查项</th><th scope="col">数据依据</th><th scope="col">判定</th></tr></thead>'
         f'<tbody>{"".join(rows)}</tbody></table></div>'
-        f'<p class="table-note">口径：{_esc(period)}；ROA 与资产周转率按期末总资产计算。'
+        f'<p class="table-note">口径：{_esc(period)}{ttm_note}。'
         '数据来源：公司定期报告、Tushare 与东方财富 F10。</p></section>')
 
 

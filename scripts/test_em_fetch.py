@@ -11,6 +11,7 @@ test_em_fetch.py — em_fetch.py 无网络单元测试（自包含、全 assert�
 
 运行: python test_em_fetch.py（scripts 目录下）；或 pytest 收集（v4.10.2 起各区为独立 def test_* 用例）
 """
+import math
 import os
 import sys
 import tempfile
@@ -1353,35 +1354,100 @@ def test_32_e5_em_fallback_visible():
 
 
 def test_18c_dupont_factors():
-    """18c. 杜邦四因子（v5.8.0，mock _em_f10）：最新期 vs 去年同期（同 mmdd 年−1）；
-    四值缺一 → {}；去年同期缺 → 仅本期无 prev 键。"""
+    """18c. 杜邦四因子 TTM 口径（mock _ts_stmt/_em_f10）：basis="ttm"，四因子出自唯一 TTM
+    计算层（归母口径），乘积在舍入容差内闭合；prev=上年同期 TTM 带 prev_period 标签；
+    上年同期缺组成期 → 无 prev 键（本期照出）；非正平均归母权益 → 四因子不输出（issues 可读，
+    不生成误导乘积链）；F10 与 tushare 同报告期关键流量超 1% 容差 → 判重述/来源冲突、
+    不输出四因子（不静默生成混合口径值）；history 为同公式年度序列（仅落盘对账）。"""
     import em_finance
-    f10 = [
-        {"REPORT_DATE": "2026-09-30", "ROEJQ": 16.11, "XSJLL": 30.36, "TOAZZL": 0.3127,
-         "QYCS": 1.7029},
-        {"REPORT_DATE": "2026-06-30", "ROEJQ": 9.06, "XSJLL": 27.14, "TOAZZL": 0.1988,
-         "QYCS": 1.6632},
-        {"REPORT_DATE": "2025-09-30", "ROEJQ": 8.32, "XSJLL": 19.22, "TOAZZL": 0.2577,
-         "QYCS": 1.6501},
+    inc = [
+        {"end_date": "20231231", "report_type": "1", "total_revenue": 350e8,
+         "n_income": 55e8, "n_income_attr_p": 45e8},
+        {"end_date": "20241231", "report_type": "1", "total_revenue": 400e8,
+         "n_income": 60e8, "n_income_attr_p": 50e8},
+        {"end_date": "20240930", "report_type": "1", "total_revenue": 160e8,
+         "n_income": 24e8, "n_income_attr_p": 20e8},
+        {"end_date": "20251231", "report_type": "1", "total_revenue": 500e8,
+         "n_income": 75e8, "n_income_attr_p": 62e8},
+        {"end_date": "20250930", "report_type": "1", "total_revenue": 180e8,
+         "n_income": 27e8, "n_income_attr_p": 22e8},
+        {"end_date": "20260930", "report_type": "1", "total_revenue": 200e8,
+         "n_income": 33e8, "n_income_attr_p": 27e8},
     ]
-    _o = em_finance._em_f10
+    bs = [
+        {"end_date": "20231231", "report_type": "1", "total_assets": 700e8,
+         "total_hldr_eqy_exc_min_int": 380e8},
+        {"end_date": "20241231", "report_type": "1", "total_assets": 800e8,
+         "total_hldr_eqy_exc_min_int": 420e8},
+        {"end_date": "20240930", "report_type": "1", "total_assets": 800e8,
+         "total_hldr_eqy_exc_min_int": 400e8},
+        {"end_date": "20251231", "report_type": "1", "total_assets": 1000e8,
+         "total_hldr_eqy_exc_min_int": 500e8},
+        {"end_date": "20250930", "report_type": "1", "total_assets": 900e8,
+         "total_hldr_eqy_exc_min_int": 450e8},
+        {"end_date": "20260930", "report_type": "1", "total_assets": 1000e8,
+         "total_hldr_eqy_exc_min_int": 500e8},
+    ]
+    # F10 与 tushare 同报告期累计关键流量一致（营收/归母净利，对账通过）
+    f10_ok = [
+        {"REPORT_DATE": "2026-09-30", "TOTALOPERATEREVE": 200e8, "PARENTNETPROFIT": 27e8},
+        {"REPORT_DATE": "2025-09-30", "TOTALOPERATEREVE": 180e8, "PARENTNETPROFIT": 22e8},
+    ]
+    _o_stmt, _o_f10 = em_finance._ts_stmt, em_finance._em_f10
     try:
-        em_finance._em_f10 = lambda secucode, size=12, annual_only=False: f10
-        d = em_finance.fetch_dupont_factors("600176.SH")
-        assert d["period"] == "2026三季" and d["roe"] == 16.1 and d["nm"] == 30.4
-        assert d["turn"] == 0.313 and d["em"] == 1.7, f"实际 {d}"
-        assert d["prev"]["roe"] == 8.3 and d["prev"]["turn"] == 0.258
-        # 去年同期缺 → 仅本期、无 prev 键
-        em_finance._em_f10 = lambda secucode, size=12, annual_only=False: f10[:1]
-        d2 = em_finance.fetch_dupont_factors("600176.SH")
-        assert "prev" not in d2 and d2["roe"] == 16.1
-        # 四值缺一 → {}
-        em_finance._em_f10 = lambda secucode, size=12, annual_only=False: [
-            {"REPORT_DATE": "2026-09-30", "ROEJQ": 16.11, "XSJLL": None}]
-        assert em_finance.fetch_dupont_factors("600176.SH") == {}
+        em_finance._ts_stmt = lambda code, api, annual=False, rt1=False: \
+            list(inc) if api == "income" else list(bs)
+        em_finance._em_f10 = lambda secucode, size=12, annual_only=False: f10_ok
+        d = em_finance.fetch_dupont_factors("600176", "600176.SH")
+        # 本期 TTM：营收 500−180+200=520、归母 62−22+27=67、均资产 950、均归母权益 475
+        assert d["basis"] == "ttm" and d["period"] == "2026三季"
+        assert d["prev_period"] == "2025三季"
+        assert d["roe"] == 14.1 and d["nm"] == 12.9, f"实际 {d}"
+        assert d["turn"] == 0.547 and d["em"] == 2.0, f"实际 {d}"
+        # 乘积闭合（舍入容差内）：12.9% × 0.547 × 2.0 ≈ 14.1%
+        assert abs(d["nm"] / 100 * d["turn"] * d["em"] - d["roe"] / 100) < 0.002
+        # 上年同期 TTM：营收 420、归母 52、均资产 850、均归母权益 425
+        assert d["prev"] == {"roe": 12.2, "nm": 12.4, "turn": 0.494, "em": 2.0}, f"实际 {d['prev']}"
+        # 同公式年度历史序列（旧→新，供对账）
+        assert d["history"] == [
+            {"period": "2024年报", "roe": 12.5, "nm": 12.5, "turn": 0.533, "em": 1.88},
+            {"period": "2025年报", "roe": 13.5, "nm": 12.4, "turn": 0.556, "em": 1.96},
+        ], f"实际 {d.get('history')}"
+        # 上年同期缺组成期（缺 20241231/20240930）→ 本期照出、无 prev 键
+        em_finance._ts_stmt = lambda code, api, annual=False, rt1=False: \
+            [r for r in (inc if api == "income" else bs)
+             if r["end_date"] not in ("20241231", "20240930")]
+        d2 = em_finance.fetch_dupont_factors("600176", "600176.SH")
+        assert d2["roe"] == 14.1 and "prev" not in d2, f"实际 {d2}"
+        assert any("缺" in s for s in d2["issues"])
+        # 非正平均归母权益（资不抵债）→ 四因子不输出、issues 可读
+        bs_neg = [dict(r, total_hldr_eqy_exc_min_int=-550e8) if r["end_date"] == "20260930"
+                  else r for r in bs]
+        em_finance._ts_stmt = lambda code, api, annual=False, rt1=False: \
+            list(inc) if api == "income" else bs_neg
+        d3 = em_finance.fetch_dupont_factors("600176", "600176.SH")
+        assert "roe" not in d3 and "nm" not in d3 and "turn" not in d3 and "em" not in d3
+        assert any("非正" in s for s in d3["issues"])
+        # F10 与 tushare 关键流量超 1% 容差 → 冲突，不输出四因子
+        f10_bad = [dict(f10_ok[0], TOTALOPERATEREVE=260e8), f10_ok[1]]
+        em_finance._ts_stmt = lambda code, api, annual=False, rt1=False: \
+            list(inc) if api == "income" else list(bs)
+        em_finance._em_f10 = lambda secucode, size=12, annual_only=False: f10_bad
+        d4 = em_finance.fetch_dupont_factors("600176", "600176.SH")
+        assert "roe" not in d4, f"冲突时不得输出四因子: {d4}"
+        assert any("冲突" in s and "营收" in s for s in d4["issues"]), f"实际 {d4['issues']}"
+        # F10 在容差内（差异 0.5%）→ 不判冲突
+        f10_tol = [dict(f10_ok[0], TOTALOPERATEREVE=201e8), f10_ok[1]]
+        em_finance._em_f10 = lambda secucode, size=12, annual_only=False: f10_tol
+        d5 = em_finance.fetch_dupont_factors("600176", "600176.SH")
+        assert d5["roe"] == 14.1 and not any("冲突" in s for s in d5["issues"])
+        # tushare 利润表无数据 → {}（同旧静默口径）
+        em_finance._ts_stmt = lambda code, api, annual=False, rt1=False: []
+        assert em_finance.fetch_dupont_factors("600176", "600176.SH") == {}
     finally:
-        em_finance._em_f10 = _o
-    print("18c. 杜邦四因子（本期+去年同期/缺期降级）通过")
+        em_finance._ts_stmt = _o_stmt
+        em_finance._em_f10 = _o_f10
+    print("18c. 杜邦四因子（TTM 口径：本期+上年同期/冲突/缺期/负权益降级）通过")
 
 
 
@@ -2222,9 +2288,12 @@ def test_53_monthly_rate_limit_passthrough(monkeypatch):
 def test_54_dupont_rate_limit_passthrough(monkeypatch):
     import em_finance
 
+    monkeypatch.setattr(em_finance, "_ts_stmt", lambda *a, **k: [
+        {"end_date": "20260930", "report_type": "1", "total_revenue": 1e8,
+         "n_income": 1e8, "n_income_attr_p": 1e8}])
     monkeypatch.setattr(em_finance, "_em_f10",
                         lambda *_args, **_kwargs: (_ for _ in ()).throw(em_core.RateLimitError("HTTP 429 mock")))
-    _expect_rate_limit(lambda: em_finance.fetch_dupont_factors("600000.SH"))
+    _expect_rate_limit(lambda: em_finance.fetch_dupont_factors("600000", "600000.SH"))
 
 
 def test_55_hkf10_rate_limit_passthrough(monkeypatch):
@@ -2253,6 +2322,396 @@ def test_56_risk_free_rate_limit_not_cached(monkeypatch):
     assert cache == {}, "429 失败不得进入按日缓存"
     assert em_finance.fetch_risk_free() == ("2026-10-30", 1.75)
     assert len(calls) == 2, "失败后下一次调用必须重新请求"
+
+
+def test_57_ttm_metrics_quarterly_ttm_and_dupont():
+    """57. 唯一 TTM 计算层（纯函数）：季度期流量差分（去年全年−去年同期累计+本期累计）、
+    平均资产=上年同季末与本季末平均、ROA 含少数股东口径、杜邦三因子归母口径，
+    杜邦恒等式 nm×em×turnover==roe 在浮点容差内成立；本期与上年同期 TTM 同验。"""
+    import em_finance
+    inc = [
+        {"end_date": "20241231", "report_type": "1", "total_revenue": 400e8,
+         "n_income": 60e8, "n_income_attr_p": 50e8},
+        {"end_date": "20240930", "report_type": "1", "total_revenue": 160e8,
+         "n_income": 24e8, "n_income_attr_p": 20e8},
+        {"end_date": "20251231", "report_type": "1", "total_revenue": 500e8,
+         "n_income": 75e8, "n_income_attr_p": 62e8},
+        {"end_date": "20250930", "report_type": "1", "total_revenue": 180e8,
+         "n_income": 27e8, "n_income_attr_p": 22e8},
+        {"end_date": "20260930", "report_type": "1", "total_revenue": 200e8,
+         "n_income": 33e8, "n_income_attr_p": 27e8},
+    ]
+    bs = [
+        {"end_date": "20240930", "report_type": "1", "total_assets": 800e8,
+         "total_hldr_eqy_exc_min_int": 400e8},
+        {"end_date": "20250930", "report_type": "1", "total_assets": 900e8,
+         "total_hldr_eqy_exc_min_int": 450e8},
+        {"end_date": "20260930", "report_type": "1", "total_assets": 1000e8,
+         "total_hldr_eqy_exc_min_int": 500e8},
+    ]
+    r = em_finance.compute_ttm_metrics(inc, bs, "20260930")
+    assert r["status"] == "ok" and r["issues"] == []
+    assert r["period"] == "2026三季" and r["prev_period"] == "2025三季"
+    cur, prev = r["current"], r["previous"]
+    # 本期 TTM：营收 500−180+200=520；含少数净利 75−27+33=81；归母 62−22+27=67
+    assert math.isclose(cur["revenue"], 520e8, rel_tol=1e-12)
+    assert math.isclose(cur["net_profit"], 81e8, rel_tol=1e-12)
+    assert math.isclose(cur["parent_net_profit"], 67e8, rel_tol=1e-12)
+    # 平均资产/权益 =（上年同季末 + 本季末）/2
+    assert math.isclose(cur["avg_assets"], 950e8, rel_tol=1e-12)
+    assert math.isclose(cur["avg_parent_equity"], 475e8, rel_tol=1e-12)
+    # ROA 含少数口径；周转率；杜邦三因子归母口径
+    assert math.isclose(cur["roa"], 81e8 / 950e8, rel_tol=1e-12)
+    assert math.isclose(cur["turnover"], 520e8 / 950e8, rel_tol=1e-12)
+    assert math.isclose(cur["nm"], 67e8 / 520e8, rel_tol=1e-12)
+    assert math.isclose(cur["em"], 950e8 / 475e8, rel_tol=1e-12)
+    assert math.isclose(cur["roe"], 67e8 / 475e8, rel_tol=1e-12)
+    # 杜邦恒等式（浮点容差内）
+    assert math.isclose(cur["nm"] * cur["em"] * cur["turnover"], cur["roe"], rel_tol=1e-12)
+    # 上年同期 TTM：营收 400−160+180=420；含少数 60−24+27=63；归母 50−20+22=52
+    assert math.isclose(prev["revenue"], 420e8, rel_tol=1e-12)
+    assert math.isclose(prev["net_profit"], 63e8, rel_tol=1e-12)
+    assert math.isclose(prev["parent_net_profit"], 52e8, rel_tol=1e-12)
+    assert math.isclose(prev["avg_assets"], 850e8, rel_tol=1e-12)
+    assert math.isclose(prev["avg_parent_equity"], 425e8, rel_tol=1e-12)
+    assert math.isclose(prev["roa"], 63e8 / 850e8, rel_tol=1e-12)
+    assert math.isclose(prev["roe"], 52e8 / 425e8, rel_tol=1e-12)
+    assert math.isclose(prev["nm"] * prev["em"] * prev["turnover"], prev["roe"], rel_tol=1e-12)
+
+
+def test_58_ttm_metrics_annual_uses_year_start_end_avg():
+    """58. 年度期 TTM 退化为全年本身；平均资产/权益按年初（上年末）与本年末平均。"""
+    import em_finance
+    inc = [
+        {"end_date": "20231231", "report_type": "1", "total_revenue": 350e8,
+         "n_income": 55e8, "n_income_attr_p": 45e8},
+        {"end_date": "20241231", "report_type": "1", "total_revenue": 400e8,
+         "n_income": 60e8, "n_income_attr_p": 50e8},
+        {"end_date": "20251231", "report_type": "1", "total_revenue": 500e8,
+         "n_income": 75e8, "n_income_attr_p": 62e8},
+    ]
+    bs = [
+        {"end_date": "20231231", "report_type": "1", "total_assets": 700e8,
+         "total_hldr_eqy_exc_min_int": 380e8},
+        {"end_date": "20241231", "report_type": "1", "total_assets": 800e8,
+         "total_hldr_eqy_exc_min_int": 420e8},
+        {"end_date": "20251231", "report_type": "1", "total_assets": 1000e8,
+         "total_hldr_eqy_exc_min_int": 500e8},
+    ]
+    r = em_finance.compute_ttm_metrics(inc, bs, "20251231")
+    assert r["status"] == "ok" and r["issues"] == []
+    assert r["period"] == "2025年报" and r["prev_period"] == "2024年报"
+    cur = r["current"]
+    # 年度期 TTM=全年本身；平均=（20241231 年初 + 20251231 年末）/2
+    assert math.isclose(cur["revenue"], 500e8, rel_tol=1e-12)
+    assert math.isclose(cur["net_profit"], 75e8, rel_tol=1e-12)
+    assert math.isclose(cur["parent_net_profit"], 62e8, rel_tol=1e-12)
+    assert math.isclose(cur["avg_assets"], 900e8, rel_tol=1e-12)
+    assert math.isclose(cur["avg_parent_equity"], 460e8, rel_tol=1e-12)
+    assert math.isclose(cur["roa"], 75e8 / 900e8, rel_tol=1e-12)
+    assert math.isclose(cur["em"], 900e8 / 460e8, rel_tol=1e-12)
+    assert math.isclose(cur["nm"] * cur["em"] * cur["turnover"], cur["roe"], rel_tol=1e-12)
+    # 上年同期=2024年报：全年本身；平均=（20231231+20241231）/2
+    prev = r["previous"]
+    assert math.isclose(prev["revenue"], 400e8, rel_tol=1e-12)
+    assert math.isclose(prev["avg_assets"], 750e8, rel_tol=1e-12)
+    assert math.isclose(prev["avg_parent_equity"], 400e8, rel_tol=1e-12)
+    assert math.isclose(prev["roe"], 50e8 / 400e8, rel_tol=1e-12)
+
+
+def test_59_ttm_metrics_missing_periods_degrade_readably():
+    """59. 缺去年同期累计/缺年度基数/缺资产负债表期次 → 对应指标可读降级（None+issues），
+    不猜数、不崩溃；status 反映本期完备性。"""
+    import em_finance
+    inc_full = [
+        {"end_date": "20241231", "report_type": "1", "total_revenue": 400e8,
+         "n_income": 60e8, "n_income_attr_p": 50e8},
+        {"end_date": "20251231", "report_type": "1", "total_revenue": 500e8,
+         "n_income": 75e8, "n_income_attr_p": 62e8},
+        {"end_date": "20250930", "report_type": "1", "total_revenue": 180e8,
+         "n_income": 27e8, "n_income_attr_p": 22e8},
+        {"end_date": "20260930", "report_type": "1", "total_revenue": 200e8,
+         "n_income": 33e8, "n_income_attr_p": 27e8},
+    ]
+    bs_full = [
+        {"end_date": "20250930", "report_type": "1", "total_assets": 900e8,
+         "total_hldr_eqy_exc_min_int": 450e8},
+        {"end_date": "20260930", "report_type": "1", "total_assets": 1000e8,
+         "total_hldr_eqy_exc_min_int": 500e8},
+    ]
+    # 缺去年同期累计（20250930 利润表行）：本期 TTM 流量不可得，均值仍在 → em 仍在
+    inc = [r for r in inc_full if r["end_date"] != "20250930"]
+    r = em_finance.compute_ttm_metrics(inc, bs_full, "20260930")
+    cur = r["current"]
+    assert r["status"] == "partial"
+    assert cur["revenue"] is None and cur["net_profit"] is None and cur["parent_net_profit"] is None
+    assert math.isclose(cur["avg_assets"], 950e8, rel_tol=1e-12)
+    assert math.isclose(cur["em"], 2.0, rel_tol=1e-12)
+    assert cur["roa"] is None and cur["turnover"] is None
+    assert cur["nm"] is None and cur["roe"] is None
+    assert any("20250930" in s and "去年同期累计" in s for s in r["issues"])
+
+    # 缺年度基数（20251231 年报行）：本期流量同样不可得
+    inc = [r for r in inc_full if r["end_date"] != "20251231"]
+    r = em_finance.compute_ttm_metrics(inc, bs_full, "20260930")
+    assert r["current"]["revenue"] is None
+    assert any("去年全年" in s for s in r["issues"])
+
+    # 缺上年同季末资产负债表（20250930 bs 行）：均值不可得 → roa/周转率/em/roe 缺失，
+    # 流量与 nm 仍在
+    bs = [b for b in bs_full if b["end_date"] != "20250930"]
+    r = em_finance.compute_ttm_metrics(inc_full, bs, "20260930")
+    cur = r["current"]
+    assert math.isclose(cur["revenue"], 520e8, rel_tol=1e-12)
+    assert math.isclose(cur["nm"], 67e8 / 520e8, rel_tol=1e-12)
+    assert cur["avg_assets"] is None and cur["avg_parent_equity"] is None
+    assert cur["roa"] is None and cur["turnover"] is None
+    assert cur["em"] is None and cur["roe"] is None
+    assert any("20250930" in s for s in r["issues"])
+
+    # 上年同期（2025三季）组成行全缺（20240930/20241231 利润表行 + 20240930 bs 行）：
+    # previous 全 None 且 issues 留痕；本期组成行齐备 → 不受影响仍 ok
+    inc = [r for r in inc_full if r["end_date"] >= "20250101"]
+    bs = [b for b in bs_full if b["end_date"] >= "20250101"]
+    r = em_finance.compute_ttm_metrics(inc, bs, "20260930")
+    assert r["status"] == "ok"
+    assert math.isclose(r["current"]["revenue"], 520e8, rel_tol=1e-12)
+    assert all(v is None for v in r["previous"].values())
+    assert r["issues"]
+
+
+def test_60_ttm_metrics_conflict_and_nonpositive_equity_degrade():
+    """60. 重述守卫：同报告期同口径字段出现不同值 → 该期该字段按缺失处理（不猜数）；
+    值一致的重复公告不算冲突；非正平均归母权益 → em/roe 不适用并留痕。"""
+    import em_finance
+    bs_full = [
+        {"end_date": "20250930", "report_type": "1", "total_assets": 900e8,
+         "total_hldr_eqy_exc_min_int": 450e8},
+        {"end_date": "20260930", "report_type": "1", "total_assets": 1000e8,
+         "total_hldr_eqy_exc_min_int": 500e8},
+    ]
+    inc_conflict = [
+        {"end_date": "20251231", "report_type": "1", "total_revenue": 500e8,
+         "n_income": 75e8, "n_income_attr_p": 62e8},
+        {"end_date": "20250930", "report_type": "1", "total_revenue": 180e8,
+         "n_income": 27e8, "n_income_attr_p": 22e8},
+        # 同报告期两次公告、营收口径不同（重述）→ 冲突；其余字段一致
+        {"end_date": "20260930", "report_type": "1", "ann_date": "20261030",
+         "total_revenue": 200e8, "n_income": 33e8, "n_income_attr_p": 27e8},
+        {"end_date": "20260930", "report_type": "1", "ann_date": "20261031",
+         "total_revenue": 210e8, "n_income": 33e8, "n_income_attr_p": 27e8},
+    ]
+    r = em_finance.compute_ttm_metrics(inc_conflict, bs_full, "20260930")
+    cur = r["current"]
+    assert r["status"] == "partial"
+    assert cur["revenue"] is None and cur["turnover"] is None and cur["nm"] is None
+    assert math.isclose(cur["net_profit"], 75e8 - 27e8 + 33e8, rel_tol=1e-12)
+    assert math.isclose(cur["parent_net_profit"], 62e8 - 22e8 + 27e8, rel_tol=1e-12)
+    assert any("冲突" in s and "total_revenue" in s for s in r["issues"])
+    # 值一致的重复公告（不同 ann_date 同值）不算冲突
+    inc_dup = [
+        {"end_date": "20251231", "report_type": "1", "total_revenue": 500e8,
+         "n_income": 75e8, "n_income_attr_p": 62e8},
+        {"end_date": "20250930", "report_type": "1", "total_revenue": 180e8,
+         "n_income": 27e8, "n_income_attr_p": 22e8},
+        {"end_date": "20260930", "report_type": "1", "ann_date": "20261030",
+         "total_revenue": 200e8, "n_income": 33e8, "n_income_attr_p": 27e8},
+        {"end_date": "20260930", "report_type": "1", "ann_date": "20261031",
+         "total_revenue": 200e8, "n_income": 33e8, "n_income_attr_p": 27e8},
+    ]
+    r2 = em_finance.compute_ttm_metrics(inc_dup, bs_full, "20260930")
+    assert r2["status"] == "ok" and not any("冲突" in s for s in r2["issues"])
+    assert math.isclose(r2["current"]["revenue"], 520e8, rel_tol=1e-12)
+    # 非正平均归母权益（资不抵债：450 与 −550 平均 = −50）：em/roe 不适用，roa 仍可用
+    bs_neg = [
+        {"end_date": "20250930", "report_type": "1", "total_assets": 900e8,
+         "total_hldr_eqy_exc_min_int": 450e8},
+        {"end_date": "20260930", "report_type": "1", "total_assets": 1000e8,
+         "total_hldr_eqy_exc_min_int": -550e8},
+    ]
+    r3 = em_finance.compute_ttm_metrics(inc_dup, bs_neg, "20260930")
+    cur3 = r3["current"]
+    assert math.isclose(cur3["avg_parent_equity"], -50e8, rel_tol=1e-12)
+    assert cur3["em"] is None and cur3["roe"] is None
+    assert math.isclose(cur3["roa"], cur3["net_profit"] / cur3["avg_assets"], rel_tol=1e-12)
+    assert any("非正" in s and "归母权益" in s for s in r3["issues"])
+
+
+def test_61_ttm_metrics_as_of_selects_period_and_reaches_2020_base():
+    """61. as_of 显式选期：数据超出 as_of 时取 as_of 期而非最新期，2020 基期经显式
+    as_of 直达（纯函数无全局窗口，不扩大无关脚本取数窗口）；年度平均依赖多取的
+    期初年度行（上年末），缺该年则对应均值降级。"""
+    import em_finance
+    inc = [
+        {"end_date": "20191231", "report_type": "1", "total_revenue": 300e8,
+         "n_income": 45e8, "n_income_attr_p": 38e8},
+        {"end_date": "20201231", "report_type": "1", "total_revenue": 350e8,
+         "n_income": 52e8, "n_income_attr_p": 43e8},
+        {"end_date": "20211231", "report_type": "1", "total_revenue": 400e8,
+         "n_income": 60e8, "n_income_attr_p": 50e8},
+        {"end_date": "20221231", "report_type": "1", "total_revenue": 460e8,
+         "n_income": 68e8, "n_income_attr_p": 55e8},
+    ]
+    bs = [
+        {"end_date": "20191231", "report_type": "1", "total_assets": 600e8,
+         "total_hldr_eqy_exc_min_int": 360e8},
+        {"end_date": "20201231", "report_type": "1", "total_assets": 700e8,
+         "total_hldr_eqy_exc_min_int": 380e8},
+        {"end_date": "20211231", "report_type": "1", "total_assets": 800e8,
+         "total_hldr_eqy_exc_min_int": 420e8},
+        {"end_date": "20221231", "report_type": "1", "total_assets": 900e8,
+         "total_hldr_eqy_exc_min_int": 470e8},
+    ]
+    # 数据含 2022 年报，但 as_of 显式取 2020 基期 → 期次按 as_of 锁定
+    r = em_finance.compute_ttm_metrics(inc, bs, "20201231")
+    assert r["period"] == "2020年报" and r["status"] == "ok"
+    assert math.isclose(r["current"]["revenue"], 350e8, rel_tol=1e-12)
+    # 年度平均须多取一个期初年度行（20191231 上年末）参与年初/年末平均
+    assert math.isclose(r["current"]["avg_assets"], 650e8, rel_tol=1e-12)
+    assert math.isclose(r["current"]["avg_parent_equity"], 370e8, rel_tol=1e-12)
+    assert math.isclose(r["current"]["roe"], 43e8 / 370e8, rel_tol=1e-12)
+    # 上年同期=2019年报：流量=全年本身；平均需 20181231 期初行（未提供）→ 可读降级
+    assert math.isclose(r["previous"]["revenue"], 300e8, rel_tol=1e-12)
+    assert r["previous"]["avg_assets"] is None and r["previous"]["roe"] is None
+    assert any("20181231" in s for s in r["issues"])
+    # as_of 晚于全部数据 → 取最新期
+    r2 = em_finance.compute_ttm_metrics(inc, bs, "20271231")
+    assert r2["period"] == "2022年报"
+    # as_of 非法 → 不可定位本期，整体降级不崩溃
+    r3 = em_finance.compute_ttm_metrics(inc, bs, "abc")
+    assert r3["status"] == "unavailable" and r3["issues"]
+    assert all(v is None for v in r3["current"].values())
+
+
+def test_62_ttm_metrics_nan_normalized_as_missing():
+    """62. NaN 输入按 None 等价归一：字段级 NaN 不污染 TTM 差分与其余指标；NaN 与真实值
+    的重复行不构伪冲突（真实值照常采纳）；NaN 不触发非正分母误判。"""
+    import em_finance
+    nan = float("nan")
+    inc = [
+        {"end_date": "20251231", "report_type": "1", "total_revenue": 500e8,
+         "n_income": 75e8, "n_income_attr_p": 62e8},
+        {"end_date": "20250930", "report_type": "1", "total_revenue": 180e8,
+         "n_income": 27e8, "n_income_attr_p": 22e8},
+        {"end_date": "20260930", "report_type": "1", "total_revenue": nan,
+         "n_income": 33e8, "n_income_attr_p": 27e8},
+    ]
+    bs = [
+        {"end_date": "20250930", "report_type": "1", "total_assets": 900e8,
+         "total_hldr_eqy_exc_min_int": 450e8},
+        {"end_date": "20260930", "report_type": "1", "total_assets": 1000e8,
+         "total_hldr_eqy_exc_min_int": 500e8},
+    ]
+    r = em_finance.compute_ttm_metrics(inc, bs, "20260930")
+    cur = r["current"]
+    # 营收 NaN → 依赖营收的指标缺失；其余流量不受污染
+    assert cur["revenue"] is None and cur["turnover"] is None and cur["nm"] is None
+    assert math.isclose(cur["net_profit"], 75e8 - 27e8 + 33e8, rel_tol=1e-12)
+    assert math.isclose(cur["parent_net_profit"], 62e8 - 22e8 + 27e8, rel_tol=1e-12)
+    # NaN 与真实值并存（同报告期重复行）→ 不构伪冲突，真实值照常采纳
+    inc_dup = inc[:2] + [
+        {"end_date": "20260930", "report_type": "1", "ann_date": "20261030",
+         "total_revenue": nan, "n_income": 33e8, "n_income_attr_p": 27e8},
+        {"end_date": "20260930", "report_type": "1", "ann_date": "20261031",
+         "total_revenue": 200e8, "n_income": 33e8, "n_income_attr_p": 27e8},
+    ]
+    r2 = em_finance.compute_ttm_metrics(inc_dup, bs, "20260930")
+    assert math.isclose(r2["current"]["revenue"], 520e8, rel_tol=1e-12)
+    assert not any("冲突" in s for s in r2["issues"]), "NaN 不得与真实值构成伪冲突"
+    # 资产负债表 NaN → 均值缺失而非 NaN 均值（不污染 roa，不误判非正分母）
+    bs_nan = [
+        {"end_date": "20250930", "report_type": "1", "total_assets": 900e8,
+         "total_hldr_eqy_exc_min_int": 450e8},
+        {"end_date": "20260930", "report_type": "1", "total_assets": nan,
+         "total_hldr_eqy_exc_min_int": 500e8},
+    ]
+    r3 = em_finance.compute_ttm_metrics(inc_dup, bs_nan, "20260930")
+    cur3 = r3["current"]
+    assert cur3["avg_assets"] is None and cur3["roa"] is None and cur3["turnover"] is None
+    assert math.isclose(cur3["roe"], 67e8 / 475e8, rel_tol=1e-12)
+    assert not any("非正" in s for s in r3["issues"]), "NaN 分母不得误判为非正"
+
+
+def test_63_sec_e3_dupont_ttm_line(monkeypatch):
+    """63. _sec_e3 杜邦照抄行 TTM 化：四因子齐备 → 落盘 dupont 键 + 「截至…TTM」照抄行；
+    仅 issues（冲突/缺期降级）→ 输出可读「不适用」行且不落 dupont 键（不静默吞掉冲突）。"""
+    monkeypatch.setattr(em, "fetch_annual_rows", lambda *args: [])
+    monkeypatch.setattr(em, "fetch_latest_quarter", lambda *args: {})
+    monkeypatch.setattr(em, "fetch_period_track", lambda *args: None)
+    monkeypatch.setattr(em, "fetch_debt", lambda *args: None)
+    dup = {"basis": "ttm", "period": "2026三季", "prev_period": "2025三季",
+           "roe": 14.1, "nm": 12.9, "turn": 0.547, "em": 2.0,
+           "prev": {"roe": 12.2, "nm": 12.4, "turn": 0.494, "em": 2.0}, "issues": []}
+    monkeypatch.setattr(em, "fetch_dupont_factors", lambda *args: dup)
+    original = dict(em._CAPTURE)
+    em._CAPTURE.clear()
+    try:
+        out, _ = em._sec_e3("603979", "603979.SH")
+        captured = dict(em._CAPTURE)
+    finally:
+        em._CAPTURE.clear()
+        em._CAPTURE.update(original)
+    text = "\n".join(out)
+    assert "截至2026三季TTM" in text and "TTM 滚动四季口径" in text, f"实际: {text}"
+    assert "上年同期（2025三季 TTM）" in text
+    assert captured.get("dupont") == dup, "四因子齐备须落盘 dupont 键"
+
+    bad = {"basis": "ttm", "period": "2026三季", "prev_period": "2025三季",
+           "issues": ["重述/来源冲突：本期（2026-09-30）营收 东财F10=260.00亿 vs "
+                      "tushare=200.00亿（偏差 30.0% > 1% 容差）"]}
+    monkeypatch.setattr(em, "fetch_dupont_factors", lambda *args: bad)
+    em._CAPTURE.clear()
+    try:
+        out2, _ = em._sec_e3("603979", "603979.SH")
+        captured2 = dict(em._CAPTURE)
+    finally:
+        em._CAPTURE.clear()
+        em._CAPTURE.update(original)
+    text2 = "\n".join(out2)
+    assert "杜邦因子: 不适用" in text2 and "冲突" in text2, f"实际: {text2}"
+    assert "dupont" not in captured2, "降级时不得落盘 dupont 键"
+
+
+def test_64_dupont_f10_reconcile_failure_leaves_issue(monkeypatch):
+    """64. F10↔tushare 对账块非限流异常：fail-open（四因子仍输出）但 issues 必须留痕
+    「F10对账未执行/未经对账」+ 异常类型——不得静默冒充已核对；RateLimitError 仍穿透。"""
+    import em_finance
+
+    inc = [
+        {"end_date": "20251231", "report_type": "1", "total_revenue": 500e8,
+         "n_income": 75e8, "n_income_attr_p": 62e8},
+        {"end_date": "20250930", "report_type": "1", "total_revenue": 180e8,
+         "n_income": 27e8, "n_income_attr_p": 22e8},
+        {"end_date": "20260930", "report_type": "1", "total_revenue": 200e8,
+         "n_income": 33e8, "n_income_attr_p": 27e8},
+    ]
+    bs = [
+        {"end_date": "20251231", "report_type": "1", "total_assets": 1000e8,
+         "total_hldr_eqy_exc_min_int": 500e8},
+        {"end_date": "20250930", "report_type": "1", "total_assets": 900e8,
+         "total_hldr_eqy_exc_min_int": 450e8},
+        {"end_date": "20260930", "report_type": "1", "total_assets": 1000e8,
+         "total_hldr_eqy_exc_min_int": 500e8},
+    ]
+    monkeypatch.setattr(em_finance, "_ts_stmt",
+                        lambda code, api, annual=False, rt1=False: list(inc) if api == "income" else list(bs))
+
+    def _boom(*_args, **_kwargs):
+        raise ValueError("F10 mock 解析失败")
+
+    monkeypatch.setattr(em_finance, "_em_f10", _boom)
+    d = em_finance.fetch_dupont_factors("600176", "600176.SH")
+    # fail-open：四因子照常输出（不降级、不吞成无对账结果）
+    assert d["roe"] == 14.1, f"实际 {d}"
+    # 但不得静默冒充已核对：issues 须留痕对账未执行 + 异常类型
+    assert any("F10对账未执行" in s and "未经对账" in s and "ValueError" in s
+               for s in d["issues"]), f"实际 {d['issues']}"
+    # RateLimitError 仍穿透（不被上面的留痕分支吞掉）
+    def _limited(*_args, **_kwargs):
+        raise em_core.RateLimitError("HTTP 429 mock")
+
+    monkeypatch.setattr(em_finance, "_em_f10", _limited)
+    _expect_rate_limit(lambda: em_finance.fetch_dupont_factors("600176", "600176.SH"))
 
 
 def test_out_requires_e1_price(monkeypatch, tmp_path):

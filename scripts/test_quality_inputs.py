@@ -348,10 +348,51 @@ def test_f_item_evidence_preserves_values_and_period(monkeypatch):
     assert set(evidence["items"]) == set(qi.F_ITEM_IDS)
     assert evidence["items"]["profit_positive"] == "90.0亿元"
     assert evidence["items"]["ocf_positive"] == "净额120.0亿元"
-    assert evidence["items"]["roa_improving"] == "9.00% → 9.09%（+0.09pct）"
+    assert evidence["items"]["roa_improving"] == "9.47% → 9.52%（+0.05pct）"
     assert evidence["items"]["cash_quality_ok"] == "3个有效年度最低 1.20 倍（仅净利润为正年度）"
     assert evidence["items"]["no_dilution"] == "1.00 → 1.00亿股（0.00%）"
-    assert evidence["items"]["asset_turnover_improving"] == "0.900 → 1.000 次（+11.1%）"
+    assert evidence["items"]["asset_turnover_improving"] == "0.947 → 1.048 次（+10.6%）"
+    assert evidence["periods"] == {"roa_improving": "TTM 2024年报→2025年报",
+                                   "asset_turnover_improving": "TTM 2024年报→2025年报"}
+
+
+def test_roa_and_turnover_use_ttm_other_items_keep_annual(monkeypatch):
+    """1D 集成：roa_improving/asset_turnover_improving 读共享 TTM 函数（平均总资产），
+    年报期末口径会给出相反判定；其余 F 项仍按年报期间。"""
+    rows = _bundle(_rows(2023, "20240320", profit=80, revenue=800, assets=800),
+                   _rows(2024, "20250320", profit=90, revenue=900, assets=1200),
+                   _rows(2025, "20260320", profit=100, revenue=1000, assets=1100))
+    _install(monkeypatch, rows)
+    result = qi.fetch_quality_inputs("600000", None, "2026-04-01", PROFILE)
+    items = result["1D"]["f_items"]
+    # TTM（平均总资产）：ROA 90/1000=9.00% → 100/1150=8.70%，周转 0.900 → 1000/1150=0.870
+    assert items["roa_improving"] is False
+    assert items["asset_turnover_improving"] is False
+    # 年报期末口径本会判为改善（90/1200=7.50% → 100/1100=9.09%；900/1200=0.750 → 1000/1100=0.909）
+    assert items["profit_positive"] is True
+    assert items["ocf_positive"] is True
+    assert items["gross_margin_improving"] is False
+    evidence = result["1D"]["f_item_evidence"]
+    assert evidence["period"] == "2024→2025年报"
+    assert evidence["items"]["roa_improving"] == "9.00% → 8.70%（-0.30pct）"
+    assert evidence["items"]["asset_turnover_improving"] == "0.900 → 0.870 次（-3.4%）"
+    assert evidence["periods"] == {"roa_improving": "TTM 2024年报→2025年报",
+                                   "asset_turnover_improving": "TTM 2024年报→2025年报"}
+
+
+def test_roa_and_turnover_unknown_when_ttm_not_composable(monkeypatch):
+    """TTM 无法构成（仅两年年报，上年同期均值缺上年末资产行）时两项为 None（未核实），
+    不得转为 False。"""
+    rows = _bundle(_rows(2024, "20250320"), _rows(2025, "20260320"))
+    _install(monkeypatch, rows)
+    result = qi.fetch_quality_inputs("600000", None, "2026-04-01", PROFILE)
+    assert result["1D"]["f_items"]["roa_improving"] is None
+    assert result["1D"]["f_items"]["asset_turnover_improving"] is None
+    assert result["coverage"]["1D.f_items.roa_improving"] == "missing"
+    assert result["1D"]["f_item_evidence"]["items"]["roa_improving"] == "未获取 → 10.00%"
+    assert result["1D"]["f_item_evidence"]["periods"] == {
+        "roa_improving": "TTM 2024年报→2025年报",
+        "asset_turnover_improving": "TTM 2024年报→2025年报"}
 
 
 def test_f_item_evidence_does_not_display_no_short_debt_sentinel(monkeypatch):
@@ -386,3 +427,28 @@ def test_f_item_evidence_missing_side_does_not_get_ratio_unit(monkeypatch):
     text = result["1D"]["f_item_evidence"]["items"]["short_cover_improving"]
     assert text == "未获取 → 无短债"
     assert "未获取 倍" not in text
+
+
+def test_debt_components_decoupled_when_bond_payable_missing(monkeypatch):
+    rows = _bundle(_rows(2024, "20250320"), _rows(2025, "20260320"))
+    for row in rows["balancesheet"]:
+        row["bond_payable"] = None
+    _install(monkeypatch, rows)
+    result = qi.fetch_quality_inputs("600000", None, "2026-04-01", PROFILE)
+    assert result["1D"]["f_items"]["long_debt_down"] is None
+    assert result["1D"]["f_items"]["short_cover_improving"] is True
+    assert result["1D"]["liquidity"]["short_cover"] == 5
+    assert result["coverage"]["1D.liquidity.short_cover"] == "ok"
+    assert result["1D"]["liquidity"]["debt_ratio"] is None
+    assert result["coverage"]["1D.liquidity.debt_ratio"] == "missing"
+    assert result["1D"]["f_item_evidence"]["items"]["long_debt_down"] == "未获取"
+    assert result["status"] == "partial"
+
+
+def test_debt_each_component_uses_only_own_required_fields():
+    st, lt, money, cover = qi._debt({"balancesheet": {"st_borr": 50, "non_cur_liab_due_1y": 10,
+                                                      "money_cap": 300}})
+    assert (st, lt, money, cover) == (60, None, 300, 5)
+    st, lt, money, cover = qi._debt({"balancesheet": {"lt_borr": 100, "bond_payable": 20,
+                                                      "money_cap": 300}})
+    assert (st, lt, money, cover) == (None, 120, 300, None)

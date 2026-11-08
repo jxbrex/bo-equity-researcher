@@ -154,6 +154,13 @@ pageSize=12 → 最近 12 期（3 年季报）；只看年报可加 `,REPORT_TYP
 **覆盖清单项**：3-5 年财务全项（Checklist #2）、盈利质量红旗清单全部数据、ROIC、总股本
 （单次调用覆盖度最高，必发）
 
+**杜邦四因子取数说明（v0.16.0）**：4.6 `dupont` 乘积链的净利率/总资产周转/权益乘数/ROE
+不再照抄本表 ROEJQ/XSJLL/TOAZZL/QYCS 的报告期累计值，改由 tushare 利润表/资产负债表的
+唯一 TTM 计算层（`em_finance.compute_ttm_metrics`，归母口径，滚动四季）产出；本表
+TOTALOPERATEREVE/PARENTNETPROFIT 仅作对账源——同报告期与 tushare 差异超 1% 容差即判
+重述/来源冲突，四因子按缺失降级、不输出混合口径乘积链，原因落盘 `dupont.issues`。
+1D 九项中的 ROA 改善/资产周转改善同源同公式。
+
 ---
 
 ## E4. 股东户数（datacenter）

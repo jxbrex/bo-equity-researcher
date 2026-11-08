@@ -377,11 +377,14 @@ def build_fin_trend(fill: dict) -> str:
 def build_dupont_html(fill: dict) -> str:
     """4.6 杜邦归因乘积链（fill["dupont"] 可选字段，锚点 <!--DUPONT--> 挂 4.6 维度块；
     缺失/四因子缺一 → 空串不告警）。净利率 × 总资产周转率 × 权益乘数 = ROE（加权）
-    四节点横排卡，各带去年同期值与变化幅度（净利率/ROE 计 pct 点，周转/权益乘数计 %）。
-    dupont: {"period":"2026三季","roe":16.1,"nm":30.4,"turn":0.313,"em":1.70,
-             "prev":{"roe":8.3,"nm":19.2,"turn":0.258,"em":1.65},"verdict":"归因结论句（手写）"}
-    ——四因子照抄 em_fetch「杜邦因子」照抄行/落盘 dupont 键（F10 ROEJQ/XSJLL/TOAZZL/QYCS，
-    报告期累计口径，禁手算）；verdict 是唯一的模型手填槽位。"""
+    四节点横排卡，各带上年同期值与变化幅度（净利率/ROE 计 pct 点，周转/权益乘数计 %）。
+    dupont（v0.16.0 TTM 口径）: {"basis":"ttm","period":"2026三季","prev_period":"2025三季",
+             "roe":16.1,"nm":30.4,"turn":0.313,"em":1.70,
+             "prev":{"roe":8.3,"nm":19.2,"turn":0.258,"em":1.65},
+             "issues":[...],"history":[...],"verdict":"归因结论句（手写）"}
+    ——四因子照抄 em_fetch「杜邦因子」照抄行/落盘 dupont 键（唯一 TTM 计算层，归母口径，
+    禁手算）；verdict 是唯一的模型手填槽位。无 basis 的旧 fill（legacy 累计口径）兼容：
+    图注维持「某期累计（非年化）」原文案，不拒、不混。"""
     d = fill.get("dupont") or {}
     if not isinstance(d, dict):
         return ""
@@ -391,7 +394,10 @@ def build_dupont_html(fill: dict) -> str:
     prev_raw = d.get("prev") if isinstance(d.get("prev"), dict) else {}
     prev = {k: _num(prev_raw.get(k)) for k in cur}
     period = str(d.get("period") or "").strip()
+    prev_period = str(d.get("prev_period") or "").strip()
     verdict = str(d.get("verdict") or "").strip()
+    is_ttm = str(d.get("basis") or "").strip() == "ttm"
+    prev_label = "上年同期" if is_ttm else "去年同期"
 
     def _fmt(key, v):
         if key == "turn":
@@ -414,7 +420,7 @@ def build_dupont_html(fill: dict) -> str:
                 cls = "dup-delta" if dv >= 0 else "dup-delta down"
                 arrow = "▲" if dv >= 0 else "▼"
                 delta = f'<div class="{cls}">{arrow} {txt}</div>'
-            prev_txt = f'<div class="dup-prev">去年同期 {_fmt(key, p)}</div>'
+            prev_txt = f'<div class="dup-prev">{prev_label} {_fmt(key, p)}</div>'
         cls = "dup-node final" if final else "dup-node"
         return (f'<div class="{cls}"><div class="dup-name">{name}</div>'
                 f'<div class="dup-val">{_fmt(key, v)}</div>{delta}{prev_txt}</div>')
@@ -426,14 +432,24 @@ def build_dupont_html(fill: dict) -> str:
     parts = [f'<div class="dup-chain">{nodes}</div>']
     if verdict:
         parts.append(f'<div class="dup-verdict"><b>归因结论：</b>{verdict}</div>')
-    cap = f"{_esc(period)}累计" if period else "最新报告期累计"
     has_prev = any(v is not None for v in prev.values())
-    cmp_txt = " vs 去年同期累计" if has_prev else ""
-    parts.append(_chart_source(
-        "杜邦归因乘积链", f"东财 F10 主要财务指标（{cap}{cmp_txt}）",
-        "净利率×总资产周转率×权益乘数=ROE；报告期累计口径（非年化）；"
-        "加权 ROE 与三因子乘积存在口径差（加权平均 vs 期末权益），结论以方向为准；"
-        "变化标签 pct=百分点（净利率/ROE 的绝对变化）、%=相对变化（周转率/权益乘数）"))
+    if is_ttm:
+        cap = f"截至{_esc(period)} TTM" if period else "最新报告期 TTM"
+        cmp_txt = (f" vs 上年同期{_esc(prev_period)} TTM" if has_prev and prev_period
+                   else (" vs 上年同期 TTM" if has_prev else ""))
+        parts.append(_chart_source(
+            "杜邦归因乘积链", f"tushare 利润表/资产负债表（{cap}{cmp_txt}）",
+            "净利率×总资产周转率×权益乘数=ROE；TTM（滚动四季）口径：流量=去年全年−去年同期累计"
+            "+本期累计，均值=上年同季末与本季末平均（归母权益）；变化标签 pct=百分点"
+            "（净利率/ROE 的绝对变化）、%=相对变化（周转率/权益乘数）"))
+    else:
+        cap = f"{_esc(period)}累计" if period else "最新报告期累计"
+        cmp_txt = " vs 去年同期累计" if has_prev else ""
+        parts.append(_chart_source(
+            "杜邦归因乘积链", f"东财 F10 主要财务指标（{cap}{cmp_txt}）",
+            "净利率×总资产周转率×权益乘数=ROE；报告期累计口径（非年化）；"
+            "加权 ROE 与三因子乘积存在口径差（加权平均 vs 期末权益），结论以方向为准；"
+            "变化标签 pct=百分点（净利率/ROE 的绝对变化）、%=相对变化（周转率/权益乘数）"))
     return "".join(parts)
 
 

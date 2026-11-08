@@ -1274,22 +1274,35 @@ def test_gap_history_tp_fallback_dots():
 
 
 def test_dupont_chain():
-    """v5.8.0：杜邦归因乘积链（charts_l1.build_dupont_html，4.6）——四节点卡+同比幅度+
-    verdict+图注；四因子缺一/字段缺失返空串；无 prev 只显示本期。"""
+    """v5.8.0→v0.16.0：杜邦归因乘积链（charts_l1.build_dupont_html，4.6）——四节点卡+同比幅度+
+    verdict+图注；四因子缺一/字段缺失返空串；无 prev 只显示本期。basis="ttm" → 图注「截至某期
+    TTM」、同比标签「上年同期」且不出现「累计/非年化」；旧 fill 无 basis → legacy 累计口径
+    文案原样保留（存量报告兼容）。"""
     from charts_l1 import build_dupont_html
-    d = {"period": "2026三季", "roe": 16.1, "nm": 30.4, "turn": 0.313, "em": 1.70,
+    d = {"basis": "ttm", "period": "2026三季", "prev_period": "2025三季",
+         "roe": 16.1, "nm": 30.4, "turn": 0.313, "em": 1.70,
          "prev": {"roe": 8.3, "nm": 19.2, "turn": 0.258, "em": 1.65},
          "verdict": "净利率是主驱动（贡献约六成），与 4.4 毛利率归因一致"}
     html = build_dupont_html({"dupont": d})
     assert "dup-chain" in html and "净利率" in html and "ROE（加权）" in html
     assert "30.4%" in html and "+11.2pct" in html, "净利率 pct 点差"
     assert "+21.3%" in html, "周转率百分比变化"
-    assert "去年同期 19.2%" in html and "归因结论" in html and "东财 F10" in html
+    assert "上年同期 19.2%" in html and "归因结论" in html
+    assert "截至2026三季 TTM" in html, "TTM 图注：截至某期 TTM"
+    assert "TTM" in html and "报告期累计" not in html and "非年化" not in html, \
+        "TTM 口径不再标注「报告期累计（非年化）」"
     assert "pct=百分点" in html, "v5.8.5 图注口径说明：pct=百分点（率绝对变化）、%=相对变化"
     assert build_dupont_html({}) == ""
     assert build_dupont_html({"dupont": {"roe": 16.1}}) == "", "四因子缺一返空"
     only_cur = build_dupont_html({"dupont": {"roe": 16.1, "nm": 30.4, "turn": 0.313, "em": 1.70}})
     assert "dup-chain" in only_cur and "去年同期" not in only_cur
+    # legacy（旧 fill 无 basis）→ 累计口径文案原样保留
+    legacy = {"period": "2026三季", "roe": 16.1, "nm": 30.4, "turn": 0.313, "em": 1.70,
+              "prev": {"roe": 8.3, "nm": 19.2, "turn": 0.258, "em": 1.65},
+              "verdict": "净利率是主驱动（贡献约六成），与 4.4 毛利率归因一致"}
+    html_l = build_dupont_html({"dupont": legacy})
+    assert "2026三季累计" in html_l and " vs 去年同期累计" in html_l and "非年化" in html_l
+    assert "去年同期 19.2%" in html_l and "东财 F10" in html_l
 
 
 def test_growth_plot_accepts_consensus_only_year():

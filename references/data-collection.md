@@ -30,6 +30,10 @@ A 股 tushare E5 的完整 `detail/aim_detail` 同时随 quote 的 `gap_plot` �
 `norm_org` 合并机构别名并保留最新原始名；fill 的 `gap_plot.street` 仍照抄同一明细，禁手估。
 `1D.liquidity.ocf_short_cover` 统一用最近完整年度经营现金流÷短期有息负债，债务余额仍取
 报告日前最新可见报告期；短债覆盖 <1 且该比率 >2 才触发流动性上调一档。
+通用 F 九项的 **ROA 改善与资产周转改善为 TTM 口径**（唯一计算层，本期 vs 上年同期，
+公式与重述降级见 `scoring.md` 九项期间条款——同报告期内部多值冲突只涉该指标，F10↔
+tushare 跨源冲突只降级杜邦四因子，1D 两项仍为 tushare 单源 TTM 不参与混算；ROIC/OCF
+短债/现金跑道规则不变）。
 `roic_basis=normalized` 时，`roic_normalized_components` 必须保留三个完整年度值且与 ROIC
 中位数一致；`latest` 必须显式给 3/6/9/12 个月，缺组成、期间或不一致均不得评分。
 机械落盘缺失但已由公告/年报人工核实的字段，在该维 `score_inputs[dim].manual_evidence`

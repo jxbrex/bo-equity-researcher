@@ -530,41 +530,254 @@ def fetch_period_track(code: str, secucode: str = None) -> dict:
         return {}
 
 
-def fetch_dupont_factors(secucode: str) -> dict:
-    """杜邦四因子（v5.8.0，4.6 乘积链图数据源）：东财 F10 主要财务指标 ROEJQ（加权 ROE%）/
-    XSJLL（净利率%）/TOAZZL（总资产周转率，次）/QYCS（权益乘数），最新期 vs 去年同期
-    （同 mmdd、年 −1）。报告期累计口径（非年化）；本期四值缺一返回 {}，去年同期缺则仅本期
-    （无 prev 键）。period 标签复用 _QTR_NAME（如「2026三季」）。"""
+def _dup_tol(rv: float) -> float:
+    """杜邦 F10↔tushare 对账容差（与 validate_audit._tol_floor 同式，两处独立持有——
+    本模块不 import 校验层）：max(相对 1%, 绝对下限 0.005)（基准为 tushare 值 rv）。"""
+    return max(abs(rv) * 0.01, 0.005)
+
+
+def fetch_dupont_factors(pure: str, secucode: str = None) -> dict:
+    """杜邦四因子（v0.16.0 起 TTM 口径，4.6 乘积链图数据源）：改用唯一 TTM 计算层
+    compute_ttm_metrics（tushare income/balancesheet 归母口径，禁另写公式），输出
+    basis="ttm"——本期=最新可定位报告期 TTM，prev=上年同期 TTM（prev_period 标签可追溯）；
+    roe/nm 为百分数、turn/em 原值（与旧 fill 同形）。东财 F10 降为对账源：本期/上年同期
+    累计营收与归母净利与 tushare 差异超既有 1% 容差 → 判重述/来源冲突，不输出四因子
+    （不静默生成混合口径乘积链）；非正平均归母权益 → roe/权益乘数不适用，同样不输出；
+    缺组成期 → 对应侧降级（prev 不齐则整键省略），原因全部进 issues 可读。history=同公式
+    年度 TTM 四因子序列（旧→新，仅落盘供对账，不新增图）。tushare 利润表无数据 → {}
+    （同旧静默口径）；东财 F10 限流穿透硬停（v5.8.2 纪律）。"""
     try:
-        by_ed = {}
-        for r in _em_f10(secucode, size=_EM_F10_PAGE) or []:
-            ed = str(r.get("REPORT_DATE") or "")[:10].replace("-", "")
-            if len(ed) == 8:
-                by_ed.setdefault(ed, r)
-        if not by_ed:
+        inc = _pick_latest_per_period(_ts_stmt(pure, "income", rt1=True))
+        if not inc:
             return {}
+        bs = _pick_latest_per_period(_ts_stmt(pure, "balancesheet", rt1=True))
+        ttm = compute_ttm_metrics(inc, bs, date.today().strftime("%Y%m%d"))
+        issues = list(ttm.get("issues") or [])
+        out = {"basis": "ttm", "period": ttm.get("period"),
+               "prev_period": ttm.get("prev_period"), "issues": issues}
+        eds = [str(r.get("end_date") or "") for r in inc]
+        ed = max((e for e in eds if len(e) == 8 and e.isdigit()), default="")
+        prev_ed = f"{int(ed[:4]) - 1}{ed[4:]}" if ed else ""
 
-        def _pack(r):
-            vals = [r.get("ROEJQ"), r.get("XSJLL"), r.get("TOAZZL"), r.get("QYCS")]
-            if any(not isinstance(v, (int, float)) for v in vals):
+        # 东财 F10 对账：本期/上年同期累计营收与归母净利，超 1% 容差即判冲突（不输出四因子）
+        conflict = False
+        if secucode:
+            try:
+                f10 = {}
+                for r in _em_f10(secucode, size=_EM_F10_PAGE) or []:
+                    fed = str(r.get("REPORT_DATE") or "")[:10].replace("-", "")
+                    if len(fed) == 8:
+                        f10.setdefault(fed, r)
+                inc_by_ed = {str(r.get("end_date") or ""): r for r in inc}
+                for fed, owner in ((ed, "本期"), (prev_ed, "上年同期")):
+                    if not fed or fed not in f10 or fed not in inc_by_ed:
+                        continue
+                    em_row, ts_row = f10[fed], inc_by_ed[fed]
+                    for em_f, ts_f, name in (("TOTALOPERATEREVE", "total_revenue", "营收"),
+                                             ("PARENTNETPROFIT", "n_income_attr_p", "归母净利")):
+                        ev, tv = em_row.get(em_f), ts_row.get(ts_f)
+                        if not isinstance(ev, (int, float)) or not isinstance(tv, (int, float)) \
+                                or isinstance(ev, bool) or isinstance(tv, bool):
+                            continue
+                        ev, tv = float(ev), float(tv)
+                        if ev != ev or tv != tv:  # NaN≡缺失，不参与对账
+                            continue
+                        if abs(ev - tv) > _dup_tol(tv):
+                            conflict = True
+                            dev = (f"偏差 {abs(ev - tv) / abs(tv) * 100:.1f}% > 1% 容差"
+                                   if tv else f"绝对偏差 {abs(ev - tv) / 1e8:.2f}亿")
+                            issues.append(
+                                f"重述/来源冲突：{owner}（{fed[:4]}-{fed[4:6]}-{fed[6:]}）{name} "
+                                f"东财F10={ev / 1e8:.2f}亿 vs tushare={tv / 1e8:.2f}亿（{dev}）"
+                                f"——TTM 四因子不输出，请人工核实重述")
+            except RateLimitError:
+                raise
+            except Exception as exc:
+                # fail-open：四因子照常输出，但不得静默冒充已核对——留痕对账未执行与异常类型
+                issues.append(f"F10对账未执行：东财 F10 取数/解析失败（{type(exc).__name__}），"
+                              f"TTM 四因子未经对账直接采用 tushare 单源口径")
+
+        def _factors(m):
+            if m is None or any(m.get(k) is None for k in ("roe", "nm", "turnover", "em")):
                 return None
-            return {"roe": round(vals[0], 1), "nm": round(vals[1], 1),
-                    "turn": round(vals[2], 3), "em": round(vals[3], 2)}
+            return {"roe": round(m["roe"] * 100, 1), "nm": round(m["nm"] * 100, 1),
+                    "turn": round(m["turnover"], 3), "em": round(m["em"], 2)}
 
-        ed = max(by_ed)
-        cur = _pack(by_ed[ed])
-        if not cur:
-            return {}
-        out = {"period": f"{ed[:4]}{_QTR_NAME.get(ed[4:], ed[4:])}", **cur}
-        prev = by_ed.get(f"{int(ed[:4]) - 1}{ed[4:]}")
-        p = _pack(prev) if prev else None
-        if p:
-            out["prev"] = p
+        cur = None if conflict else _factors(ttm.get("current"))
+        if cur:
+            out.update(cur)
+            prev = _factors(ttm.get("previous"))
+            if prev:
+                out["prev"] = prev
+        # 同公式年度历史序列（旧→新；仅落盘对账，与本期是否冲突无关）
+        hist = []
+        for a_ed in sorted({e for e in eds if len(e) == 8 and e.isdigit() and e.endswith("1231")}):
+            f = _factors(compute_ttm_metrics(inc, bs, a_ed)["current"])
+            if f:
+                hist.append({"period": f"{a_ed[:4]}年报", **f})
+        if hist:
+            out["history"] = hist
         return out
     except RateLimitError:
         raise
     except Exception:
         return {}
+
+
+# ---------------- 唯一 TTM 计算层（1D 与杜邦共用） ----------------
+# 期间选择、同报告期去重/冲突守卫、TTM 差分与均值口径只此一处；调用方只负责
+# 按「报告日前可见」过滤好 tushare income/balancesheet 行并传入（本层零 I/O）。
+
+_TTM_METRIC_KEYS = ("revenue", "net_profit", "parent_net_profit", "avg_assets",
+                    "avg_parent_equity", "roa", "turnover", "nm", "em", "roe")
+_TTM_FLOW_FIELDS = (("total_revenue", "revenue"), ("n_income", "net_profit"),
+                    ("n_income_attr_p", "parent_net_profit"))
+
+
+def _ttm_period_map(rows: list, fields: tuple, issues: list, kind: str) -> dict:
+    """报告期行 → {end_date: {field: 值或 None}}（重述守卫去重）。
+    同报告期多行：有 report_type=="1" 只取该类行（tushare 同返调整前/后多行，口径不同
+    会造成伪冲突）；同字段出现多个不同非 None 值=重述冲突，该期该字段按缺失处理并留痕
+    （不猜哪版对）；值一致视为重复公告直接采纳；NaN 按 None 等价归一（跳过，不参与
+    冲突判定，避免污染 TTM 结果）。"""
+    by_ed: dict = {}
+    for r in rows or []:
+        ed = str(r.get("end_date") or "")
+        if len(ed) == 8 and ed.isdigit():
+            by_ed.setdefault(ed, []).append(r)
+    out = {}
+    for ed, rs in by_ed.items():
+        core = [r for r in rs if str(r.get("report_type")) == "1"] or rs
+        row = {}
+        for f in fields:
+            vals = set()
+            for r in core:
+                try:
+                    v = float(r.get(f))
+                except (TypeError, ValueError):
+                    continue
+                if v != v:  # NaN≡None：不参与取值也不构成伪冲突
+                    continue
+                vals.add(v)
+            if len(vals) > 1:
+                choices = "、".join(f"{v:g}" for v in sorted(vals))
+                issues.append(f"冲突：{ed[:4]}-{ed[4:6]}-{ed[6:]} {kind}字段 {f} 存在不同值"
+                              f"（{choices}），该期该字段按缺失处理")
+                row[f] = None
+            else:
+                row[f] = next(iter(vals)) if vals else None
+        out[ed] = row
+    return out
+
+
+def compute_ttm_metrics(income_rows: list, balancesheet_rows: list, as_of: str) -> dict:
+    """唯一 TTM 指标计算层（纯函数，零网络/文件 I/O）：1D 与杜邦共用同一份口径。
+    income_rows/balancesheet_rows = 调用方按报告日前可见性过滤好的 tushare 行；
+    as_of = 目标报告期截止日（YYYYMMDD，可带连字符），期间选择取不晚于 as_of 的
+    最新利润表报告期（as_of 晚于全部数据时取最新期，故 2020 等基期靠显式 as_of 直达，
+    不依赖任何全局取数窗口）。
+
+    口径：TTM 流量 = 去年全年 − 去年同期累计 + 本期累计（年度期退化为全年本身）；
+    平均总资产/平均归母权益：季度期 =（上年同季末 + 本季末）/2，年度期 =（年初 + 年末）/2
+    （年初/上年同季末均指上一报告期行——历史序列须按需多取一个期初年度）。
+    ROA 用含少数股东净利润；杜邦三因子用归母口径：nm=归母净利/营收、em=平均总资产/
+    平均归母权益、roe=归母净利/平均归母权益（nm×em×turnover==roe 浮点容差内成立）。
+    金额输出元（原值），比率输出小数（非百分比）；NaN 输入按 None 等价归一（不污染结果）。
+
+    降级：缺期/重述冲突/非正分母一律按缺失（None）处理并在 issues 留可读说明，绝不猜数。
+    status：本期十指标齐备为 "ok"，本期可定位但有指标缺失为 "partial"，本期无法定位为
+    "unavailable"（status 只看本期；previous 的缺口记入 issues 不影响 status）。"""
+    issues: list = []
+    empty = dict.fromkeys(_TTM_METRIC_KEYS)
+
+    def _ret(status, period=None, prev_period=None, current=None, previous=None):
+        return {"status": status, "period": period, "prev_period": prev_period,
+                "current": current or dict(empty), "previous": previous or dict(empty),
+                "issues": issues}
+
+    as_of_s = str(as_of or "").replace("-", "")
+    if len(as_of_s) != 8 or not as_of_s.isdigit():
+        issues.append(f"as_of={as_of!r} 不是合法报告期（YYYYMMDD），无法定位本期")
+        return _ret("unavailable")
+    inc = _ttm_period_map(income_rows, tuple(f for f, _ in _TTM_FLOW_FIELDS), issues, "利润表")
+    bs = _ttm_period_map(balancesheet_rows, ("total_assets", "total_hldr_eqy_exc_min_int"),
+                         issues, "资产负债表")
+    if not inc:
+        issues.append("利润表输入无任何有效报告期行，TTM 指标不可得")
+        return _ret("unavailable")
+    eds = [ed for ed in inc if ed <= as_of_s]
+    if not eds:
+        issues.append(f"as_of={as_of_s} 之前无利润表报告期行，TTM 指标不可得")
+        return _ret("unavailable")
+    ed = max(eds)
+    py = str(int(ed[:4]) - 1)
+    prev_ed = f"{py}{ed[4:]}"
+    period = f"{ed[:4]}{_QTR_NAME.get(ed[4:], ed[4:])}"
+    prev_period = f"{prev_ed[:4]}{_QTR_NAME.get(prev_ed[4:], prev_ed[4:])}"
+
+    def _flows(ed_, owner):
+        """ed_ 期 TTM 三流量；组成期缺失 → 对应流量 None 并在 issues 留可读说明。"""
+        y, mmdd = ed_[:4], ed_[4:]
+        cur_row = inc.get(ed_)
+        if mmdd == "1231":
+            need = {"本期": cur_row}
+        else:
+            need = {"本期累计": cur_row, "去年全年": inc.get(f"{int(y) - 1}1231"),
+                    "去年同期累计": inc.get(f"{int(y) - 1}{mmdd}")}
+        lack = [n for n, r in need.items() if r is None]
+        if lack:
+            issues.append(f"缺期：{owner}（{ed_}）缺{'、'.join(lack)}利润表行，"
+                          f"TTM 流量按缺失处理")
+        out = {}
+        for f, k in _TTM_FLOW_FIELDS:
+            vals = [(r or {}).get(f) for r in need.values()]
+            out[k] = None if any(v is None for v in vals) else (
+                vals[0] if mmdd == "1231" else vals[1] - vals[2] + vals[0])
+        return out
+
+    def _avg(ed_, owner, field, name):
+        """季度期=（上年同季末 + 本季末）/2；年度期=（年初[上年末] + 年末）/2。"""
+        mmdd = ed_[4:]
+        a_ed = f"{int(ed_[:4]) - 1}1231" if mmdd == "1231" else \
+               f"{int(ed_[:4]) - 1}{mmdd}"
+        a = (bs.get(a_ed) or {}).get(field)
+        b = (bs.get(ed_) or {}).get(field)
+        if a is None or b is None:
+            miss = [f"{x} 期末" for x, v in ((a_ed, a), (ed_, b)) if v is None]
+            issues.append(f"缺期：{owner}（{ed_}）缺{'、'.join(miss)}{name}行，均值按缺失处理")
+            return None
+        return (a + b) / 2
+
+    def _metrics(ed_, owner):
+        m = dict(empty)
+        fl = _flows(ed_, owner)
+        m.update(fl)
+        m["avg_assets"] = _avg(ed_, owner, "total_assets", "总资产")
+        m["avg_parent_equity"] = _avg(ed_, owner, "total_hldr_eqy_exc_min_int", "归母权益")
+        if m["avg_assets"] is not None and m["avg_assets"] <= 0:
+            issues.append(f"非正分母：{owner}（{ed_}）平均总资产 {m['avg_assets'] / 1e8:.2f}亿 ≤0，"
+                          f"roa/周转率不适用")
+        if m["avg_parent_equity"] is not None and m["avg_parent_equity"] <= 0:
+            issues.append(f"非正分母：{owner}（{ed_}）平均归母权益 "
+                          f"{m['avg_parent_equity'] / 1e8:.2f}亿 ≤0，权益乘数/roe 不适用")
+        if fl["net_profit"] is not None and m["avg_assets"] is not None and m["avg_assets"] > 0:
+            m["roa"] = fl["net_profit"] / m["avg_assets"]
+        if fl["revenue"] is not None and m["avg_assets"] is not None and m["avg_assets"] > 0:
+            m["turnover"] = fl["revenue"] / m["avg_assets"]
+        if fl["parent_net_profit"] is not None and fl["revenue"]:
+            m["nm"] = fl["parent_net_profit"] / fl["revenue"]
+        if m["avg_assets"] is not None and m["avg_parent_equity"] is not None \
+                and m["avg_parent_equity"] > 0:
+            m["em"] = m["avg_assets"] / m["avg_parent_equity"]
+        if fl["parent_net_profit"] is not None and m["avg_parent_equity"] is not None \
+                and m["avg_parent_equity"] > 0:
+            m["roe"] = fl["parent_net_profit"] / m["avg_parent_equity"]
+        return m
+
+    current = _metrics(ed, "本期")
+    previous = _metrics(prev_ed, "上年同期")
+    status = "ok" if all(v is not None for v in current.values()) else "partial"
+    return _ret(status, period, prev_period, current, previous)
 
 
 def fetch_hk_period_track(code: str) -> dict:

@@ -481,7 +481,8 @@ def visual_fill(**over):
                                  "close_high": 15, "close_low": 8, "intraday_high": 16, "intraday_low": 7,
                                  "months": 36, "ohlc_months": 36, "window_years": 3},
             "chips": {}, "capital": {}},
-        "dupont": {"period": "2025年报", "roe": 16.1, "nm": 30.4, "turn": 0.313, "em": 1.70,
+        "dupont": {"basis": "ttm", "period": "2025年报", "prev_period": "2024年报",
+                   "roe": 16.1, "nm": 30.4, "turn": 0.313, "em": 1.70,
                    "prev": {"roe": 8.3, "nm": 19.2, "turn": 0.258, "em": 1.65},
                    "verdict": "净利率是主驱动（贡献约六成），与 4.4 毛利率归因一致"},
     })

@@ -5,7 +5,7 @@ from datetime import date, timedelta
 
 import em_core as _C
 from em_core import to_ts_code, RateLimitError
-from em_finance import _compose_annual_row, _pick_latest_per_period, _em_f10, _nco_bad
+from em_finance import _compose_annual_row, _pick_latest_per_period, _em_f10, _nco_bad, compute_ttm_metrics
 from quality_rules import PROFILE_KIND, PROFILE_FLAGS, F_ITEM_IDS, requires_normalized_roic
 
 
@@ -142,29 +142,23 @@ def _improve(current, previous, strict=True):
 
 def _debt(raw):
     bs = raw.get("balancesheet") or {}
-    required = ("st_borr", "non_cur_liab_due_1y", "lt_borr", "bond_payable", "money_cap")
-    if any(bs.get(key) is None for key in required):
-        return None, None, None, None
     short_keys = ["st_borr", "non_cur_liab_due_1y"]
     if bs.get("st_bonds_payable") is not None:
         short_keys.append("st_bonds_payable")
-    st = sum(_num(bs.get(key)) for key in short_keys)
-    lt = sum(_num(bs.get(key)) for key in ("lt_borr", "bond_payable"))
+    st = (sum(_num(bs.get(key)) for key in short_keys)
+          if all(bs.get(key) is not None for key in ("st_borr", "non_cur_liab_due_1y"))
+          else None)
+    lt = (sum(_num(bs.get(key)) for key in ("lt_borr", "bond_payable"))
+          if all(bs.get(key) is not None for key in ("lt_borr", "bond_payable"))
+          else None)
     money = _num(bs.get("money_cap"))
-    cover = money / st if st > 0 else 1e9
+    if st is None:
+        cover = None
+    elif st > 0:
+        cover = money / st if money is not None else None
+    else:
+        cover = 1e9
     return st, lt, money, cover
-
-
-def _roa(raw):
-    income, bs = raw.get("income") or {}, raw.get("balancesheet") or {}
-    profit, assets = _num(income.get("n_income")), _num(bs.get("total_assets"))
-    return profit / assets if profit is not None and assets else None
-
-
-def _turnover(raw):
-    income, bs = raw.get("income") or {}, raw.get("balancesheet") or {}
-    revenue, assets = _num(income.get("total_revenue")), _num(bs.get("total_assets"))
-    return revenue / assets if revenue is not None and assets else None
 
 
 def _fmt_value(value, digits=1):
@@ -188,12 +182,14 @@ def _change_text(current, previous, unit="", digits=1, relative=False):
     return f"{text}（{delta_text}{delta_unit}）"
 
 
-def _f_item_evidence(rows, current, previous, current_raw, previous_raw, shares):
+def _f_item_evidence(rows, current, previous, current_raw, previous_raw, shares, ttm=None):
     if not current:
         return {"period": "", "items": {}}
     current_year = current["END_DATE"][:4]
     previous_year = previous["END_DATE"][:4] if previous else None
     period = f"{previous_year}→{current_year}年报" if previous_year else f"{current_year}年报"
+    ttm_current = (ttm or {}).get("current") or {}
+    ttm_previous = (ttm or {}).get("previous") or {}
     long_current = _debt(current_raw)[1] / 1e8 if current_raw and _debt(current_raw)[1] is not None else None
     long_previous = _debt(previous_raw)[1] / 1e8 if previous_raw and _debt(previous_raw)[1] is not None else None
     cover_current = _debt(current_raw)[3] if current_raw else None
@@ -218,8 +214,8 @@ def _f_item_evidence(rows, current, previous, current_raw, previous_raw, shares)
                             if current.get("KCFJCXSYJLR") is not None else "未获取"),
         "ocf_positive": (f"净额{_fmt_value(current.get('NETCASH_OPERATE_PK') / 1e8)}亿元"
                          if current.get("NETCASH_OPERATE_PK") is not None else "未获取"),
-        "roa_improving": _change_text(_roa(current_raw) * 100 if current_raw and _roa(current_raw) is not None else None,
-                                      _roa(previous_raw) * 100 if previous_raw and _roa(previous_raw) is not None else None,
+        "roa_improving": _change_text(ttm_current.get("roa") * 100 if ttm_current.get("roa") is not None else None,
+                                      ttm_previous.get("roa") * 100 if ttm_previous.get("roa") is not None else None,
                                       "%", 2),
         "cash_quality_ok": (f"{len(cash_values)}个有效年度最低 {min(cash_values):.2f} 倍（仅净利润为正年度）"
                             if cash_values else "未获取"),
@@ -228,11 +224,16 @@ def _f_item_evidence(rows, current, previous, current_raw, previous_raw, shares)
         "no_dilution": _change_text(share_current, share_previous, "亿股", 2, relative=True),
         "gross_margin_improving": _change_text(current.get("XSMLL"),
                                                previous.get("XSMLL") if previous else None, "%", 1),
-        "asset_turnover_improving": _change_text(_turnover(current_raw) if current_raw else None,
-                                                  _turnover(previous_raw) if previous_raw else None,
+        "asset_turnover_improving": _change_text(ttm_current.get("turnover"),
+                                                  ttm_previous.get("turnover"),
                                                   " 次", 3, relative=True),
     }
-    return {"period": period, "items": items}
+    out = {"period": period, "items": items}
+    ttm_period = (ttm or {}).get("period")
+    if ttm_period:
+        label = f"TTM {ttm['prev_period']}→{ttm_period}"
+        out["periods"] = {"roa_improving": label, "asset_turnover_improving": label}
+    return out
 
 
 def _cash_runway(rows, raw, latest_raw=None):
@@ -303,10 +304,13 @@ def fetch_quality_inputs(code: str, secucode: str, as_of: str, profile: dict) ->
     current_raw = raw.get(current["END_DATE"]) if current else None
     liquidity_raw = latest_raw or current_raw
     previous_raw = raw.get(previous["END_DATE"]) if previous else None
+    ttm_income, _ = _visible(_stmt(code, "income", as_of, annual=False), as_of)
+    ttm_balance, _ = _visible(_stmt(code, "balancesheet", as_of, annual=False), as_of)
+    ttm = compute_ttm_metrics(ttm_income, ttm_balance, as_of)
     f_items = {
         "profit_positive": _gt(current.get("KCFJCXSYJLR")) if current else None,
         "ocf_positive": _gt(current.get("NETCASH_OPERATE_PK")) if current else None,
-        "roa_improving": _improve(_roa(current_raw), _roa(previous_raw)) if current_raw and previous_raw else None,
+        "roa_improving": _improve(ttm["current"].get("roa"), ttm["previous"].get("roa")),
         "cash_quality_ok": (not _nco_bad([r["NCO_NETPROFIT"] for r in rows if r.get("NCO_NETPROFIT") is not None], 2)
                             if len([r for r in rows if r.get("NCO_NETPROFIT") is not None]) >= 2 else None),
         "long_debt_down": (_debt(current_raw)[1] < _debt(previous_raw)[1]
@@ -321,10 +325,9 @@ def fetch_quality_inputs(code: str, secucode: str, as_of: str, profile: dict) ->
                         and _share_before(shares, previous["END_DATE"]) is not None else None),
         "gross_margin_improving": (_improve(current.get("XSMLL"), previous.get("XSMLL"))
                                    if current and previous else None),
-        "asset_turnover_improving": (_improve(_turnover(current_raw), _turnover(previous_raw))
-                                     if current_raw and previous_raw else None),
+        "asset_turnover_improving": _improve(ttm["current"].get("turnover"), ttm["previous"].get("turnover")),
     }
-    f_item_evidence = _f_item_evidence(rows, current, previous, current_raw, previous_raw, shares)
+    f_item_evidence = _f_item_evidence(rows, current, previous, current_raw, previous_raw, shares, ttm)
     for name in F_ITEM_IDS:
         _coverage_value(result["coverage"], f"1D.f_items.{name}", f_items[name], not rows)
     st, lt, money, cover = _debt(liquidity_raw) if liquidity_raw else (None, None, None, None)

@@ -562,7 +562,9 @@ def _check_dupont(fill: dict, warns: list) -> None:
     """v5.8.0 dupont（4.6 杜邦乘积链）校验：① 结构——roe/nm/turn/em 四因子缺一图不生成
     （此处提示等于白填）；verdict 为唯一手填槽位，缺失或过短告警。② 照抄对账——fill 四因子
     （含 prev 去年同期）与 quote.source_file 落盘 dupont 同值（容差：相对 1%，下限 0.005，
-    同 street 款）；fill 已填而落盘无 dupont 键 → 手填嫌疑告警（提示重跑 em_fetch --out）。"""
+    同 street 款）；fill 已填而落盘无 dupont 键 → 手填嫌疑告警（提示重跑 em_fetch --out）。
+    ③ v0.16.0 basis 口径——fill 与落盘皆无 basis 视为旧累计口径（legacy 兼容放行）；任一侧
+    声明 basis="ttm" 而另一侧无/不同 → 硬拒（禁新旧口径混填出混合乘积链）。"""
     d = fill.get("dupont")
     if d is None:
         return
@@ -587,6 +589,12 @@ def _check_dupont(fill: dict, warns: list) -> None:
     if not isinstance(ref_d, dict):
         warns.append("dupont 已填但落盘 JSON 无 dupont 键：手填嫌疑——请重跑 em_fetch --out 后照抄")
         return
+    fb = str(d.get("basis") or "").strip() or None
+    rb = str(ref_d.get("basis") or "").strip() or None
+    if fb != rb:
+        raise ValueError(f"dupont basis 不一致：fill={fb or 'legacy（无 basis，旧累计口径）'} vs "
+                         f"落盘={rb or 'legacy（无 basis，旧累计口径）'}——禁止新旧口径混填，"
+                         f"以 em_fetch --out 落盘为准照抄（或同步重跑取数）后重渲")
     # v5.8.2：逐键照抄对账收敛 _audit_pairs 单源（本处无漏抄分支：fv 缺失静默跳过）
     _audit_pairs(warns,
                  [(k, _num(d.get(k)), _num(ref_d.get(k))) for k in ("roe", "nm", "turn", "em")],
@@ -1278,22 +1286,32 @@ def _check_quality_inputs(fill: dict, warns: list) -> None:
               "1F": ("roic", "wacc", "incremental_roic", "roic_period_months",
                      "roic_basis", "cash_runway_months")}
 
+    def _documented(dim, path):
+        evidence_map = (score_inputs.get(dim) or {}).get("manual_evidence") or {}
+        relative_path = path.split(".", 1)[1]
+        evidence = evidence_map.get(relative_path) if isinstance(evidence_map, dict) else None
+        return (isinstance(evidence, dict)
+                and bool(str(evidence.get("source") or "").strip())
+                and bool(str(evidence.get("note") or "").strip()))
+
+    def _f_item_fact_leaf(path):
+        # 仅 f_item_evidence.items 的叶级事实允许补“未获取”，父级说明一律无效
+        parts = path.split(".")
+        return (len(parts) == 4 and parts[1] == "f_item_evidence"
+                and parts[2] == "items" and parts[3] in F_ITEM_IDS)
+
     def _compare(dim, path, fill_value, ref_value):
         if fill_value is None and ref_value is not None:
             warns.append(f"quality_inputs.{path} 漏抄（落盘 {ref_value!r}）")
         elif fill_value is not None and ref_value is None:
-            evidence_map = (score_inputs.get(dim) or {}).get("manual_evidence") or {}
-            relative_path = path.split(".", 1)[1]
-            evidence = evidence_map.get(relative_path) if isinstance(evidence_map, dict) else None
-            documented = (not path.startswith("1D.f_item_evidence.")
-                          and isinstance(evidence, dict)
-                          and bool(str(evidence.get("source") or "").strip())
-                          and bool(str(evidence.get("note") or "").strip()))
+            documented = _documented(dim, path) and not path.startswith("1D.f_item_evidence.")
             if not documented:
                 warns.append(f"quality_inputs.{path} 落盘缺失/未取到，但 fill 已有 {fill_value!r}："
                              "请补替代来源与证据，不得冒充机械照抄")
         elif fill_value is not None and fill_value != ref_value:
-            warns.append(f"quality_inputs.{path} 与落盘不一致：fill={fill_value!r} vs 落盘={ref_value!r}")
+            unobtained = isinstance(ref_value, str) and ref_value.strip() == "未获取"
+            if not (unobtained and _f_item_fact_leaf(path) and _documented(dim, path)):
+                warns.append(f"quality_inputs.{path} 与落盘不一致：fill={fill_value!r} vs 落盘={ref_value!r}")
 
     normalized_roic = (score_inputs.get("1F") or {}).get("roic_basis") == "normalized"
     ref_normalized = (package.get("1F") or {}).get("roic_basis") == "normalized"
@@ -1311,6 +1329,21 @@ def _check_quality_inputs(fill: dict, warns: list) -> None:
                     if dim == "1D" and key == "red_flags" and child == "gross_margin_anomaly" \
                             and str(fill.get("date") or "") >= GROSS_MARGIN_RULE_CHANGE_DATE:
                         continue
-                    _compare(dim, f"{dim}.{key}.{child}", (fv or {}).get(child), (rv or {}).get(child))
+                    child_fv, child_rv = (fv or {}).get(child), (rv or {}).get(child)
+                    child_path = f"{dim}.{key}.{child}"
+                    if child_path == "1D.f_item_evidence.items" \
+                            and isinstance(child_fv, dict) and isinstance(child_rv, dict):
+                        for leaf in sorted(set(child_fv) | set(child_rv)):
+                            _compare(dim, f"{child_path}.{leaf}", child_fv.get(leaf), child_rv.get(leaf))
+                        continue
+                    _compare(dim, child_path, child_fv, child_rv)
             else:
                 _compare(dim, f"{dim}.{key}", fv, rv)
+    f_items_fill = (score_inputs.get("1D") or {}).get("f_items") or {}
+    facts_fill = ((score_inputs.get("1D") or {}).get("f_item_evidence") or {}).get("items") or {}
+    for name in F_ITEM_IDS:
+        value = f_items_fill.get(name)
+        if isinstance(value, bool) and str(facts_fill.get(name) or "").strip() == "未获取":
+            warns.append(f"1D.f_items.{name} 已给出{'通过' if value else '未通过'}判定，"
+                         f"但数据依据 f_item_evidence.items.{name} 仍为未获取："
+                         "请补实际数值并登记叶级 source+note")

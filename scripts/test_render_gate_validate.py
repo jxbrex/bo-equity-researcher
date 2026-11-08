@@ -130,6 +130,34 @@ def test_hero_cross_validate():
     assert "target_sub_html 含具体" in warns
 
 
+def test_dupont_basis_consistency_gate(tmp_path):
+    """v0.16.0：dupont basis 门禁——fill 与落盘 dupont 同口径放行（皆无 basis=旧累计 legacy，
+    或皆 basis="ttm"）；一侧有一侧无/两侧不同 → 拒渲染（禁新旧口径混填出混合乘积链）。"""
+    def _ref(dupont):
+        return write_fill({"price": 10.0, "pe_ttm": 11.0, "dupont": dupont},
+                          str(tmp_path), name="dup_quote.json")
+
+    verdict = "净利率是主驱动（贡献约六成），与 4.4 毛利率归因一致——基础测试判词。"
+    ttm = {"basis": "ttm", "period": "2026三季", "prev_period": "2025三季",
+           "roe": 16.1, "nm": 30.4, "turn": 0.313, "em": 1.70,
+           "prev": {"roe": 8.3, "nm": 19.2, "turn": 0.258, "em": 1.65},
+           "verdict": verdict}
+    legacy = {k: v for k, v in ttm.items() if k != "basis"}
+    # 双 legacy / 双 ttm → 放行（basis 不告警）
+    warns = validate_stderr(minimal_fill(quote={"source_file": _ref(legacy)}, dupont=legacy))
+    assert "dupont basis" not in warns
+    warns = validate_stderr(minimal_fill(quote={"source_file": _ref(ttm)}, dupont=ttm))
+    assert "dupont basis" not in warns
+    # fill ttm vs 落盘 legacy → 拒；反向亦然
+    expect_valueerror(minimal_fill(quote={"source_file": _ref(legacy)}, dupont=ttm),
+                      "fill ttm 落盘 legacy 混用应拒", kw="dupont basis")
+    expect_valueerror(minimal_fill(quote={"source_file": _ref(ttm)}, dupont=legacy),
+                      "fill legacy 落盘 ttm 混用应拒", kw="dupont basis")
+    # 落盘无 dupont 键（旧 quote 落盘）→ 既有「手填嫌疑」软告警路径不破
+    warns = validate_stderr(minimal_fill(quote={"source_file": _ref(None)}, dupont=ttm))
+    assert "落盘 JSON 无 dupont 键" in warns
+
+
 def test_gap_growth_consensus_validate():
     """v5.1.2：gap_plot 净利维度（consensus 对落盘 np_avg、ours 对 base.profit）与
     growth_plot 换算对账（np_consensus 对落盘换算增速、base.profit 换算增速越界）。"""
@@ -1259,6 +1287,71 @@ def test_quality_inputs_manual_evidence_only_covers_missing_leaf_values():
         fill = _prepare_quality_quote(fill, d, payload)
         out = validate_stderr(fill)
         assert "不一致" in out and "short_cover" in out
+
+
+def test_manual_evidence_closes_unobtained_f_item_evidence_leaf():
+    names = ["profit_positive", "ocf_positive", "roa_improving", "cash_quality_ok",
+             "long_debt_down", "short_cover_improving", "no_dilution",
+             "gross_margin_improving", "asset_turnover_improving"]
+
+    def _case(fill_value, fact_text, manual, ref_fact="未获取"):
+        fill = v2_fill()
+        spec = fill["score_inputs"]["1D"]
+        spec["f_item_evidence"] = {
+            "period": "2024→2025年报",
+            "items": {name: ("未获取" if name == "long_debt_down" else "100.0 → 90.0亿元（-10.0%）")
+                      for name in names}}
+        payload = _quality_payload(fill)
+        payload["1D"]["f_items"]["long_debt_down"] = None
+        payload["1D"]["f_item_evidence"]["items"]["long_debt_down"] = ref_fact
+        spec["f_items"]["long_debt_down"] = fill_value
+        spec["f_item_evidence"]["items"]["long_debt_down"] = fact_text
+        if manual:
+            spec["manual_evidence"] = manual
+        with tempfile.TemporaryDirectory() as d:
+            fill = _prepare_quality_quote(fill, d, payload)
+            return validate_stderr(fill)
+
+    bool_evidence = {"source": "2025 年报资产负债表", "note": "应付债券余额为0，长期有息负债逐项核对"}
+    fact_evidence = {"source": "2025 年报资产负债表", "note": "应付债券为0，长期借款 8.0 → 6.0亿元"}
+    # 人工补入布尔与实际证据文本（叶级 source+note）：告警关闭
+    out = _case(True, "0.0 → 0.0亿元（0.0%）",
+                {"f_items.long_debt_down": bool_evidence,
+                 "f_item_evidence.items.long_debt_down": fact_evidence})
+    assert "quality_inputs.1D.f_items.long_debt_down" not in out
+    assert "quality_inputs.1D.f_item_evidence.items.long_debt_down" not in out
+    # 只改布尔值、证据仍“未获取”：证据断链告警
+    out = _case(True, "未获取", {"f_items.long_debt_down": bool_evidence})
+    assert "1D.f_items.long_debt_down" in out and "未获取" in out
+    # 补了文本但缺叶级 source+note：仍告警
+    out = _case(True, "0.0 → 0.0亿元（0.0%）", {"f_item_evidence.items": fact_evidence})
+    assert "quality_inputs.1D.f_item_evidence.items.long_debt_down" in out
+    # 落盘已有实际数值时不得覆盖冲突值
+    out = _case(True, "0.0 → 0.0亿元（0.0%）",
+                {"f_item_evidence.items.long_debt_down": fact_evidence},
+                ref_fact="100.0 → 90.0亿元（-10.0%）")
+    assert "quality_inputs.1D.f_item_evidence.items.long_debt_down" in out
+    assert "不一致" in out
+
+
+def test_f_items_bool_filled_but_fact_unobtained_with_whitespace_warns():
+    """债务布尔断链检查：事实「未获取」带首尾空白时也必须告警（统一 strip 比较）。"""
+    fill = v2_fill()
+    spec = fill["score_inputs"]["1D"]
+    names = ["profit_positive", "ocf_positive", "roa_improving", "cash_quality_ok",
+             "long_debt_down", "short_cover_improving", "no_dilution",
+             "gross_margin_improving", "asset_turnover_improving"]
+    spec["f_item_evidence"] = {
+        "period": "2024→2025年报",
+        "items": {name: ("  未获取  " if name == "long_debt_down" else "100.0 → 90.0亿元（-10.0%）")
+                  for name in names}}
+    payload = _quality_payload(fill)
+    payload["1D"]["f_item_evidence"]["items"]["long_debt_down"] = "  未获取  "
+    spec["f_items"]["long_debt_down"] = True
+    with tempfile.TemporaryDirectory() as d:
+        fill = _prepare_quality_quote(fill, d, payload)
+        out = validate_stderr(fill)
+    assert "1D.f_items.long_debt_down" in out and "仍为未获取" in out
 
 
 def test_quality_inputs_profile_and_future_dates_are_rejected():

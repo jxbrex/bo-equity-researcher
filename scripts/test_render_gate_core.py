@@ -1119,6 +1119,59 @@ def test_score_detail_renders_f_item_evidence_as_compact_table():
     assert "<caption>" in html and 'scope="col"' in html
 
 
+def test_score_detail_shows_ttm_and_annual_periods_separately():
+    names = ("profit_positive", "ocf_positive", "roa_improving", "cash_quality_ok",
+             "long_debt_down", "short_cover_improving", "no_dilution",
+             "gross_margin_improving", "asset_turnover_improving")
+    facts = {name: "100.0 → 90.0亿元（-10.0%）" for name in names}
+    ttm = "TTM 2025三季→2026三季"
+    result = {"base": 7.0, "cap": None, "final": 7.0, "rule_steps": [
+        {"id": "1D.F.HITS", "evidence": "命中9/9", "delta": 0}]}
+    spec = {"f_items": {name: True for name in names},
+            "f_item_evidence": {"period": "2024→2025年报", "items": facts,
+                                "periods": {"roa_improving": ttm,
+                                            "asset_turnover_improving": ttm}}}
+    html = R._build_score_detail("1D", result, spec)
+    assert html.count(ttm) == 2  # 仅 TTM 两项带期间标注，年度项不标
+    assert "口径：2024→2025年报" in html
+    assert "ROA 与资产周转率按期末总资产计算" not in html
+    # 旧 fill 无 periods：不渲染 TTM 标注，表注同样不再写期末总资产口径
+    legacy = {"f_items": {name: True for name in names},
+              "f_item_evidence": {"period": "2024→2025年报", "items": facts}}
+    legacy_html = R._build_score_detail("1D", result, legacy)
+    assert "TTM" not in legacy_html
+    # 旧 fill 无 periods：保留历史表注「期末总资产」口径说明（终审裁决，v0.16.0 修复）
+    assert "ROA 与资产周转率按期末总资产计算" in legacy_html
+    assert "口径：2024→2025年报" in legacy_html
+
+
+def test_score_detail_shows_manual_evidence_instead_of_unobtained_fact():
+    names = ("profit_positive", "ocf_positive", "roa_improving", "cash_quality_ok",
+             "long_debt_down", "short_cover_improving", "no_dilution",
+             "gross_margin_improving", "asset_turnover_improving")
+    base_facts = {name: "100.0 → 90.0亿元（-10.0%）" for name in names}
+
+    def _html(fact_text):
+        facts = dict(base_facts, long_debt_down=fact_text)
+        spec = {"f_items": {name: True for name in names},
+                "f_item_evidence": {"period": "2024→2025年报", "items": facts},
+                "manual_evidence": {
+                    "f_item_evidence.items.long_debt_down": {
+                        "source": "2025年报资产负债表",
+                        "note": "应付债券余额为0，长期借款 8.0 → 6.0亿元"}}}
+        result = {"base": 7.0, "cap": None, "final": 7.0, "rule_steps": [
+            {"id": "1D.F.HITS", "evidence": "命中9/9", "delta": 0}]}
+        return R._build_score_detail("1D", result, spec)
+
+    html = _html("0.0 → 0.0亿元（0.0%）")
+    assert "0.0 → 0.0亿元（0.0%）" in html
+    assert "人工补证：2025年报资产负债表" in html
+    # 证据文本仍“未获取”时，展示人工补入的实际数值，不再显示“未获取”
+    html = _html("未获取")
+    assert "人工补证：应付债券余额为0，长期借款 8.0 → 6.0亿元" in html
+    assert "未获取" not in _visible_text(html)
+
+
 def test_score_detail_formats_cash_runway_to_two_decimals():
     result = {"base": 9.0, "cap": None, "final": 9.0,
               "rule_steps": [{"id": "1D.CASH_RUNWAY", "evidence": "59.52249294240183个月", "delta": 0}]}

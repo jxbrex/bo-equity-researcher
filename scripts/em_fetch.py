@@ -358,17 +358,27 @@ def _sec_e3(pure: str, secucode: str) -> tuple:
     else:
         out.append("报告期进度: [未获取到（tushare 与东财 F10 均空），请降级：妙想 MCP "
                    "mx_ashare_finance_data 直查最新报告期四值并标注路径；第 3 章不得编造]\n")
-    # 杜邦因子照抄行（v5.8.0，4.6 dupont 乘积链图数据源）：F10 ROEJQ/XSJLL/TOAZZL/QYCS
-    # 最新期 vs 去年同期，禁手算；随 --out 落盘 dupont 键供渲染器交叉校验（quote 防伪同款）
-    dup = fetch_dupont_factors(secucode)
+    # 杜邦因子照抄行（v0.16.0 TTM 口径，4.6 dupont 乘积链图数据源）：任务2唯一 TTM 计算层
+    # （tushare 归母口径，basis="ttm"），本期+上年同期 TTM，禁手算；随 --out 落盘 dupont 键
+    # （含同公式年度 history 序列供对账）供渲染器交叉校验；冲突/缺期降级时输出可读不适用
+    # 行、不落盘（不静默吞掉冲突，禁混填出混合口径乘积链）
+    dup = fetch_dupont_factors(pure, secucode)
     if dup:
-        _CAPTURE["dupont"] = dup
-        p = dup.get("prev")
-        prev_txt = (f" ｜ 去年同期 ROE{p['roe']}% / 净利率{p['nm']}% / "
-                    f"周转{p['turn']}次 / 权益乘数{p['em']}" if p else "（去年同期缺，仅本期）")
-        out.append(f"杜邦因子（dupont 照抄行——4.6 图数据源，禁手算；报告期累计口径，非年化）: "
-                   f"{dup['period']} ROE{dup['roe']}% ｜ 净利率{dup['nm']}% × "
-                   f"总资产周转{dup['turn']}次 × 权益乘数{dup['em']}{prev_txt}\n")
+        if all(k in dup for k in ("roe", "nm", "turn", "em")):
+            _CAPTURE["dupont"] = dup
+            prev_txt = ""
+            p = dup.get("prev")
+            if isinstance(p, dict):
+                pp = dup.get("prev_period") or "上年同期"
+                prev_txt = (f" ｜ 上年同期（{pp} TTM） ROE{p.get('roe')}% / 净利率{p.get('nm')}% / "
+                            f"周转{p.get('turn')}次 / 权益乘数{p.get('em')}")
+            out.append(f"杜邦因子（dupont 照抄行——4.6 图数据源，禁手算；TTM 滚动四季口径，"
+                       f"basis=ttm）: 截至{dup['period']}TTM ROE{dup['roe']}% ｜ "
+                       f"净利率{dup['nm']}% × 总资产周转{dup['turn']}次 × 权益乘数{dup['em']}"
+                       f"{prev_txt}\n")
+        else:
+            why = "；".join(str(x) for x in (dup.get("issues") or [])) or "本期四因子未齐备"
+            out.append(f"杜邦因子: 不适用（{why}）——4.6 乘积链不生成，fill 的 dupont 字段勿填\n")
     capex_bits = [f"{r['REPORT_DATE_NAME']} {yi(r.get('CAPEX'))}亿" for r in annual[:3]
                   if r.get("CAPEX") is not None]
     if capex_bits:

@@ -431,9 +431,12 @@ curl -s --max-time 15 -H "User-Agent: Mozilla/5.0" "https://datacenter.eastmoney
 
 ### 妙想 MCP（`mx_*`，模型直调层；MCP 缺席或明确额度耗尽时经 mx-data/mx-search/mx-xuangu skill 接力，同一 API、独立额度）
 
-- MCP 与 skill 使用相互独立的 Key/额度；MCP 返回明确积分/额度耗尽提示时切对应 skill，
-  skill 也失败或耗尽才继续下一级。普通网络失败、查询无结果或未指明额度耗尽的限流
-  不触发 skill 接力。
+- MCP 与 skill 使用相互独立的 Key/额度；MCP 返回明确积分/额度耗尽提示时切对应 skill。
+  经本地编排恢复后，skill 仍实际不可用或明确耗尽才继续下一级。普通网络失败、查询无结果或
+  未指明额度耗尽的限流不触发 skill 接力。
+- 工具已加载但未调用是漏用，不是 MCP 缺席；Skill 工具返回 `Nested skill invocation` / `maximum depth`
+  是未触及 API 的本地编排限制，不是额度或服务故障。此时按 `data-collection.md`「环境工具探测」
+  委派干净子会话恢复，不直接降级。
 - 未见明确频控数字（**待实测**）；已记录的约束是返回口径漂移（半结构化指标名）而非限流。
   免费额度实感约束：同一报告内妙想检索类调用控制在必要次数内，避免反复同义查询。
 
